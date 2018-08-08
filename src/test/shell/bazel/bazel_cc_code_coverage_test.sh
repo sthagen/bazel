@@ -184,5 +184,3 @@ EOF
   diff -u expected_result.dat "$COVERAGE_OUTPUT_FILE_VAR" >> "$TEST_log" \
     || fail "Coverage output file is different than the expected file"
 }
-
-run_suite "Testing tools/test/collect_cc_coverage.sh"
