@@ -180,8 +180,8 @@ end_of_record
 EOF
 
   # tools/test/collect_cc_coverage.sh places the coverage result in
-  # $COVERAGE_OUTPUT_FILE
-  diff -u expected_result.dat "$COVERAGE_OUTPUT_FILE_VAR" >> "$TEST_log" \
+  # $CC_COVERAGE_OUTPUT_FILE
+  diff -u expected_result.dat "$CC_COVERAGE_OUTPUT_FILE_VAR" >> "$TEST_log" \
     || fail "Coverage output file is different than the expected file"
 }
 
