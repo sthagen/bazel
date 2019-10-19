@@ -49,7 +49,7 @@ function test_build_app() {
   setup_objc_test_support
   make_lib
 
-  bazel build --verbose_failures --apple_crosstool_in_output_directory_name \
+  bazel build --verbose_failures --apple_platform_type=ios \
       --ios_sdk_version=$IOS_SDK_VERSION \
       //ios:lib >$TEST_log 2>&1 || fail "should pass"
   ls bazel-out/apl-ios_x86_64-fastbuild/bin/ios/liblib.a \
@@ -60,7 +60,8 @@ function test_invalid_ios_sdk_version() {
   setup_objc_test_support
   make_lib
 
-  ! bazel build --verbose_failures --ios_sdk_version=2.34 \
+  ! bazel build --verbose_failures --apple_platform_type=ios \
+      --ios_sdk_version=2.34 \
       //ios:lib >$TEST_log 2>&1 || fail "should fail"
   expect_log "SDK \"iphonesimulator2.34\" cannot be located."
 }
@@ -102,7 +103,7 @@ int aFunction() {
 }
 EOF
 
-  bazel build --verbose_failures --apple_crosstool_in_output_directory_name \
+  bazel build --verbose_failures --apple_platform_type=ios \
       --ios_sdk_version=$IOS_SDK_VERSION //objclib:objclib >"$TEST_log" 2>&1 \
       || fail "Should build objc_library"
 
@@ -115,6 +116,84 @@ EOF
       || ar -tv bazel-out/apl-ios_x86_64-fastbuild/bin/objclib/libobjclib.a \
       | grep "mysrc" | grep "Jan  1" | grep "1970" || \
       fail "Timestamp of contents of archive file should be zero"
+}
+
+function test_strip_symbols() {
+  setup_objc_test_support
+
+  rm -rf ios
+  mkdir -p ios
+
+  cat >ios/main.m <<EOF
+#import <UIKit/UIKit.h>
+/* function declaration */
+int addOne(int num);
+int addOne(int num) {
+  return num + 1;
+}
+ int main(int argc, char *argv[]) {
+  NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
+  int retVal = UIApplicationMain(argc, argv, nil, nil);
+  [pool release];
+  return retVal;
+}
+EOF
+
+  cat >ios/BUILD <<EOF
+apple_binary(name = 'app',
+             deps = [':main'],
+             platform_type = 'ios')
+objc_library(name = 'main',
+             non_arc_srcs = ['main.m'])
+EOF
+
+  bazel build --verbose_failures \
+      --apple_platform_type=ios \
+      --ios_sdk_version=$IOS_SDK_VERSION \
+      --objc_enable_binary_stripping=true \
+      --compilation_mode=opt \
+      //ios:app >$TEST_log 2>&1 || fail "should pass"
+  ls bazel-out/apl-ios_x86_64-opt/bin/ios/app_lipobin \
+    || fail "should generate lipobin (stripped binary)"
+  ! nm bazel-out/apl-ios_x86_64-opt/bin/ios/app_lipobin | grep addOne \
+    || fail "should fail to find symbol addOne"
+}
+
+function test_cc_test_depending_on_objc() {
+  setup_objc_test_support
+
+  rm -rf foo
+  mkdir -p foo
+
+  cat >foo/a.cc <<EOF
+#include <iostream>
+int main(int argc, char** argv) {
+  std::cout << "Hello! I'm a test!\n";
+  return 0;
+}
+EOF
+
+  cat >foo/BUILD <<EOF
+cc_library(
+    name = "a",
+    srcs = ["a.cc"],
+)
+
+objc_library(
+    name = "b",
+    deps = [
+        ":a",
+    ],
+)
+
+cc_test(
+    name = "d",
+    deps = [":b"],
+)
+EOF
+
+  bazel test --verbose_failures \
+      //foo:d>$TEST_log 2>&1 || fail "should pass"
 }
 
 run_suite "objc/ios test suite"

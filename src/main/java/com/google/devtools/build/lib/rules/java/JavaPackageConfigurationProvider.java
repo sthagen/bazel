@@ -15,15 +15,15 @@
 package com.google.devtools.build.lib.rules.java;
 
 import com.google.auto.value.AutoValue;
-import com.google.common.collect.Streams;
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.PackageSpecificationProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.packages.PackageSpecification.PackageGroupContents;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import java.util.List;
 
 /** A provider for Java per-package configuration. */
 @AutoCodec
@@ -34,17 +34,17 @@ public abstract class JavaPackageConfigurationProvider implements TransitiveInfo
   /** Creates a {@link JavaPackageConfigurationProvider}. */
   @AutoCodec.Instantiator
   public static JavaPackageConfigurationProvider create(
-      List<PackageSpecificationProvider> packageSpecifications,
-      List<String> javacopts,
+      ImmutableList<PackageSpecificationProvider> packageSpecifications,
+      ImmutableList<String> javacopts,
       NestedSet<Artifact> data) {
     return new AutoValue_JavaPackageConfigurationProvider(packageSpecifications, javacopts, data);
   }
 
   /** Package specifications for which the configuration should be applied. */
-  abstract List<PackageSpecificationProvider> packageSpecifications();
+  abstract ImmutableList<PackageSpecificationProvider> packageSpecifications();
 
   /** The javacopts for this configuration. */
-  abstract List<String> javacopts();
+  abstract ImmutableList<String> javacopts();
 
   abstract NestedSet<Artifact> data();
 
@@ -53,9 +53,14 @@ public abstract class JavaPackageConfigurationProvider implements TransitiveInfo
    * is contained by any of the {@link #packageSpecifications}.
    */
   public boolean matches(Label label) {
-    return packageSpecifications()
-        .stream()
-        .flatMap(p -> Streams.stream(p.getPackageSpecifications()))
-        .anyMatch(p -> p.containsPackage(label.getPackageIdentifier()));
+    // Do not use streams here as they create excessive garbage.
+    for (PackageSpecificationProvider provider : packageSpecifications()) {
+      for (PackageGroupContents specifications : provider.getPackageSpecifications()) {
+        if (specifications.containsPackage(label.getPackageIdentifier())) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 }

@@ -44,10 +44,16 @@ public interface AndroidIdeInfoProviderApi<
     extends StructApi {
 
   /** Name of this info object. */
-  public static String NAME = "AndroidIdeInfo";
+  String NAME = "AndroidIdeInfo";
 
   /** Returns the Java package. */
-  @SkylarkCallable(name = "java_package", structField = true, doc = "", documented = false)
+  @SkylarkCallable(
+      name = "java_package",
+      structField = true,
+      doc = "",
+      documented = false,
+      allowReturnNones = true)
+  @Nullable
   String getJavaPackage();
 
   /** Returns the direct AndroidManifest. */
@@ -185,6 +191,7 @@ public interface AndroidIdeInfoProviderApi<
               doc = "A string of the Java package.",
               positional = true,
               named = false,
+              noneable = true,
               type = String.class),
           @Param(
               name = "manifest",
@@ -205,6 +212,7 @@ public interface AndroidIdeInfoProviderApi<
               doc = "A string of the idl import root.",
               positional = true,
               named = false,
+              noneable = true,
               type = String.class),
           @Param(
               name = "idl_srcs",
@@ -252,6 +260,7 @@ public interface AndroidIdeInfoProviderApi<
               doc = "An artifact of the Apk containing Android resources.",
               positional = true,
               named = false,
+              noneable = true,
               type = FileApi.class),
           @Param(
               name = "signed_apk",
@@ -287,21 +296,21 @@ public interface AndroidIdeInfoProviderApi<
         selfCall = true)
     @SkylarkConstructor(objectType = AndroidIdeInfoProviderApi.class)
     AndroidIdeInfoProviderApi<FileT, OutputJarT> createInfo(
-        String javaPackage,
+        /*noneable*/ Object javaPackage,
         /*noneable*/ Object manifest,
         /*noneable*/ Object generatedManifest,
-        String idlImportRoot,
-        SkylarkList<FileT> idlSrcs,
-        SkylarkList<FileT> idlGeneratedJavaFiles,
+        /*noneable*/ Object idlImportRoot,
+        SkylarkList<?> idlSrcs, // <FileT>
+        SkylarkList<?> idlGeneratedJavaFiles, // <FileT>
         /*noneable*/ Object idlSourceJar,
         /*noneable*/ Object idlClassJar,
         boolean definesAndroidResources,
         /*noneable*/ Object resourceJar,
-        FileT resourceApk,
+        /*noneable*/ Object resourceApk,
         /*noneable*/ Object signedApk,
         /*noneable*/ Object aar,
-        SkylarkList<FileT> apksUnderTest,
-        SkylarkDict<String, SkylarkNestedSet> nativeLibs)
+        SkylarkList<?> apksUnderTest, // <FileT>
+        SkylarkDict<?, ?> nativeLibs /* <String, SkylarkNestedSet> */)
         throws EvalException;
   }
 }

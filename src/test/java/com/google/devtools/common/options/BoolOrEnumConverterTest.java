@@ -15,8 +15,7 @@
 package com.google.devtools.common.options;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.common.options.OptionsParser.newOptionsParser;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -61,14 +60,11 @@ public class BoolOrEnumConverterTest {
     assertThat(converter.convert("dbg")).isEqualTo(CompilationMode.DBG);
     assertThat(converter.convert("opt")).isEqualTo(CompilationMode.OPT);
 
-    try {
-      converter.convert("none");
-      fail();
-    } catch (OptionsParsingException e) {
-      assertThat(e)
-          .hasMessageThat()
-          .isEqualTo("Not a valid compilation mode: 'none' (should be dbg or opt)");
-    }
+    OptionsParsingException e =
+        assertThrows(OptionsParsingException.class, () -> converter.convert("none"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo("Not a valid compilation mode: 'none' (should be dbg or opt)");
     assertThat(converter.getTypeDescription()).isEqualTo("dbg or opt");
   }
 
@@ -89,7 +85,8 @@ public class BoolOrEnumConverterTest {
 
   @Test
   public void prefixedWithNo() throws OptionsParsingException {
-    OptionsParser parser = newOptionsParser(CompilationModeTestOptions.class);
+    OptionsParser parser =
+        OptionsParser.builder().optionsClasses(CompilationModeTestOptions.class).build();
     parser.parse("--nocompile_mode");
     CompilationModeTestOptions options =
         parser.getOptions(CompilationModeTestOptions.class);
@@ -99,7 +96,8 @@ public class BoolOrEnumConverterTest {
 
   @Test
   public void missingValueAsBoolConversion() throws OptionsParsingException {
-    OptionsParser parser = newOptionsParser(CompilationModeTestOptions.class);
+    OptionsParser parser =
+        OptionsParser.builder().optionsClasses(CompilationModeTestOptions.class).build();
     parser.parse("--compile_mode");
     CompilationModeTestOptions options =
         parser.getOptions(CompilationModeTestOptions.class);

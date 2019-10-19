@@ -18,10 +18,8 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -32,12 +30,12 @@ import java.util.Stack;
 
 /**
  * A tokenizer for the BUILD language.
- * <p>
- * See: <a href="https://docs.python.org/2/reference/lexical_analysis.html"/>
- * for some details.
+ *
+ * <p>See: <a href="https://docs.python.org/2/reference/lexical_analysis.html"/>for some details.
+ *
  * <p>
  */
-public final class Lexer {
+final class Lexer {
 
   // Characters that can come immediately prior to an '=' character to generate
   // a different token
@@ -52,9 +50,10 @@ public final class Lexer {
           .put('*', TokenKind.STAR_EQUALS)
           .put('/', TokenKind.SLASH_EQUALS)
           .put('%', TokenKind.PERCENT_EQUALS)
+          .put('^', TokenKind.CARET_EQUALS)
+          .put('&', TokenKind.AMPERSAND_EQUALS)
+          .put('|', TokenKind.PIPE_EQUALS)
           .build();
-
-  private final EventHandler eventHandler;
 
   // Input buffer and position
   private final char[] buffer;
@@ -94,7 +93,9 @@ public final class Lexer {
   // the stream. Whitespace is handled differently when this is nonzero.
   private int openParenStackDepth = 0;
 
-  private boolean containsErrors;
+  // List of errors appended to by Lexer and Parser.
+  private final List<Event> errors;
+
   /**
    * True after a NEWLINE token.
    * In other words, we are outside an expression and we have to check the indentation.
@@ -104,15 +105,20 @@ public final class Lexer {
   private int dents; // number of saved INDENT (>0) or OUTDENT (<0) tokens to return
 
   /**
-   * Constructs a lexer which tokenizes the contents of the specified InputBuffer. Any errors during
-   * lexing are reported on "handler".
+   * StringEscapeEvents contains the errors related to invalid escape sequences like "\a". This is
+   * not handled by the normal eventHandler. Instead, it is passed to the parser and then the AST.
+   * During the evaluation, we can decide to show the events based on a flag in StarlarkSemantics.
+   * This code is temporary, during the migration.
    */
-  public Lexer(
-      ParserInputSource input, EventHandler eventHandler, LineNumberTable lineNumberTable) {
+  private final List<Event> stringEscapeEvents = new ArrayList<>();
+
+  /** Constructs a lexer which tokenizes the parser input. Errors are appended to {@code errors}. */
+  Lexer(ParserInput input, List<Event> errors) {
+    LineNumberTable lnt = LineNumberTable.create(input.getContent(), input.getPath());
     this.buffer = input.getContent();
     this.pos = 0;
-    this.eventHandler = eventHandler;
-    this.locationInfo = new LocationInfo(input.getPath(), lineNumberTable);
+    this.errors = errors;
+    this.locationInfo = new LocationInfo(input.getPath(), lnt);
     this.checkIndentation = true;
     this.comments = new ArrayList<>();
     this.dents = 0;
@@ -121,36 +127,27 @@ public final class Lexer {
     indentStack.push(0);
   }
 
-  public Lexer(ParserInputSource input, EventHandler eventHandler) {
-    this(input, eventHandler, LineNumberTable.create(input.getContent(), input.getPath()));
-  }
-
   List<Comment> getComments() {
     return comments;
+  }
+
+  List<Event> getStringEscapeEvents() {
+    return stringEscapeEvents;
   }
 
   /**
    * Returns the filename from which the lexer's input came. Returns an empty value if the input
    * came from a string.
    */
-  public PathFragment getFilename() {
+  PathFragment getFilename() {
     return locationInfo.filename != null ? locationInfo.filename : PathFragment.EMPTY_FRAGMENT;
-  }
-
-  /**
-   * Returns true if there were errors during scanning of this input file or
-   * string. The Lexer may attempt to recover from errors, but clients should
-   * not rely on the results of scanning if this flag is set.
-   */
-  public boolean containsErrors() {
-    return containsErrors;
   }
 
   /**
    * Returns the next token, or EOF if it is the end of the file. It is an error to call nextToken()
    * after EOF has been returned.
    */
-  public Token nextToken() {
+  Token nextToken() {
     boolean afterNewline = token.kind == TokenKind.NEWLINE;
     token.kind = null;
     tokenize();
@@ -176,8 +173,7 @@ public final class Lexer {
   }
 
   private void error(String message, int start, int end) {
-    this.containsErrors = true;
-    eventHandler.handle(Event.error(createLocation(start, end), message));
+    errors.add(Event.error(createLocation(start, end), message));
   }
 
   Location createLocation(int start, int end) {
@@ -286,9 +282,9 @@ public final class Lexer {
       } else if (c == '\r') {
         pos++;
       } else if (c == '\t') {
-        error("Tab characters are not allowed for indentation. Use spaces instead.");
         indentLen++;
         pos++;
+        error("Tab characters are not allowed for indentation. Use spaces instead.");
       } else if (c == '\n') { // entirely blank line: discard
         indentLen = 0;
         pos++;
@@ -457,10 +453,18 @@ public final class Lexer {
             case 'v':
             case 'x':
               // exists in Python but not implemented in Blaze => error
-              error("escape sequence not implemented: \\" + c, literalStartPos, pos);
+              error("invalid escape sequence: \\" + c, literalStartPos, pos);
               break;
             default:
               // unknown char escape => "\literal"
+              stringEscapeEvents.add(
+                  Event.error(
+                      createLocation(pos - 1, pos),
+                      "invalid escape sequence: \\"
+                          + c
+                          + ". You can enable unknown escape sequences by passing the flag "
+                          + "--incompatible_restrict_string_escapes=false"));
+
               literal.append('\\');
               literal.append(c);
               break;
@@ -639,6 +643,7 @@ public final class Lexer {
 
   private String scanInteger() {
     int oldPos = pos - 1;
+    loop:
     while (pos < buffer.length) {
       char c = buffer[pos];
       switch (c) {
@@ -650,6 +655,12 @@ public final class Lexer {
         case 'd': case 'D':
         case 'e': case 'E':
         case 'f': case 'F':
+          if (buffer[oldPos] != '0') {
+            // A number not starting with zero must be decimal and can only contain decimal digits.
+            break loop;
+          }
+          pos++;
+          break;
         case '0': case '1':
         case '2': case '3':
         case '4': case '5':
@@ -658,7 +669,7 @@ public final class Lexer {
           pos++;
           break;
         default:
-          return bufferSlice(oldPos, pos);
+          break loop;
       }
     }
     // TODO(bazel-team): (2009) to do roundtripping when we evaluate the integer
@@ -689,6 +700,7 @@ public final class Lexer {
     } else if (literal.startsWith("0") && literal.length() > 1) {
       radix = 8;
       substring = literal.substring(1);
+      error("invalid octal value `" + literal + "`, should be: `0o" + substring + "`");
     } else {
       radix = 10;
       substring = literal;
@@ -788,10 +800,26 @@ public final class Lexer {
           popParen();
           break;
         case '>':
-          setToken(TokenKind.GREATER, pos - 1, pos);
+          if (lookaheadIs(0, '>') && lookaheadIs(1, '=')) {
+            setToken(TokenKind.GREATER_GREATER_EQUALS, pos - 1, pos + 2);
+            pos += 2;
+          } else if (lookaheadIs(0, '>')) {
+            setToken(TokenKind.GREATER_GREATER, pos - 1, pos + 1);
+            pos += 1;
+          } else {
+            setToken(TokenKind.GREATER, pos - 1, pos);
+          }
           break;
         case '<':
-          setToken(TokenKind.LESS, pos - 1, pos);
+          if (lookaheadIs(0, '<') && lookaheadIs(1, '=')) {
+            setToken(TokenKind.LESS_LESS_EQUALS, pos - 1, pos + 2);
+            pos += 2;
+          } else if (lookaheadIs(0, '<')) {
+            setToken(TokenKind.LESS_LESS, pos - 1, pos + 1);
+            pos += 1;
+          } else {
+            setToken(TokenKind.LESS, pos - 1, pos);
+          }
           break;
         case ':':
           setToken(TokenKind.COLON, pos - 1, pos);
@@ -813,6 +841,15 @@ public final class Lexer {
           break;
         case '%':
           setToken(TokenKind.PERCENT, pos - 1, pos);
+          break;
+        case '~':
+          setToken(TokenKind.TILDE, pos - 1, pos);
+          break;
+        case '&':
+          setToken(TokenKind.AMPERSAND, pos - 1, pos);
+          break;
+        case '^':
+          setToken(TokenKind.CARET, pos - 1, pos);
           break;
         case '/':
           if (lookaheadIs(0, '/') && lookaheadIs(1, '=')) {
@@ -905,17 +942,6 @@ public final class Lexer {
   }
 
   /**
-   * Returns the string at the current line, minus the new line.
-   *
-   * @param line the line from which to retrieve the String, 1-based
-   * @return the text of the line
-   */
-  public String stringAtLine(int line) {
-    Pair<Integer, Integer> offsets = locationInfo.lineNumberTable.getOffsetsForLine(line);
-    return bufferSlice(offsets.first, offsets.second);
-  }
-
-  /**
    * Returns parts of the source buffer based on offsets
    *
    * @param start the beginning offset for the slice
@@ -927,6 +953,6 @@ public final class Lexer {
   }
 
   private void makeComment(int start, int end, String content) {
-    comments.add(ASTNode.setLocation(createLocation(start, end), new Comment(content)));
+    comments.add(Node.setLocation(createLocation(start, end), new Comment(content)));
   }
 }

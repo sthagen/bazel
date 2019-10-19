@@ -1,6 +1,8 @@
 # Description:
 #   Tool for desugaring Java constructs not supported by Android tools or devices.
 
+load("@rules_java//java:defs.bzl", "java_binary", "java_library")
+
 filegroup(
     name = "embedded_tools",
     srcs = ["BUILD.tools"],
@@ -35,6 +37,7 @@ java_library(
     deps = [
         ":deps_collector_api",
         "//src/main/java/com/google/devtools/common/options",
+        "//src/main/protobuf:worker_protocol_java_proto",
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/io",
         "//third_party:asm",

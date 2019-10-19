@@ -14,9 +14,10 @@
 
 package com.google.devtools.build.lib.skylarkbuildapi.cpp;
 
-import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleContext;
+import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkbuildapi.ProviderApi;
+import com.google.devtools.build.lib.skylarkbuildapi.SkylarkActionFactoryApi;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkRuleContextApi;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.ParamType;
@@ -26,25 +27,32 @@ import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Runtime.NoneType;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
+import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /** Utilites related to C++ support. */
 @SkylarkModule(
     name = "cc_common",
-    doc = "Utilities for C++ compilation, linking, and command line " + "generation.")
+    doc = "Utilities for C++ compilation, linking, and command line generation.")
 public interface CcModuleApi<
+    SkylarkActionFactoryT extends SkylarkActionFactoryApi,
+    FileT extends FileApi,
     CcToolchainProviderT extends CcToolchainProviderApi,
     FeatureConfigurationT extends FeatureConfigurationApi,
-    CcToolchainVariablesT extends CcToolchainVariablesApi,
+    CompilationContextT extends CcCompilationContextApi,
+    LinkingContextT extends CcLinkingContextApi,
     LibraryToLinkT extends LibraryToLinkApi,
-    CcLinkParamsT extends CcLinkParamsApi,
-    CcSkylarkInfoT extends CcSkylarkInfoApi> {
+    CcToolchainVariablesT extends CcToolchainVariablesApi,
+    SkylarkRuleContextT extends SkylarkRuleContextApi,
+    CcToolchainConfigInfoT extends CcToolchainConfigInfoApi,
+    CompilationOutputsT extends CcCompilationOutputsApi<FileT>> {
 
   @SkylarkCallable(
       name = "CcToolchainInfo",
       doc =
           "The key used to retrieve the provider that contains information about the C++ "
-              + "toolchain being usCced",
+              + "toolchain being used",
       structField = true)
   ProviderApi getCcToolchainProvider();
 
@@ -62,6 +70,14 @@ public interface CcModuleApi<
       name = "configure_features",
       doc = "Creates a feature_configuration instance.",
       parameters = {
+        @Param(
+            name = "ctx",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            type = SkylarkRuleContextApi.class,
+            doc = "The rule context."),
         @Param(
             name = "cc_toolchain",
             doc = "cc_toolchain for which we configure features.",
@@ -84,9 +100,10 @@ public interface CcModuleApi<
             type = SkylarkList.class),
       })
   FeatureConfigurationT configureFeatures(
+      Object ruleContextOrNone,
       CcToolchainProviderT toolchain,
-      SkylarkList<String> requestedFeatures,
-      SkylarkList<String> unsupportedFeatures)
+      SkylarkList<?> requestedFeatures, // <String> expected
+      SkylarkList<?> unsupportedFeatures) // <String> expected
       throws EvalException;
 
   @SkylarkCallable(
@@ -103,11 +120,36 @@ public interface CcModuleApi<
             name = "action_name",
             doc =
                 "Name of the action. Has to be one of the names in "
-                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl.",
+                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl "
+                    + "(https://github.com/bazelbuild/bazel/blob/master/tools/build_defs/cc/"
+                    + "action_names.bzl)",
             named = true,
             positional = false),
       })
   String getToolForAction(FeatureConfigurationT featureConfiguration, String actionName);
+
+  @SkylarkCallable(
+      name = "get_execution_requirements",
+      doc = "Returns execution requirements for given action.",
+      parameters = {
+        @Param(
+            name = "feature_configuration",
+            doc = "Feature configuration to be queried.",
+            positional = false,
+            named = true,
+            type = FeatureConfigurationApi.class),
+        @Param(
+            name = "action_name",
+            doc =
+                "Name of the action. Has to be one of the names in "
+                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl "
+                    + "(https://github.com/bazelbuild/bazel/blob/master/tools/build_defs/cc/"
+                    + "action_names.bzl)",
+            named = true,
+            positional = false),
+      })
+  SkylarkList<String> getExecutionRequirements(
+      FeatureConfigurationT featureConfiguration, String actionName);
 
   @SkylarkCallable(
       name = "is_enabled",
@@ -128,6 +170,24 @@ public interface CcModuleApi<
   boolean isEnabled(FeatureConfigurationT featureConfiguration, String featureName);
 
   @SkylarkCallable(
+      name = "action_is_enabled",
+      doc = "Returns True if given action_config is enabled in the feature configuration.",
+      parameters = {
+        @Param(
+            name = "feature_configuration",
+            doc = "Feature configuration to be queried.",
+            positional = false,
+            named = true,
+            type = FeatureConfigurationApi.class),
+        @Param(
+            name = "action_name",
+            doc = "Name of the action_config.",
+            named = true,
+            positional = false),
+      })
+  boolean actionIsEnabled(FeatureConfigurationT featureConfiguration, String actionName);
+
+  @SkylarkCallable(
       name = "get_memory_inefficient_command_line",
       doc =
           "Returns flattened command line flags for given action, using given variables for "
@@ -145,7 +205,9 @@ public interface CcModuleApi<
             name = "action_name",
             doc =
                 "Name of the action. Has to be one of the names in "
-                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl.",
+                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl "
+                    + "(https://github.com/bazelbuild/bazel/blob/master/tools/build_defs/cc/"
+                    + "action_names.bzl)",
             named = true,
             positional = false),
         @Param(
@@ -158,7 +220,8 @@ public interface CcModuleApi<
   SkylarkList<String> getCommandLine(
       FeatureConfigurationT featureConfiguration,
       String actionName,
-      CcToolchainVariablesT variables);
+      CcToolchainVariablesT variables)
+      throws EvalException;
 
   @SkylarkCallable(
       name = "get_environment_variables",
@@ -174,7 +237,9 @@ public interface CcModuleApi<
             name = "action_name",
             doc =
                 "Name of the action. Has to be one of the names in "
-                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl.",
+                    + "@bazel_tools//tools/build_defs/cc:action_names.bzl "
+                    + "(https://github.com/bazelbuild/bazel/blob/master/tools/build_defs/cc/"
+                    + "action_names.bzl)",
             named = true,
             positional = false),
         @Param(
@@ -187,7 +252,8 @@ public interface CcModuleApi<
   SkylarkDict<String, String> getEnvironmentVariable(
       FeatureConfigurationT featureConfiguration,
       String actionName,
-      CcToolchainVariablesT variables);
+      CcToolchainVariablesT variables)
+      throws EvalException;
 
   @SkylarkCallable(
       name = "create_compile_variables",
@@ -229,14 +295,14 @@ public interface CcModuleApi<
             noneable = true),
         @Param(
             name = "user_compile_flags",
-            doc = "Depset of additional compilation flags (copts).",
+            doc = "List of additional compilation flags (copts).",
             positional = false,
             named = true,
             defaultValue = "None",
             noneable = true,
             allowedTypes = {
               @ParamType(type = NoneType.class),
-              @ParamType(type = SkylarkNestedSet.class)
+              @ParamType(type = SkylarkList.class),
             }),
         @Param(
             name = "include_directories",
@@ -272,6 +338,17 @@ public interface CcModuleApi<
               @ParamType(type = SkylarkNestedSet.class)
             }),
         @Param(
+            name = "framework_include_directories",
+            doc = "Depset of framework include directories.",
+            positional = false,
+            named = true,
+            defaultValue = "None",
+            noneable = true,
+            allowedTypes = {
+              @ParamType(type = NoneType.class),
+              @ParamType(type = SkylarkNestedSet.class)
+            }),
+        @Param(
             name = "preprocessor_defines",
             doc = "Depset of preprocessor defines.",
             positional = false,
@@ -291,9 +368,7 @@ public interface CcModuleApi<
         // TODO(b/65151735): Remove once we migrate crosstools to features
         @Param(
             name = "add_legacy_cxx_options",
-            doc =
-                "When true the flags will contain options coming from legacy cxx_flag crosstool "
-                    + "fields.",
+            doc = "Unused.",
             named = true,
             positional = false,
             defaultValue = "False")
@@ -307,6 +382,7 @@ public interface CcModuleApi<
       Object includeDirs,
       Object quoteIncludeDirs,
       Object systemIncludeDirs,
+      Object frameworkIncludeDirs,
       Object defines,
       boolean usePic,
       boolean addLegacyCxxOptions)
@@ -352,14 +428,14 @@ public interface CcModuleApi<
             }),
         @Param(
             name = "user_link_flags",
-            doc = "Depset of additional link flags (linkopts).",
+            doc = "List of additional link flags (linkopts).",
             positional = false,
             named = true,
             defaultValue = "None",
             noneable = true,
             allowedTypes = {
               @ParamType(type = NoneType.class),
-              @ParamType(type = SkylarkNestedSet.class)
+              @ParamType(type = SkylarkList.class)
             }),
         @Param(
             name = "output_file",
@@ -404,7 +480,6 @@ public interface CcModuleApi<
             named = true,
             positional = false,
             defaultValue = "False"),
-        // TODO(b/65151735): Remove once we migrate crosstools to features
         @Param(
             name = "must_keep_debug",
             doc =
@@ -413,26 +488,16 @@ public interface CcModuleApi<
             named = true,
             positional = false,
             defaultValue = "True"),
-        // TODO(b/65151735): Remove once we migrate crosstools to features
         @Param(
             name = "use_test_only_flags",
-            doc =
-                "When set to True flags coming from test_only_linker_flag crosstool fields will"
-                    + " be included."
-                    + ""
-                    + "This field will be removed once b/65151735 is fixed.",
+            doc = "When set to true, 'is_cc_test' variable will be set.",
             named = true,
             positional = false,
             defaultValue = "False"),
         // TODO(b/65151735): Remove once we migrate crosstools to features
         @Param(
             name = "is_static_linking_mode",
-            doc =
-                "True when using static_linking_mode, False when using dynamic_linking_mode. "
-                    + "Caller is responsible for keeping this in sync with 'static_linking_mode' "
-                    + "and 'dynamic_linking_mode' features enabled on the feature configuration. "
-                    + ""
-                    + "This field will be removed once b/65151735 is fixed.",
+            doc = "Unused.",
             named = true,
             positional = false,
             defaultValue = "True"),
@@ -458,62 +523,243 @@ public interface CcModuleApi<
 
   @SkylarkCallable(
       name = "create_library_to_link",
-      documented = false,
+      doc = "Creates <code>LibraryToLink</code>",
+      useLocation = true,
+      useStarlarkThread = true,
       parameters = {
         @Param(
-            name = "ctx",
-            doc = "Skylark rule context.",
+            name = "actions",
+            type = SkylarkActionFactoryApi.class,
             positional = false,
             named = true,
-            type = SkylarkRuleContext.class),
+            doc = "<code>actions</code> object."),
         @Param(
-            name = "library",
-            doc = "Library to be linked.",
+            name = "feature_configuration",
+            doc = "<code>feature_configuration</code> to be queried.",
             positional = false,
             named = true,
-            type = Artifact.class),
+            type = FeatureConfigurationApi.class),
         @Param(
-            name = "artifact_category",
+            name = "cc_toolchain",
+            doc = "<code>CcToolchainInfo</code> provider to be used.",
+            positional = false,
+            named = true,
+            type = CcToolchainProviderApi.class),
+        @Param(
+            name = "static_library",
+            doc = "<code>File</code> of static library to be linked.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            type = FileApi.class),
+        @Param(
+            name = "pic_static_library",
+            doc = "<code>File</code> of pic static library to be linked.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            type = FileApi.class),
+        @Param(
+            name = "dynamic_library",
             doc =
-                "Artifact category. Can be: static_library, alwayslink_static_library, "
-                    + "dynamic_library or interface_library",
+                "<code>File</code> of dynamic library to be linked. Always used for runtime "
+                    + "and used for linking if <code>interface_library</code> is not passed.",
             positional = false,
             named = true,
-            type = String.class)
+            noneable = true,
+            defaultValue = "None",
+            type = FileApi.class),
+        @Param(
+            name = "interface_library",
+            doc = "<code>File</code> of interface library to be linked.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            type = FileApi.class),
+        @Param(
+            name = "alwayslink",
+            doc = "Whether to link the static library/objects in the --whole_archive block.",
+            positional = false,
+            named = true,
+            defaultValue = "False"),
       })
   LibraryToLinkT createLibraryLinkerInput(
-      SkylarkRuleContext skylarkRuleContext, Artifact library, String skylarkArtifactCategory)
+      Object actions,
+      Object featureConfiguration,
+      Object ccToolchainProvider,
+      Object staticLibrary,
+      Object picStaticLibrary,
+      Object dynamicLibrary,
+      Object interfaceLibrary,
+      boolean alwayslink,
+      Location location,
+      StarlarkThread thread)
+      throws EvalException, InterruptedException;
+
+  @SkylarkCallable(
+      name = "create_linking_context",
+      doc = "Creates a <code>LinkingContext</code>.",
+      useLocation = true,
+      useStarlarkThread = true,
+      parameters = {
+        @Param(
+            name = "libraries_to_link",
+            doc = "List of <code>LibraryToLink</code>.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            type = SkylarkList.class),
+        @Param(
+            name = "user_link_flags",
+            doc = "List of user link flags passed as strings.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            type = SkylarkList.class),
+        @Param(
+            name = "additional_inputs",
+            doc = "For additional inputs to the linking action, e.g.: linking scripts.",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class),
+      })
+  LinkingContextT createCcLinkingInfo(
+      Object librariesToLinkObject,
+      Object userLinkFlagsObject,
+      SkylarkList<?> nonCodeInputs, // <FileT> expected
+      Location location,
+      StarlarkThread thread)
+      throws EvalException, InterruptedException;
+
+  @SkylarkCallable(
+      name = "merge_cc_infos",
+      doc = "Merges a list of <code>CcInfo</code>s into one.",
+      parameters = {
+        @Param(
+            name = "cc_infos",
+            doc = "List of <code>CcInfo</code>s to be merged.",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class)
+      })
+  CcInfoApi mergeCcInfos(SkylarkList<?> ccInfos) // <CcInfoApi> expected
       throws EvalException;
 
   @SkylarkCallable(
-      name = "create_symlink_library_to_link",
-      documented = false,
+      name = "create_compilation_context",
+      doc = "Creates a <code>CompilationContext</code>.",
       parameters = {
         @Param(
-            name = "ctx",
-            doc = "Skylark rule context.",
+            name = "headers",
+            doc = "Set of headers needed to compile this target",
             positional = false,
             named = true,
-            type = SkylarkRuleContext.class),
+            defaultValue = "unbound",
+            type = Object.class),
+        @Param(
+            name = "system_includes",
+            doc =
+                "Set of search paths for header files referenced by angle brackets, i.e. "
+                    + "#include &lt;foo/bar/header.h&gt;. They can be either relative to the exec "
+                    + "root or absolute. Usually passed with -isystem",
+            positional = false,
+            named = true,
+            defaultValue = "unbound",
+            type = Object.class),
+        @Param(
+            name = "includes",
+            doc =
+                "Set of search paths for header files referenced both by angle bracket and quotes."
+                    + "Usually passed with -I",
+            positional = false,
+            named = true,
+            defaultValue = "unbound",
+            type = Object.class),
+        @Param(
+            name = "quote_includes",
+            doc =
+                "Set of search paths for header files referenced by quotes, i.e. "
+                    + "#include \"foo/bar/header.h\". They can be either relative to the exec "
+                    + "root or absolute. Usually passed with -iquote",
+            positional = false,
+            named = true,
+            defaultValue = "unbound",
+            type = Object.class),
+        @Param(
+            name = "framework_includes",
+            doc = "Set of framework search paths for header files (Apple platform only)",
+            positional = false,
+            named = true,
+            defaultValue = "unbound",
+            type = Object.class),
+        @Param(
+            name = "defines",
+            doc =
+                "Set of defines needed to compile this target. Each define is a string. Propagated"
+                    + " transitively to dependents.",
+            positional = false,
+            named = true,
+            defaultValue = "unbound",
+            type = Object.class),
+        @Param(
+            name = "local_defines",
+            doc =
+                "Set of defines needed to compile this target. Each define is a string. Not"
+                    + " propagated transitively to dependents.",
+            positional = false,
+            named = true,
+            defaultValue = "unbound",
+            type = Object.class),
+      })
+  CompilationContextT createCcCompilationContext(
+      Object headers,
+      Object systemIncludes,
+      Object includes,
+      Object quoteIncludes,
+      Object frameworkIncludes,
+      Object defines,
+      Object localDefines)
+      throws EvalException;
+
+  // TODO(b/65151735): Remove when cc_flags is entirely set from features.
+  // This should only be called from the cc_flags_supplier rule.
+  @SkylarkCallable(
+      name = "legacy_cc_flags_make_variable_do_not_use",
+      documented = false,
+      parameters = {
         @Param(
             name = "cc_toolchain",
             doc = "C++ toolchain provider to be used.",
             positional = false,
             named = true,
-            type = CcToolchainProviderApi.class),
-        @Param(
-            name = "library",
-            doc = "Library that should be symlinked.",
-            positional = false,
-            named = true,
-            type = Artifact.class),
+            type = CcToolchainProviderApi.class)
       })
-  LibraryToLinkT createSymlinkLibraryLinkerInput(
-      SkylarkRuleContext skylarkRuleContext, CcToolchainProviderT ccToolchain, Artifact library);
+  String legacyCcFlagsMakeVariable(CcToolchainProviderT ccToolchain);
 
   @SkylarkCallable(
-      name = "create_cc_link_params",
-      doc = "Creates cc link parameters",
+      name = "is_cc_toolchain_resolution_enabled_do_not_use",
+      documented = false,
+      parameters = {
+        @Param(
+            name = "ctx",
+            positional = false,
+            named = true,
+            type = SkylarkRuleContextApi.class,
+            doc = "The rule context."),
+      },
+      doc = "Returns true if the --incompatible_enable_cc_toolchain_resolution flag is enabled.")
+  boolean isCcToolchainResolutionEnabled(SkylarkRuleContextT ruleContext);
+
+  @SkylarkCallable(
+      name = "create_cc_toolchain_config_info",
+      doc = "Creates a <code>CcToolchainConfigInfo</code> provider",
       parameters = {
         @Param(
             name = "ctx",
@@ -522,68 +768,276 @@ public interface CcModuleApi<
             type = SkylarkRuleContextApi.class,
             doc = "The rule context."),
         @Param(
-            name = "libraries_to_link",
+            name = "features",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class,
             doc =
-                "List of libraries that should be passed to the linker/archiver. They can be "
-                    + "static and/or dynamic libraries.",
+                "A list of <a href=\"https://github.com/bazelbuild/bazel/blob/master/tools/cpp/"
+                    + "cc_toolchain_config_lib.bzl#L336\">features</a>."),
+        @Param(
+            name = "action_configs",
             positional = false,
             named = true,
-            noneable = true,
-            defaultValue = "None",
-            allowedTypes = {
-              @ParamType(type = SkylarkNestedSet.class),
-              @ParamType(type = NoneType.class)
-            }),
-        @Param(
-            name = "dynamic_libraries_for_runtime",
+            defaultValue = "[]",
+            type = SkylarkList.class,
             doc =
-                "When 'libraries_to_link' has dynamic libraries, then the runtime library can "
-                    + "be specified as well. This is not obligatory though, as we may provide a "
-                    + "library for linking and at runtime the actual library will be provided by "
-                    + "the system.",
-            positional = false,
-            named = true,
-            noneable = true,
-            defaultValue = "None",
-            allowedTypes = {
-              @ParamType(type = SkylarkNestedSet.class),
-              @ParamType(type = NoneType.class)
-            }),
+                "A list of <a href=\"https://github.com/bazelbuild/bazel/blob/master/tools/cpp/"
+                    + "cc_toolchain_config_lib.bzl#L461\">action_configs</a>."),
         @Param(
-            name = "user_link_flags",
-            doc = "List of user provided linker flags.",
+            name = "artifact_name_patterns",
             positional = false,
             named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class,
+            doc =
+                "A list of <a href=\"https://github.com/bazelbuild/bazel/blob/master/tools/cpp/"
+                    + "cc_toolchain_config_lib.bzl#L516\">artifact_name_patterns</a>."),
+        @Param(
+            name = "cxx_builtin_include_directories",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class,
+            doc =
+                "<p>Built-in include directories for C++ compilation. These should be the exact "
+                    + "paths used by the compiler, and are generally relative to the exec root.</p>"
+                    + "<p>The paths used by the compiler can be determined by 'gcc -E -xc++ - -v'."
+                    + "</p><p>We currently use the C++ paths also for C compilation, which is safe "
+                    + "as long as there are no name clashes between C++ and C header files.</p>"
+                    + "<p>Relative paths are resolved relative to the configuration file directory."
+                    + "</p><p>If the compiler has --sysroot support, then these paths should use "
+                    + "%sysroot% rather than the include path, and specify the sysroot attribute "
+                    + "in order to give blaze the information necessary to make the correct "
+                    + "replacements.</p>"),
+        @Param(
+            name = "toolchain_identifier",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc =
+                "<p>The unique identifier of the toolchain within the crosstool release. It must "
+                    + "be possible to use this as a directory name in a path.</p>"
+                    + "<p>It has to match the following regex: [a-zA-Z_][\\.\\- \\w]*</p>"),
+        @Param(
+            name = "host_system_name",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The system name which is required by the toolchain to run."),
+        @Param(
+            name = "target_system_name",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The GNU System Name."),
+        @Param(
+            name = "target_cpu",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The target architecture string."),
+        @Param(
+            name = "target_libc",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The libc version string (e.g. \"glibc-2.2.2\")."),
+        @Param(
+            name = "compiler",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The compiler version string (e.g. \"gcc-4.1.1\")."),
+        @Param(
+            name = "abi_version",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The abi in use, which is a gcc version. E.g.: \"gcc-3.4\""),
+        @Param(
+            name = "abi_libc_version",
+            positional = false,
+            type = String.class,
+            named = true,
+            doc = "The glibc version used by the abi we're using."),
+        @Param(
+            name = "tool_paths",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class,
+            doc =
+                "A list of <a href=\"https://github.com/bazelbuild/bazel/blob/master/tools/cpp/"
+                    + "cc_toolchain_config_lib.bzl#L400\">tool_paths</a>."),
+        @Param(
+            name = "make_variables",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class,
+            doc =
+                "A list of <a href=\"https://github.com/bazelbuild/bazel/blob/master/tools/cpp/"
+                    + "cc_toolchain_config_lib.bzl#L86\">make_variables</a>."),
+        @Param(
+            name = "builtin_sysroot",
+            positional = false,
             noneable = true,
             defaultValue = "None",
-            allowedTypes = {
-              @ParamType(type = SkylarkNestedSet.class),
-              @ParamType(type = NoneType.class)
-            })
+            allowedTypes = {@ParamType(type = String.class), @ParamType(type = NoneType.class)},
+            named = true,
+            doc =
+                "The built-in sysroot. If this attribute is not present, Bazel does not "
+                    + "allow using a different sysroot, i.e. through the --grte_top option."),
+        @Param(
+            name = "cc_target_os",
+            positional = false,
+            noneable = true,
+            defaultValue = "None",
+            allowedTypes = {@ParamType(type = String.class), @ParamType(type = NoneType.class)},
+            named = true,
+            doc = "Internal purpose only, do not use."),
       })
-  CcLinkParamsT createCcLinkParams(
-      SkylarkRuleContext skylarkRuleContext,
-      Object skylarkLibrariesToLink,
-      Object skylarkDynamicLibrariesForRuntime,
-      Object skylarkUserLinkFlags)
+  CcToolchainConfigInfoT ccToolchainConfigInfoFromSkylark(
+      SkylarkRuleContextT skylarkRuleContext,
+      SkylarkList<?> features, // <StructApi> expected
+      SkylarkList<?> actionConfigs, // <StructApi> expected
+      SkylarkList<?> artifactNamePatterns, // <StructApi> expected
+      SkylarkList<?> cxxBuiltInIncludeDirectories, // <String> expected
+      String toolchainIdentifier,
+      String hostSystemName,
+      String targetSystemName,
+      String targetCpu,
+      String targetLibc,
+      String compiler,
+      String abiVersion,
+      String abiLibcVersion,
+      SkylarkList<?> toolPaths, // <StructApi> expected
+      SkylarkList<?> makeVariables, // <StructApi> expected
+      Object builtinSysroot,
+      Object ccTargetOs)
       throws EvalException;
 
   @SkylarkCallable(
-      name = "create_cc_skylark_info",
-      documented = false,
+      name = "create_linking_context_from_compilation_outputs",
+      doc =
+          "Should be used for creating library rules that can propagate information downstream in"
+              + " order to be linked later by a top level rule that does transitive linking to"
+              + " create an executable or dynamic library.",
+      useLocation = true,
+      useStarlarkThread = true,
       parameters = {
-        // TODO(plf): Make this parameter mandatory. Change cc_embed_data.bzl first.
         @Param(
-            name = "ctx",
-            doc = "Skylark rule context.",
+            name = "actions",
+            type = SkylarkActionFactoryApi.class,
+            positional = false,
+            named = true,
+            doc = "<code>actions</code> object."),
+        @Param(
+            name = "feature_configuration",
+            doc = "<code>feature_configuration</code> to be queried.",
+            positional = false,
+            named = true,
+            type = FeatureConfigurationApi.class),
+        @Param(
+            name = "cc_toolchain",
+            doc = "<code>CcToolchainInfo</code> provider to be used.",
+            positional = false,
+            named = true,
+            type = CcToolchainProviderApi.class),
+        @Param(
+            name = "compilation_outputs",
+            doc = "Compilation outputs containing object files to link.",
+            positional = false,
+            named = true,
+            type = CcCompilationOutputsApi.class),
+        @Param(
+            name = "user_link_flags",
+            doc = "Additional list of linking options.",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            noneable = true,
+            type = SkylarkList.class),
+        @Param(
+            name = "linking_contexts",
+            doc =
+                "Libraries from dependencies. These libraries will be linked into the output "
+                    + "artifact of the link() call, be it a binary or a library.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "[]",
+            type = SkylarkList.class),
+        @Param(
+            name = "name",
+            doc =
+                "This is used for naming the output artifacts of actions created by this "
+                    + "method.",
+            positional = false,
+            named = true,
+            type = String.class),
+        @Param(
+            name = "language",
+            doc = "Only C++ supported for now. Do not use this parameter.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "'c++'",
+            type = String.class),
+        @Param(
+            name = "alwayslink",
+            doc = "Whether this library should always be linked.",
+            positional = false,
+            named = true,
+            noneable = true,
+            defaultValue = "False",
+            type = Boolean.class),
+        @Param(
+            name = "additional_inputs",
+            doc = "For additional inputs to the linking action, e.g.: linking scripts.",
+            positional = false,
+            named = true,
+            defaultValue = "[]",
+            type = SkylarkList.class),
+        @Param(
+            name = "disallow_static_libraries",
+            doc = "Whether static libraries should be created.",
+            positional = false,
+            named = true,
+            defaultValue = "False",
+            type = Boolean.class),
+        @Param(
+            name = "disallow_dynamic_library",
+            doc = "Whether a dynamic library should be created.",
+            positional = false,
+            named = true,
+            defaultValue = "False",
+            type = Boolean.class),
+        @Param(
+            name = "grep_includes",
             positional = false,
             named = true,
             noneable = true,
             defaultValue = "None",
-            allowedTypes = {
-              @ParamType(type = SkylarkRuleContextApi.class),
-              @ParamType(type = NoneType.class)
-            })
+            allowedTypes = {@ParamType(type = FileApi.class), @ParamType(type = NoneType.class)}),
       })
-  CcSkylarkInfoT createCcSkylarkInfo(Object skylarkRuleContextObject) throws EvalException;
+  Tuple<Object> createLinkingContextFromCompilationOutputs(
+      SkylarkActionFactoryT skylarkActionFactoryApi,
+      FeatureConfigurationT skylarkFeatureConfiguration,
+      CcToolchainProviderT skylarkCcToolchainProvider,
+      CompilationOutputsT compilationOutputs,
+      SkylarkList<?> userLinkFlags, // <String> expected
+      SkylarkList<?> linkingContexts, // <LinkingContextT> expected
+      String name,
+      String language,
+      boolean alwayslink,
+      SkylarkList<?> additionalInputs, // <FileT> expected
+      boolean disallowStaticLibraries,
+      boolean disallowDynamicLibraries,
+      Object grepIncludes,
+      Location location,
+      StarlarkThread thread)
+      throws InterruptedException, EvalException;
 }

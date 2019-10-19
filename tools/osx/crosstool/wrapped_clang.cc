@@ -22,10 +22,7 @@
 // are passed in, then they all must be passed in.
 // "DSYM_HINT_LINKED_BINARY": Workspace-relative path to binary output of the
 //    link action generating the dsym file.
-// "DSYM_HINT_DSYM_PATH": Workspace-relative path to dSYM dwarf file or bundle.
-// "DSYM_HINT_DSYM_BUNDLE_ZIP": (optional) Workspace-relative path to dSYM zip.
-//   - If this is specified, a dSYM bundle is created, otherwise just a regular
-//     DWARF file is created.
+// "DSYM_HINT_DSYM_PATH": Workspace-relative path to dSYM dwarf file.
 //
 // Likewise, this wrapper also contains a workaround for a bug in ld that causes
 // flaky builds when using Bitcode symbol maps. ld allows the
@@ -59,6 +56,8 @@
 extern char **environ;
 
 namespace {
+
+constexpr char kAddASTPathPrefix[] = "-Wl,-add_ast_path,";
 
 // Returns the base name of the given filepath. For example, given
 // /foo/bar/baz.txt, returns 'baz.txt'.
@@ -154,6 +153,21 @@ std::string GetMandatoryEnvVar(const std::string &var_name) {
   return env_value;
 }
 
+// Returns true if `str` starts with the specified `prefix`.
+bool StartsWith(const std::string &str, const std::string &prefix) {
+  return str.compare(0, prefix.size(), prefix) == 0;
+}
+
+// If *`str` begins `prefix`, strip it out and return true.
+// Otherwise leave *`str` unchanged and return false.
+bool StripPrefixStringIfPresent(std::string *str, const std::string &prefix) {
+  if (StartsWith(*str, prefix)) {
+    *str = str->substr(prefix.size());
+    return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -176,7 +190,7 @@ int main(int argc, char *argv[]) {
 
   std::vector<std::string> processed_args = {"/usr/bin/xcrun", tool_name};
 
-  std::string linked_binary, dsym_path, dsym_bundle_zip, bitcode_symbol_map;
+  std::string linked_binary, dsym_path, bitcode_symbol_map;
   std::string dest_dir;
 
   std::unique_ptr<char, decltype(std::free) *> cwd{getcwd(nullptr, 0),
@@ -195,10 +209,6 @@ int main(int argc, char *argv[]) {
     if (SetArgIfFlagPresent(arg, "DSYM_HINT_DSYM_PATH", &dsym_path)) {
       continue;
     }
-    if (SetArgIfFlagPresent(arg, "DSYM_HINT_DSYM_BUNDLE_ZIP",
-                            &dsym_bundle_zip)) {
-      continue;
-    }
     if (SetArgIfFlagPresent(arg, "BITCODE_TOUCH_SYMBOL_MAP",
                             &bitcode_symbol_map)) {
       // Touch bitcode_symbol_map.
@@ -210,14 +220,34 @@ int main(int argc, char *argv[]) {
     }
     FindAndReplace("__BAZEL_XCODE_DEVELOPER_DIR__", developer_dir, &arg);
     FindAndReplace("__BAZEL_XCODE_SDKROOT__", sdk_root, &arg);
+
+    // Make the `add_ast_path` options used to embed Swift module references
+    // absolute to enable Swift debugging without dSYMs: see
+    // https://forums.swift.org/t/improving-swift-lldb-support-for-path-remappings/22694
+    if (StripPrefixStringIfPresent(&arg, kAddASTPathPrefix)) {
+      // Only modify relative paths.
+      if (!StartsWith(arg, "/")) {
+        arg = std::string(kAddASTPathPrefix) +
+              std::string(cwd.get()) + "/" + arg;
+      } else {
+        arg = std::string(kAddASTPathPrefix) + arg;
+      }
+    }
+
     processed_args.push_back(arg);
+  }
+
+  // Special mode that only prints the command. Used for testing.
+  if (getenv("__WRAPPED_CLANG_LOG_ONLY")) {
+    for (const std::string &arg : processed_args)
+        std::cout << arg << ' ';
+    std::cout << "\n";
+    return 0;
   }
 
   // Check to see if we should postprocess with dsymutil.
   bool postprocess = false;
-  bool dsyms_use_zip_file = false;
-  if ((!linked_binary.empty()) || (!dsym_path.empty()) ||
-      (!dsym_bundle_zip.empty())) {
+  if ((!linked_binary.empty()) || (!dsym_path.empty())) {
     if ((linked_binary.empty()) || (dsym_path.empty())) {
       const char *missing_dsym_flag;
       if (linked_binary.empty()) {
@@ -231,7 +261,6 @@ int main(int argc, char *argv[]) {
       abort();
     } else {
       postprocess = true;
-      dsyms_use_zip_file = !(dsym_bundle_zip.empty());
     }
   }
 
@@ -244,26 +273,11 @@ int main(int argc, char *argv[]) {
   RunSubProcess(processed_args);
 
   std::vector<std::string> dsymutil_args = {"/usr/bin/xcrun", "dsymutil",
-                                            linked_binary, "-o", dsym_path};
-  if (!dsyms_use_zip_file) {
-    dsymutil_args.push_back("--flat");
-  }
-
-  RunSubProcess(dsymutil_args);
-
-  if (dsyms_use_zip_file) {
-    std::vector<std::string> zip_args = {
-        "/usr/bin/zip", "-q", "-r",
-        std::string(cwd.get()) + "/" + dsym_bundle_zip, "."};
-    if (chdir(dsym_path.c_str()) < 0) {
-      std::cerr << "Error changing directory to '" << dsym_path << "'\n";
-      abort();
-    }
-
-    ExecProcess(zip_args);
-    std::cerr << "ExecProcess should not return. Please fix!\n";
-    abort();
-  }
+                                            linked_binary, "-o", dsym_path,
+                                            "--flat"};
+  ExecProcess(dsymutil_args);
+  std::cerr << "ExecProcess should not return. Please fix!\n";
+  abort();
 
   return 0;
 }

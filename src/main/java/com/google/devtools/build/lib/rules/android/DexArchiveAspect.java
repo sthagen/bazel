@@ -40,7 +40,6 @@ import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
-import com.google.devtools.build.lib.analysis.WrappingProvider;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorArg;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
@@ -65,8 +64,8 @@ import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.OutputJar;
 import com.google.devtools.build.lib.rules.java.proto.JavaProtoAspectCommon;
 import com.google.devtools.build.lib.rules.java.proto.JavaProtoLibraryAspectProvider;
+import com.google.devtools.build.lib.rules.proto.ProtoInfo;
 import com.google.devtools.build.lib.rules.proto.ProtoLangToolchainProvider;
-import com.google.devtools.build.lib.rules.proto.ProtoSourcesProvider;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import java.util.HashMap;
@@ -138,16 +137,16 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
             .requireSkylarkProviders(forKey(ToolchainInfo.PROVIDER.getKey()))
             // For android_sdk rules, where we just want to get at aidl runtime deps.
             .requireSkylarkProviders(forKey(AndroidSdkProvider.PROVIDER.getKey()))
+            .requireSkylarkProviders(forKey(ProtoInfo.PROVIDER.getKey()))
             .requireProviderSets(
                 ImmutableList.of(
-                    ImmutableSet.<Class<?>>of(ProtoSourcesProvider.class),
                     // For proto_lang_toolchain rules, where we just want to get at their runtime
                     // deps.
                     ImmutableSet.<Class<?>>of(ProtoLangToolchainProvider.class)))
             // Parse labels since we don't have RuleDefinitionEnvironment.getLabel like in a rule
             .add(
                 attr(ASPECT_DESUGAR_PREREQ, LABEL)
-                    .cfg(HostTransition.INSTANCE)
+                    .cfg(HostTransition.createFactory())
                     .exec()
                     .value(
                         Label.parseAbsoluteUnchecked(
@@ -161,12 +160,14 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
                             Label.parseAbsoluteUnchecked(
                                 toolsRepository + AndroidRuleClasses.DEFAULT_SDK))))
             .requiresConfigurationFragments(AndroidConfiguration.class)
+            .requireAspectsWithProviders(
+                ImmutableList.of(ImmutableSet.of(forKey(JavaInfo.PROVIDER.getKey()))))
             .requireAspectsWithNativeProviders(JavaProtoLibraryAspectProvider.class);
     if (TriState.valueOf(params.getOnlyValueOfAttribute("incremental_dexing")) != TriState.NO) {
       // Marginally improves "query2" precision for targets that disable incremental dexing
       result.add(
           attr(ASPECT_DEXBUILDER_PREREQ, LABEL)
-              .cfg(HostTransition.INSTANCE)
+              .cfg(HostTransition.createFactory())
               .exec()
               .value(Label.parseAbsoluteUnchecked(toolsRepository + "//tools/android:dexbuilder")));
     }
@@ -178,7 +179,10 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
 
   @Override
   public ConfiguredAspect create(
-      ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters params)
+      ConfiguredTargetAndData ctadBase,
+      RuleContext ruleContext,
+      AspectParameters params,
+      String toolsRepository)
       throws InterruptedException, ActionConflictException {
     ConfiguredAspect.Builder result = new ConfiguredAspect.Builder(this, params, ruleContext);
     Function<Artifact, Artifact> desugaredJars =
@@ -259,12 +263,25 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
       // These are all transitive hjars of dependencies and hjar of the jar itself
       NestedSet<Artifact> compileTimeClasspath =
           getJavaCompilationArgsProvider(base, ruleContext).getTransitiveCompileTimeJars();
+      ImmutableSet.Builder<Artifact> jars = ImmutableSet.builder();
+      jars.addAll(javaInfo.getDirectRuntimeJars());
+
+      // If the target is an android_library, it may be a Starlark android_library in which case
+      // get the R.jar from the AndroidIdeInfoProvider.
+      if (isAndroidLibrary(ruleContext)) {
+        Artifact rJar = getAndroidLibraryRJar(base);
+        if (rJar != null) {
+          // TODO(b/124540821): Disable R.jar desugaring (with a flag).
+          jars.add(rJar);
+        }
+      }
+
       // For android_* targets we need to honor their bootclasspath (nicer in general to do so)
       ImmutableList<Artifact> bootclasspath = getBootclasspath(base, ruleContext);
 
-
-      boolean basenameClash = checkBasenameClash(javaInfo.getDirectRuntimeJars());
-      for (Artifact jar : javaInfo.getDirectRuntimeJars()) {
+      ImmutableSet<Artifact> jarsToProcess = jars.build();
+      boolean basenameClash = checkBasenameClash(jarsToProcess);
+      for (Artifact jar : jarsToProcess) {
         Artifact desugared =
             createDesugarAction(
                 ruleContext, basenameClash, jar, bootclasspath, compileTimeClasspath);
@@ -281,21 +298,37 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
     if (isProtoLibrary(ruleContext)) {
       if (!ruleContext.getPrerequisites("srcs", Mode.TARGET).isEmpty()) {
         JavaRuleOutputJarsProvider outputJarsProvider =
-            WrappingProvider.Helper.getWrappedProvider(
-                base, JavaProtoLibraryAspectProvider.class, JavaRuleOutputJarsProvider.class);
+            base.getProvider(JavaRuleOutputJarsProvider.class);
         if (outputJarsProvider != null) {
           return outputJarsProvider
               .getOutputJars()
               .stream()
               .map(OutputJar::getClassJar)
               .collect(toImmutableList());
+        } else {
+          JavaInfo javaInfo = JavaInfo.getJavaInfo(base);
+          if (javaInfo != null) {
+            return javaInfo.getDirectRuntimeJars();
+          }
         }
       }
     } else {
+      ImmutableSet.Builder<Artifact> jars = ImmutableSet.builder();
       JavaInfo javaInfo = JavaInfo.getJavaInfo(base);
       if (javaInfo != null) {
-        return javaInfo.getDirectRuntimeJars();
+        jars.addAll(javaInfo.getDirectRuntimeJars());
       }
+
+      // The Starlark android_library does not put the R.jar file in the direct runtime deps of the
+      // JavaInfo, it can only be retrieved from the AndroidIdeInfoProvider.
+      if (isAndroidLibrary(ruleContext)) {
+        Artifact rJar = getAndroidLibraryRJar(base);
+        if (rJar != null) {
+          jars.add(rJar);
+        }
+      }
+
+      return jars.build();
     }
     return null;
   }
@@ -307,14 +340,24 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
     if (provider != null) {
       return provider;
     }
-    return isProtoLibrary(ruleContext)
-        ? WrappingProvider.Helper.getWrappedProvider(
-            base, JavaProtoLibraryAspectProvider.class, JavaCompilationArgsProvider.class)
-        : null;
+    return isProtoLibrary(ruleContext) ? base.getProvider(JavaCompilationArgsProvider.class) : null;
+  }
+
+  private static boolean isAndroidLibrary(RuleContext ruleContext) {
+    return "android_library".equals(ruleContext.getRule().getRuleClass());
   }
 
   private static boolean isProtoLibrary(RuleContext ruleContext) {
     return "proto_library".equals(ruleContext.getRule().getRuleClass());
+  }
+
+  private static Artifact getAndroidLibraryRJar(ConfiguredTarget base) {
+    AndroidIdeInfoProvider provider =
+        (AndroidIdeInfoProvider) base.get(AndroidIdeInfoProvider.PROVIDER.getKey());
+    if (provider != null && provider.getResourceJar() != null) {
+      return provider.getResourceJar().getClassJar();
+    }
+    return null;
   }
 
   private static boolean checkBasenameClash(Iterable<Artifact> artifacts) {
@@ -418,6 +461,7 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
             .addOutput(result)
             .setMnemonic("Desugar")
             .setProgressMessage("Desugaring %s for Android", jar.prettyPrint())
+            .setExecutionInfo(ExecutionRequirements.WORKER_MODE_ENABLED)
             .addCommandLine(
                 // Always use params file, so we don't need to compute command line length first
                 args.build(), ParamFileInfo.builder(UNQUOTED).setUseAlways(true).build())
@@ -516,6 +560,20 @@ public final class DexArchiveAspect extends NativeAspectClass implements Configu
         Iterables.filter(
             tokenizedDexopts,
             new FlagMatcher(getAndroidConfig(ruleContext).getDexoptsSupportedInDexMerger())));
+  }
+
+  /**
+   * Derives options to use in DexFileSharder actions from the given context and dx flags, where the
+   * latter typically come from a {@code dexopts} attribute on a top-level target.
+   */
+  static ImmutableSet<String> sharderDexopts(
+      RuleContext ruleContext, Iterable<String> tokenizedDexopts) {
+    // We don't need an ordered set but might as well.  Note we don't need to worry about coverage
+    // builds since the merger doesn't use --no-locals.
+    return normalizeDexopts(
+        Iterables.filter(
+            tokenizedDexopts,
+            new FlagMatcher(getAndroidConfig(ruleContext).getDexoptsSupportedInDexSharder())));
   }
 
   private static ImmutableSet<String> normalizeDexopts(Iterable<String> tokenizedDexopts) {

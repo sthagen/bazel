@@ -15,15 +15,17 @@
 package com.google.devtools.build.lib.packages;
 
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
-import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
+import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.util.Pair;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -45,18 +47,15 @@ public final class TargetUtils {
   // some internal tags that we don't allow to be set on targets. We also don't want to
   // exhaustively enumerate all the legal values here. Right now, only a ~small set of tags is
   // recognized by Bazel.
-  private static final Predicate<String> LEGAL_EXEC_INFO_KEYS = new Predicate<String>() {
-    @Override
-    public boolean apply(String tag) {
-      return tag.startsWith("block-")
-          || tag.startsWith("requires-")
-          || tag.startsWith("no-")
-          || tag.startsWith("supports-")
-          || tag.startsWith("disable-")
-          || tag.equals("local")
-          || tag.startsWith("cpu:");
-    }
-  };
+  private static boolean legalExecInfoKeys(String tag) {
+    return tag.startsWith("block-")
+        || tag.startsWith("requires-")
+        || tag.startsWith("no-")
+        || tag.startsWith("supports-")
+        || tag.startsWith("disable-")
+        || tag.equals("local")
+        || tag.startsWith("cpu:");
+  }
 
   private TargetUtils() {} // Uninstantiable.
 
@@ -80,8 +79,7 @@ public final class TargetUtils {
    * Returns true iff {@code target} is a {@code test_suite} rule.
    */
   public static boolean isTestSuiteRule(Target target) {
-    return target instanceof Rule &&
-        isTestSuiteRuleName(((Rule) target).getRuleClass());
+    return target instanceof Rule && isTestSuiteRuleName(((Rule) target).getRuleClass());
   }
 
   /**
@@ -129,8 +127,7 @@ public final class TargetUtils {
    * Wraps the above calls into one generic check safely applicable to any rule.
    */
   public static boolean isTestRuleAndRunsLocally(Rule rule) {
-    return isTestOrTestSuiteRule(rule) &&
-        (isLocalTestRule(rule) || isExclusiveTestRule(rule));
+    return isTestOrTestSuiteRule(rule) && (isLocalTestRule(rule) || isExclusiveTestRule(rule));
   }
 
   /**
@@ -221,19 +218,15 @@ public final class TargetUtils {
   }
 
   /**
-   * Returns the execution info. These include execution requirement tags ('block-*', 'requires-*',
-   * 'no-*', 'supports-*', 'disable-*', 'local', and 'cpu:*') as keys with empty values.
+   * Returns the execution info from the tags declared on the target. These include only some tags
+   * {@link #legalExecInfoKeys} as keys with empty values.
    */
   public static Map<String, String> getExecutionInfo(Rule rule) {
     // tags may contain duplicate values.
     Map<String, String> map = new HashMap<>();
     for (String tag :
         NonconfigurableAttributeMapper.of(rule).get(CONSTRAINTS_ATTR, Type.STRING_LIST)) {
-      // We don't want to pollute the execution info with random things, and we also need to reserve
-      // some internal tags that we don't allow to be set on targets. We also don't want to
-      // exhaustively enumerate all the legal values here. Right now, only a ~small set of tags is
-      // recognized by Bazel.
-      if (LEGAL_EXEC_INFO_KEYS.apply(tag)) {
+      if (legalExecInfoKeys(tag)) {
         map.put(tag, "");
       }
     }
@@ -241,11 +234,66 @@ public final class TargetUtils {
   }
 
   /**
+   * Returns the execution info from the tags declared on the target. These include only some tags
+   * {@link #legalExecInfoKeys} as keys with empty values.
+   *
+   * @param rule a rule instance to get tags from
+   * @param allowTagsPropagation if set to true, tags will be propagated from a target to the
+   *     actions' execution requirements, for more details {@see
+   *     SkylarkSematicOptions#experimentalAllowTagsPropagation}
+   */
+  public static ImmutableMap<String, String> getExecutionInfo(
+      Rule rule, boolean allowTagsPropagation) {
+    if (allowTagsPropagation) {
+      return ImmutableMap.copyOf(getExecutionInfo(rule));
+    } else {
+      return ImmutableMap.of();
+    }
+  }
+
+  /**
+   * Returns the execution info, obtained from the rule's tags and the execution requirements
+   * provided. Only supported tags are included into the execution info, see {@link
+   * #legalExecInfoKeys}.
+   *
+   * @param executionRequirementsUnchecked execution_requirements of a rule, expected to be of a
+   *     {@code SkylarkDict<String, String>} type, null or {@link
+   *     com.google.devtools.build.lib.syntax.Runtime#NONE}
+   * @param rule a rule instance to get tags from
+   * @param allowTagsPropagation if set to true, tags will be propagated from a target to the
+   *     actions' execution requirements, for more details {@see
+   *     SkylarkSematicOptions#experimentalAllowTagsPropagation}
+   */
+  public static ImmutableMap<String, String> getFilteredExecutionInfo(
+      Object executionRequirementsUnchecked, Rule rule, boolean allowTagsPropagation)
+      throws EvalException {
+    Map<String, String> checkedExecutionRequirements =
+        TargetUtils.filter(
+            SkylarkDict.castSkylarkDictOrNoneToDict(
+                executionRequirementsUnchecked,
+                String.class,
+                String.class,
+                "execution_requirements"));
+
+    Map<String, String> executionInfoBuilder = new HashMap<>();
+    // adding filtered execution requirements to the execution info map
+    executionInfoBuilder.putAll(checkedExecutionRequirements);
+
+    if (allowTagsPropagation) {
+      Map<String, String> checkedTags = getExecutionInfo(rule);
+      // merging filtered tags to the execution info map avoiding duplicates
+      checkedTags.forEach(executionInfoBuilder::putIfAbsent);
+    }
+
+    return ImmutableMap.copyOf(executionInfoBuilder);
+  }
+
+  /**
    * Returns the execution info. These include execution requirement tags ('block-*', 'requires-*',
    * 'no-*', 'supports-*', 'disable-*', 'local', and 'cpu:*') as keys with empty values.
    */
   public static Map<String, String> filter(Map<String, String> executionInfo) {
-    return Maps.filterKeys(executionInfo, LEGAL_EXEC_INFO_KEYS);
+    return Maps.filterKeys(executionInfo, TargetUtils::legalExecInfoKeys);
   }
 
   /**
@@ -270,7 +318,7 @@ public final class TargetUtils {
     return index != -1 ? ruleClass.substring(0, index) : ruleClass;
   }
 
-  private static boolean isExplicitDependency(Rule rule, Label label) throws InterruptedException {
+  private static boolean isExplicitDependency(Rule rule, Label label) {
     if (rule.getVisibility().getDependencyLabels().contains(label)) {
       return true;
     }
@@ -322,19 +370,27 @@ public final class TargetUtils {
    * Target} target did not exist, due to {@link NoSuchThingException} e.
    */
   public static String formatMissingEdge(
-      @Nullable Target target, Label label, NoSuchThingException e) throws InterruptedException {
+      @Nullable Target target, Label label, NoSuchThingException e, @Nullable Attribute attr) {
     // instanceof returns false if target is null (which is exploited here)
     if (target instanceof Rule) {
       Rule rule = (Rule) target;
       if (isExplicitDependency(rule, label)) {
         return String.format("%s and referenced by '%s'", e.getMessage(), target.getLabel());
       } else {
+        String additionalInfo = "";
+        if (attr != null && !Strings.isNullOrEmpty(attr.getDoc())) {
+          additionalInfo =
+              String.format(
+                  "\nDocumentation for implicit attribute %s of rules of type %s:\n%s",
+                  attr.getPublicName(), rule.getRuleClass(), attr.getDoc());
+        }
         // N.B. If you see this error message in one of our integration tests during development of
         // a change that adds a new implicit dependency when running Blaze, maybe you forgot to add
         // a new mock target to the integration test's setup.
-        return String.format("every rule of type %s implicitly depends upon the target '%s', but "
-            + "this target could not be found because of: %s", rule.getRuleClass(), label,
-            e.getMessage());
+        return String.format(
+            "every rule of type %s implicitly depends upon the target '%s', but "
+                + "this target could not be found because of: %s%s",
+            rule.getRuleClass(), label, e.getMessage(), additionalInfo);
       }
     } else if (target instanceof InputFile) {
       return e.getMessage() + " (this is usually caused by a missing package group in the"
@@ -346,5 +402,10 @@ public final class TargetUtils {
       }
       return e.getMessage();
     }
+  }
+
+  public static String formatMissingEdge(
+      @Nullable Target target, Label label, NoSuchThingException e) {
+    return formatMissingEdge(target, label, e, null);
   }
 }

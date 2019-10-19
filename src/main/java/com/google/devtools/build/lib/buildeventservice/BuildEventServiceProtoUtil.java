@@ -14,11 +14,11 @@
 
 package com.google.devtools.build.lib.buildeventservice;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.devtools.build.v1.BuildEvent.BuildComponentStreamFinished.FinishType.FINISHED;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.v1.BuildEvent;
 import com.google.devtools.build.v1.BuildEvent.BuildComponentStreamFinished;
 import com.google.devtools.build.v1.BuildEvent.BuildEnqueued;
@@ -36,32 +36,28 @@ import com.google.devtools.build.v1.StreamId.BuildComponent;
 import com.google.protobuf.Any;
 import com.google.protobuf.Timestamp;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nullable;
 
-/** Utility class used to build protobuffs requests that are meant to be sent over BES. */
+/** Utility class with convenience methods for building a {@link BuildEventServiceTransport}. */
 public final class BuildEventServiceProtoUtil {
 
   private final String buildRequestId;
   private final String buildInvocationId;
   private final String projectId;
-  private final AtomicInteger streamSequenceNumber;
   private final String commandName;
   private final Set<String> additionalKeywords;
 
-  public BuildEventServiceProtoUtil(
+  private BuildEventServiceProtoUtil(
       String buildRequestId,
       String buildInvocationId,
       @Nullable String projectId,
       String commandName,
-      Clock clock,
       Set<String> additionalKeywords) {
     this.buildRequestId = buildRequestId;
     this.buildInvocationId = buildInvocationId;
     this.projectId = projectId;
     this.commandName = commandName;
-    this.additionalKeywords = additionalKeywords;
-    this.streamSequenceNumber = new AtomicInteger(1);
+    this.additionalKeywords = ImmutableSet.copyOf(additionalKeywords);
   }
 
   public PublishLifecycleEventRequest buildEnqueued(Timestamp timestamp) {
@@ -109,22 +105,20 @@ public final class BuildEventServiceProtoUtil {
         .build();
   }
 
-  public int nextSequenceNumber() {
-    return streamSequenceNumber.getAndIncrement();
-  }
-
   /** Creates a PublishBuildToolEventStreamRequest from a packed bazel event. */
   public PublishBuildToolEventStreamRequest bazelEvent(
-      int sequenceNumber, Timestamp timestamp, Any packedEvent) {
+      long sequenceNumber, Timestamp timestamp, Any packedEvent) {
     return publishBuildToolEventStreamRequest(
+        projectId,
         sequenceNumber,
         timestamp,
         com.google.devtools.build.v1.BuildEvent.newBuilder().setBazelEvent(packedEvent));
   }
 
   public PublishBuildToolEventStreamRequest streamFinished(
-      int sequenceNumber, Timestamp timestamp) {
+      long sequenceNumber, Timestamp timestamp) {
     return publishBuildToolEventStreamRequest(
+        projectId,
         sequenceNumber,
         timestamp,
         BuildEvent.newBuilder()
@@ -134,7 +128,10 @@ public final class BuildEventServiceProtoUtil {
 
   @VisibleForTesting
   public PublishBuildToolEventStreamRequest publishBuildToolEventStreamRequest(
-      int sequenceNumber, Timestamp timestamp, BuildEvent.Builder besEvent) {
+      @Nullable String projectId,
+      long sequenceNumber,
+      Timestamp timestamp,
+      BuildEvent.Builder besEvent) {
     PublishBuildToolEventStreamRequest.Builder builder =
         PublishBuildToolEventStreamRequest.newBuilder()
             .setOrderedBuildEvent(
@@ -144,6 +141,9 @@ public final class BuildEventServiceProtoUtil {
                     .setStreamId(streamId(besEvent.getEventCase())));
     if (sequenceNumber == 1) {
       builder.addAllNotificationKeywords(getKeywords());
+    }
+    if (projectId != null) {
+      builder.setProjectId(projectId);
     }
     return builder.build();
   }
@@ -195,5 +195,48 @@ public final class BuildEventServiceProtoUtil {
         .add("protocol_name=BEP")
         .addAll(additionalKeywords)
         .build();
+  }
+
+  /** A builder for {@link BuildEventServiceProtoUtil}. */
+  public static class Builder {
+    private String invocationId;
+    private String buildRequestId;
+    private String commandName;
+    private Set<String> keywords;
+    private @Nullable String projectId;
+
+    public Builder buildRequestId(String value) {
+      this.buildRequestId = value;
+      return this;
+    }
+
+    public Builder invocationId(String value) {
+      this.invocationId = value;
+      return this;
+    }
+
+    public Builder projectId(String value) {
+      this.projectId = value;
+      return this;
+    }
+
+    public Builder commandName(String value) {
+      this.commandName = value;
+      return this;
+    }
+
+    public Builder keywords(Set<String> value) {
+      this.keywords = value;
+      return this;
+    }
+
+    public BuildEventServiceProtoUtil build() {
+      return new BuildEventServiceProtoUtil(
+          checkNotNull(buildRequestId),
+          checkNotNull(invocationId),
+          projectId,
+          checkNotNull(commandName),
+          checkNotNull(keywords));
+    }
   }
 }

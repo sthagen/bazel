@@ -20,7 +20,7 @@ import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
 
@@ -58,7 +58,7 @@ public final class FdoPrefetchHintsRule implements RuleDefinition {
   }
 }
 
-/*<!-- #BLAZE_RULE (NAME = fdo_prefetch_hints, TYPE = LIBRARY, FAMILY = Cpp) -->
+/*<!-- #BLAZE_RULE (NAME = fdo_prefetch_hints, TYPE = LIBRARY, FAMILY = C / C++) -->
 
 <p>Represents an FDO prefetch hints profile that is either in the workspace or at a specified
 absolute path.

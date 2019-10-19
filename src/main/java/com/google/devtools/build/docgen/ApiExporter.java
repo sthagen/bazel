@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.docgen;
 
+import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.docgen.builtin.BuiltinProtos.ApiContext;
 import com.google.devtools.build.docgen.builtin.BuiltinProtos.Builtins;
 import com.google.devtools.build.docgen.builtin.BuiltinProtos.Callable;
 import com.google.devtools.build.docgen.builtin.BuiltinProtos.Param;
@@ -22,86 +24,192 @@ import com.google.devtools.build.docgen.skylark.SkylarkConstructorMethodDoc;
 import com.google.devtools.build.docgen.skylark.SkylarkMethodDoc;
 import com.google.devtools.build.docgen.skylark.SkylarkModuleDoc;
 import com.google.devtools.build.docgen.skylark.SkylarkParamDoc;
-import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
-import com.google.devtools.build.lib.util.Classpath.ClassPathException;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.syntax.BaseFunction;
+import com.google.devtools.build.lib.syntax.BuiltinCallable;
+import com.google.devtools.build.lib.syntax.CallUtils;
+import com.google.devtools.build.lib.syntax.FunctionSignature;
+import com.google.devtools.build.lib.syntax.MethodDescriptor;
+import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.common.options.OptionsParser;
 import java.io.BufferedOutputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 
 /** The main class for the Skylark documentation generator. */
 public class ApiExporter {
-  private static ConfiguredRuleClassProvider createRuleClassProvider(String classProvider)
-      throws ClassNotFoundException, NoSuchMethodException, InvocationTargetException,
-          IllegalAccessException {
-    Class<?> providerClass = Class.forName(classProvider);
-    Method createMethod = providerClass.getMethod("create");
-    return (ConfiguredRuleClassProvider) createMethod.invoke(null);
-  }
 
-  private static void appendBuiltins(
-      ProtoFileBuildEncyclopediaProcessor processor, String filename) {
-    try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(filename))) {
-      Builtins.Builder builtins = Builtins.newBuilder();
+  private static void appendTypes(
+      Builtins.Builder builtins,
+      Map<String, SkylarkModuleDoc> types,
+      List<RuleDocumentation> nativeRules)
+      throws BuildEncyclopediaDocException {
 
-      Map<String, SkylarkModuleDoc> allTypes = SkylarkDocumentationCollector.collectModules();
+    for (Entry<String, SkylarkModuleDoc> modEntry : types.entrySet()) {
+      SkylarkModuleDoc mod = modEntry.getValue();
 
-      // Add all global variables and functions in Builtins as Values.
-      SkylarkModuleDoc topLevelModule =
-          allTypes.remove(SkylarkDocumentationCollector.getTopLevelModule().name());
-      for (SkylarkMethodDoc meth : topLevelModule.getMethods()) {
-        builtins.addGlobal(collectFieldInfo(meth));
-      }
-      for (Map.Entry<String, SkylarkModuleDoc> modEntry : allTypes.entrySet()) {
-        SkylarkModuleDoc mod = modEntry.getValue();
+      Type.Builder type = Type.newBuilder();
+      type.setName(mod.getName());
+      type.setDoc(mod.getDocumentation());
+      for (SkylarkMethodDoc meth : mod.getJavaMethods()) {
+        // Constructors are exported as global symbols.
+        if (!(meth instanceof SkylarkConstructorMethodDoc)) {
+          Value.Builder value = collectMethodInfo(meth);
+          // Methods from the native package are available as top level functions in BUILD files.
+          if (mod.getName().equals("native")) {
+            value.setApiContext(ApiContext.BUILD);
+            builtins.addGlobal(value);
 
-        // Include SkylarkModuleDoc in Builtins as a Type.
-        Type.Builder type = Type.newBuilder();
-        type.setName(mod.getName());
-        type.setDoc(mod.getDocumentation());
-        for (SkylarkMethodDoc meth : mod.getJavaMethods()) {
-          // Constructors should be exported as globals.
-          if (meth instanceof SkylarkConstructorMethodDoc) {
-            builtins.addGlobal(collectFieldInfo(meth));
+            value.setApiContext(ApiContext.BZL);
+            type.addField(value);
           } else {
-            type.addField(collectFieldInfo(meth));
+            value.setApiContext(ApiContext.ALL);
+            type.addField(value);
           }
         }
-        // Add native rules to the native type.
-        if (mod.getName().equals("native")) {
-          for (Value.Builder rule : processor.getNativeRules()) {
-            type.addField(rule);
-          }
-        }
-        builtins.addType(type);
-
-        // Include SkylarkModuleDoc in Builtins as a Value.
-        Value.Builder value = Value.newBuilder();
-        value.setName(mod.getName());
-        value.setType(mod.getName());
-        value.setDoc(mod.getDocumentation());
-        builtins.addGlobal(value);
       }
-      Builtins build = builtins.build();
-      build.writeTo(out);
-    } catch (IOException | ClassPathException e) {
-      System.err.println(e);
+      // Native rules are available in BZL file as methods of the native package.
+      if (mod.getName().equals("native")) {
+        for (RuleDocumentation rule : nativeRules) {
+          Value.Builder field = collectRuleInfo(rule);
+          field.setApiContext(ApiContext.BZL);
+          type.addField(field);
+        }
+      }
+      builtins.addType(type);
     }
   }
 
-  private static Value.Builder collectFieldInfo(SkylarkMethodDoc meth) {
+  // Globals are available for both BUILD and BZL files.
+  private static void appendGlobals(Builtins.Builder builtins, Map<String, Object> globalMethods) {
+    for (Entry<String, Object> entry : globalMethods.entrySet()) {
+      Object obj = entry.getValue();
+      Value.Builder value = Value.newBuilder();
+      if (obj instanceof BaseFunction) {
+        value = valueFromFunction((BaseFunction) obj);
+      } else if (obj instanceof BuiltinCallable) {
+        BuiltinCallable builtinCallable = (BuiltinCallable) obj;
+        MethodDescriptor descriptor =
+            builtinCallable.getMethodDescriptor(StarlarkSemantics.DEFAULT_SEMANTICS);
+        value = valueFromMethodDescriptor(descriptor);
+      } else {
+        value.setName(entry.getKey());
+      }
+      value.setApiContext(ApiContext.ALL);
+      builtins.addGlobal(value);
+    }
+  }
+
+  private static void appendBzlGlobals(
+      Builtins.Builder builtins, Map<String, Object> starlarkGlobals) {
+    for (Entry<String, Object> entry : starlarkGlobals.entrySet()) {
+      Object obj = entry.getValue();
+      Value.Builder value = Value.newBuilder();
+
+      if (obj instanceof BaseFunction) {
+        value = valueFromFunction((BaseFunction) obj);
+      } else {
+        SkylarkModule typeModule = SkylarkInterfaceUtils.getSkylarkModule(obj.getClass());
+        if (typeModule != null) {
+          if (CallUtils.hasSelfCallMethod(StarlarkSemantics.DEFAULT_SEMANTICS, obj.getClass())) {
+            MethodDescriptor descriptor =
+                CallUtils.getSelfCallMethodDescriptor(StarlarkSemantics.DEFAULT_SEMANTICS, obj);
+            value = valueFromMethodDescriptor(descriptor);
+          } else {
+            value.setName(entry.getKey());
+            value.setType(entry.getKey());
+            value.setDoc(typeModule.doc());
+          }
+        }
+      }
+      value.setApiContext(ApiContext.BZL);
+      builtins.addGlobal(value);
+    }
+  }
+
+  // Native rules are available as top level functions in BUILD files.
+  private static void appendNativeRules(
+      Builtins.Builder builtins, List<RuleDocumentation> nativeRules)
+      throws BuildEncyclopediaDocException {
+    for (RuleDocumentation rule : nativeRules) {
+      Value.Builder global = collectRuleInfo(rule);
+      global.setApiContext(ApiContext.BUILD);
+      builtins.addGlobal(global);
+    }
+  }
+
+  private static Value.Builder valueFromFunction(BaseFunction func) {
+    return collectFunctionInfo(func.getName(), func.getSignature(), func.getDefaultValues());
+  }
+
+  private static Value.Builder valueFromMethodDescriptor(MethodDescriptor descriptor) {
+    SkylarkSignatureProcessor.SignatureInfo info =
+        SkylarkSignatureProcessor.getSignatureForCallable(
+            descriptor.getName(), descriptor, null, null);
+    return collectFunctionInfo(descriptor.getName(), info.signature, info.defaultValues);
+  }
+
+  private static Value.Builder collectFunctionInfo(
+      String funcName, FunctionSignature sig, List<Object> defaultValues) {
+    Value.Builder value = Value.newBuilder();
+    value.setName(funcName);
+    Callable.Builder callable = Callable.newBuilder();
+
+    ImmutableList<String> paramNames = sig.getParameterNames();
+    int positionals = sig.numMandatoryPositionals();
+    int optionals = sig.numOptionals();
+    int nameIndex = 0;
+
+    for (int i = 0; i < positionals; i++) {
+      Param.Builder param = Param.newBuilder();
+      param.setName(paramNames.get(nameIndex));
+      param.setIsMandatory(true);
+      callable.addParam(param);
+      nameIndex++;
+    }
+
+    for (int i = 0; i < optionals; i++) {
+      Param.Builder param = Param.newBuilder();
+      param.setName(paramNames.get(nameIndex));
+      param.setIsMandatory(false);
+      param.setDefaultValue(defaultValues.get(i).toString());
+      callable.addParam(param);
+      nameIndex++;
+    }
+
+    if (sig.hasVarargs()) {
+      Param.Builder param = Param.newBuilder();
+      param.setName("*" + paramNames.get(nameIndex));
+      param.setIsMandatory(false);
+      param.setIsStarArg(true);
+      nameIndex++;
+      callable.addParam(param);
+    }
+    if (sig.hasKwargs()) {
+      Param.Builder param = Param.newBuilder();
+      param.setIsMandatory(false);
+      param.setIsStarStarArg(true);
+      param.setName("**" + paramNames.get(nameIndex));
+      callable.addParam(param);
+    }
+    value.setCallable(callable);
+    return value;
+  }
+
+  private static Value.Builder collectMethodInfo(SkylarkMethodDoc meth) {
     Value.Builder field = Value.newBuilder();
     field.setName(meth.getShortName());
     field.setDoc(meth.getDocumentation());
     if (meth.isCallable()) {
       Callable.Builder callable = Callable.newBuilder();
       for (SkylarkParamDoc par : meth.getParams()) {
-        Param.Builder param = Param.newBuilder();
-        param.setName(par.getName());
+        Param.Builder param = newParam(par.getName(), par.getDefaultValue().isEmpty());
         param.setType(par.getType());
         param.setDoc(par.getDocumentation());
         param.setDefaultValue(par.getDefaultValue());
@@ -113,6 +221,36 @@ public class ApiExporter {
       field.setType(meth.getReturnType());
     }
     return field;
+  }
+
+  private static Param.Builder newParam(String name, Boolean isMandatory) {
+    Param.Builder param = Param.newBuilder();
+    param.setName(name);
+    param.setIsMandatory(isMandatory);
+    return param;
+  }
+
+  private static Value.Builder collectRuleInfo(RuleDocumentation rule)
+      throws BuildEncyclopediaDocException {
+    Value.Builder value = Value.newBuilder();
+    value.setName(rule.getRuleName());
+    value.setDoc(rule.getHtmlDocumentation());
+    Callable.Builder callable = Callable.newBuilder();
+    // All native rules have attribute "name". It is not included in the attributes list and needs
+    // to be added separately.
+    callable.addParam(newParam("name", true));
+    for (RuleDocumentationAttribute attr : rule.getAttributes()) {
+      callable.addParam(newParam(attr.getAttributeName(), attr.isMandatory()));
+    }
+    value.setCallable(callable);
+    return value;
+  }
+
+  private static void writeBuiltins(String filename, Builtins.Builder builtins) throws IOException {
+    try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(filename))) {
+      Builtins build = builtins.build();
+      build.writeTo(out);
+    }
   }
 
   private static void printUsage(OptionsParser parser) {
@@ -128,7 +266,8 @@ public class ApiExporter {
   }
 
   public static void main(String[] args) {
-    OptionsParser parser = OptionsParser.newOptionsParser(BuildEncyclopediaOptions.class);
+    OptionsParser parser =
+        OptionsParser.builder().optionsClasses(BuildEncyclopediaOptions.class).build();
     parser.parseAndExitUponError(args);
     BuildEncyclopediaOptions options = parser.getOptions(BuildEncyclopediaOptions.class);
 
@@ -146,15 +285,20 @@ public class ApiExporter {
     }
 
     try {
-      ProtoFileBuildEncyclopediaProcessor processor =
-          new ProtoFileBuildEncyclopediaProcessor(
-              options.productName, createRuleClassProvider(options.provider));
-      processor.generateDocumentation(options.inputDirs, options.outputFile, options.blacklist);
+      SymbolFamilies symbols =
+          new SymbolFamilies(
+              options.productName, options.provider, options.inputDirs, options.blacklist);
+      Builtins.Builder builtins = Builtins.newBuilder();
 
-      appendBuiltins(processor, options.outputFile);
+      appendTypes(builtins, symbols.getTypes(), symbols.getNativeRules());
+      appendGlobals(builtins, symbols.getGlobals());
+      appendBzlGlobals(builtins, symbols.getBzlGlobals());
+      appendNativeRules(builtins, symbols.getNativeRules());
+      writeBuiltins(options.outputFile, builtins);
+
     } catch (Throwable e) {
       System.err.println("ERROR: " + e.getMessage());
+      e.printStackTrace();
     }
   }
 }
-

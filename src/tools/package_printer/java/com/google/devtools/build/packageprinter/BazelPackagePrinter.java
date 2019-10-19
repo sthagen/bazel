@@ -19,9 +19,11 @@ import com.google.devtools.build.lib.events.PrintingEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.skyframe.packages.BazelPackageLoader;
 import com.google.devtools.build.lib.skyframe.packages.PackageLoader;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.Root;
 import java.nio.file.Paths;
 
 /**
@@ -40,10 +42,10 @@ public class BazelPackagePrinter {
               + "package/to/print");
       System.exit(1);
     }
-    FileSystem fileSystem = new JavaIoFileSystem();
+    FileSystem fileSystem = new JavaIoFileSystem(DigestHashFunction.SHA256);
     PackageLoader loader =
         newPackageLoader(
-            fileSystem.getPath(getAbsPathFlag(args[0], "--workspace_root=")),
+            Root.fromPath(fileSystem.getPath(getAbsPathFlag(args[0], "--workspace_root="))),
             fileSystem.getPath(getAbsPathFlag(args[1], "--install_base=")),
             fileSystem.getPath(getAbsPathFlag(args[2], "--output_base=")));
 
@@ -51,7 +53,7 @@ public class BazelPackagePrinter {
   }
 
   /** newPackageLoader returns a new PackageLoader. */
-  static PackageLoader newPackageLoader(Path workspaceDir, Path installBase, Path outputBase) {
+  static PackageLoader newPackageLoader(Root workspaceDir, Path installBase, Path outputBase) {
     return BazelPackageLoader.builder(workspaceDir, installBase, outputBase)
         .useDefaultSkylarkSemantics()
         .setReporter(new Reporter(new EventBus(), PrintingEventHandler.ERRORS_TO_STDERR))

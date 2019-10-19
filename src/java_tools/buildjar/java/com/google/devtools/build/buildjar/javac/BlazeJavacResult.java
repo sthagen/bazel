@@ -16,36 +16,70 @@ package com.google.devtools.build.buildjar.javac;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.buildjar.javac.statistics.BlazeJavacStatistics;
+import javax.annotation.Nullable;
 
 /** The result of a single compilation performed by {@link BlazeJavacMain}. */
 public class BlazeJavacResult {
+  /** The compilation result. */
+  public enum Status {
+    OK,
+    ERROR,
+    REQUIRES_FALLBACK,
+  }
 
-  private final boolean ok;
+  private final Status status;
   private final ImmutableList<FormattedDiagnostic> diagnostics;
   private final String output;
   private final BlazeJavaCompiler compiler;
+  private final BlazeJavacStatistics statistics;
 
   public static BlazeJavacResult ok() {
-    return new BlazeJavacResult(true, ImmutableList.of(), "", null);
+    return createFullResult(Status.OK, ImmutableList.of(), "", null, BlazeJavacStatistics.empty());
   }
 
   public static BlazeJavacResult error(String message) {
-    return new BlazeJavacResult(false, ImmutableList.of(), message, null);
+    return createFullResult(
+        Status.ERROR, ImmutableList.of(), message, null, BlazeJavacStatistics.empty());
   }
 
-  public BlazeJavacResult(
-      boolean ok,
+  public static BlazeJavacResult fallback() {
+    return createFullResult(
+        Status.REQUIRES_FALLBACK, ImmutableList.of(), "", null, BlazeJavacStatistics.empty());
+  }
+
+  public BlazeJavacResult withStatistics(BlazeJavacStatistics statistics) {
+    return new BlazeJavacResult(status, diagnostics, output, compiler, statistics);
+  }
+
+  private BlazeJavacResult(
+      Status status,
       ImmutableList<FormattedDiagnostic> diagnostics,
       String output,
-      BlazeJavaCompiler compiler) {
-    this.ok = ok;
+      @Nullable BlazeJavaCompiler compiler,
+      BlazeJavacStatistics statistics) {
+    this.status = status;
     this.diagnostics = diagnostics;
     this.output = output;
     this.compiler = compiler;
+    this.statistics = statistics;
+  }
+
+  public static BlazeJavacResult createFullResult(
+      Status status,
+      ImmutableList<FormattedDiagnostic> diagnostics,
+      String output,
+      BlazeJavaCompiler compiler,
+      BlazeJavacStatistics statistics) {
+    return new BlazeJavacResult(status, diagnostics, output, compiler, statistics);
   }
 
   public boolean isOk() {
-    return ok;
+    return status == Status.OK;
+  }
+
+  public Status status() {
+    return status;
   }
 
   public ImmutableList<FormattedDiagnostic> diagnostics() {
@@ -54,6 +88,10 @@ public class BlazeJavacResult {
 
   public String output() {
     return output;
+  }
+
+  public BlazeJavacStatistics statistics() {
+    return statistics;
   }
 
   @VisibleForTesting

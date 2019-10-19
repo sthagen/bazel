@@ -11,6 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include "src/main/native/windows/file.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
@@ -20,7 +27,6 @@
 #include <string>
 
 #include "gtest/gtest.h"
-#include "src/main/native/windows/file.h"
 #include "src/test/cpp/util/windows_test_util.h"
 
 #if !defined(_WIN32) && !defined(__CYGWIN__)
@@ -48,6 +54,32 @@ class WindowsFileOperationsTest : public ::testing::Test {
   void TearDown() override { DeleteAllUnder(GetTestTmpDirW()); }
 };
 
+TEST_F(WindowsFileOperationsTest, TestIsAbsoluteWindowsStylePath) {
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L""));
+  EXPECT_TRUE(IsAbsoluteNormalizedWindowsPath(L"NUL"));
+  EXPECT_TRUE(IsAbsoluteNormalizedWindowsPath(L"nul"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c:"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c:/"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:/"));
+  EXPECT_TRUE(IsAbsoluteNormalizedWindowsPath(L"c:\\"));
+  EXPECT_TRUE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:\\"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c:\\foo/bar"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:\\foo/bar"));
+  EXPECT_TRUE(IsAbsoluteNormalizedWindowsPath(L"c:\\foo\\bar"));
+  EXPECT_TRUE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:\\foo\\bar"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"foo"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"foo\\bar"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c:\\foo\\."));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:\\foo\\."));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c:\\foo\\.\\bar"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:\\foo\\.\\bar"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"c:\\foo\\..\\bar"));
+  EXPECT_FALSE(IsAbsoluteNormalizedWindowsPath(L"\\\\?\\c:\\foo\\..\\bar"));
+}
+
 TEST_F(WindowsFileOperationsTest, TestCreateJunction) {
   wstring tmp(kUncPrefix + GetTestTmpDirW());
   wstring target(tmp + L"\\junc_target");
@@ -55,7 +87,10 @@ TEST_F(WindowsFileOperationsTest, TestCreateJunction) {
   wstring file1(target + L"\\foo");
   EXPECT_TRUE(blaze_util::CreateDummyFile(file1));
 
-  EXPECT_EQ(IS_JUNCTION_NO, IsJunctionOrDirectorySymlink(target.c_str()));
+  bool is_link = true;
+  EXPECT_EQ(IsSymlinkOrJunctionResult::kSuccess,
+            IsSymlinkOrJunction(target.c_str(), &is_link, nullptr));
+  EXPECT_FALSE(is_link);
   EXPECT_NE(INVALID_FILE_ATTRIBUTES, ::GetFileAttributesW(file1.c_str()));
 
   wstring name(tmp + L"\\junc_name");
@@ -72,14 +107,22 @@ TEST_F(WindowsFileOperationsTest, TestCreateJunction) {
             CreateJunctionResult::kSuccess);
 
   // Assert creation of the junctions.
-  ASSERT_EQ(IS_JUNCTION_YES,
-            IsJunctionOrDirectorySymlink((name + L"1").c_str()));
-  ASSERT_EQ(IS_JUNCTION_YES,
-            IsJunctionOrDirectorySymlink((name + L"2").c_str()));
-  ASSERT_EQ(IS_JUNCTION_YES,
-            IsJunctionOrDirectorySymlink((name + L"3").c_str()));
-  ASSERT_EQ(IS_JUNCTION_YES,
-            IsJunctionOrDirectorySymlink((name + L"4").c_str()));
+  is_link = false;
+  ASSERT_EQ(IsSymlinkOrJunctionResult::kSuccess,
+            IsSymlinkOrJunction((name + L"1").c_str(), &is_link, nullptr));
+  ASSERT_TRUE(is_link);
+  is_link = false;
+  ASSERT_EQ(IsSymlinkOrJunctionResult::kSuccess,
+            IsSymlinkOrJunction((name + L"2").c_str(), &is_link, nullptr));
+  ASSERT_TRUE(is_link);
+  is_link = false;
+  ASSERT_EQ(IsSymlinkOrJunctionResult::kSuccess,
+            IsSymlinkOrJunction((name + L"3").c_str(), &is_link, nullptr));
+  ASSERT_TRUE(is_link);
+  is_link = false;
+  ASSERT_EQ(IsSymlinkOrJunctionResult::kSuccess,
+            IsSymlinkOrJunction((name + L"4").c_str(), &is_link, nullptr));
+  ASSERT_TRUE(is_link);
 
   // Assert that the file is visible under all junctions.
   ASSERT_NE(INVALID_FILE_ATTRIBUTES,
@@ -331,6 +374,142 @@ TEST_F(WindowsFileOperationsTest, TestCanDeleteJunctionWhoseTargetIsBusy) {
 #undef TOWSTRING1
 #undef TOWSTRING
 #undef WLINE
+
+TEST(FileTests, TestNormalize) {
+#define ASSERT_NORMALIZE(x, y) EXPECT_EQ(Normalize(x), y);
+  ASSERT_NORMALIZE("", "");
+  ASSERT_NORMALIZE("a", "a");
+  ASSERT_NORMALIZE("foo/bar", "foo\\bar");
+  ASSERT_NORMALIZE("foo/../bar", "bar");
+  ASSERT_NORMALIZE("a/", "a");
+  ASSERT_NORMALIZE("foo", "foo");
+  ASSERT_NORMALIZE("foo/", "foo");
+  ASSERT_NORMALIZE(".", ".");
+  ASSERT_NORMALIZE("./", ".");
+  ASSERT_NORMALIZE("..", "..");
+  ASSERT_NORMALIZE("../", "..");
+  ASSERT_NORMALIZE("./..", "..");
+  ASSERT_NORMALIZE("./../", "..");
+  ASSERT_NORMALIZE("../.", "..");
+  ASSERT_NORMALIZE(".././", "..");
+  ASSERT_NORMALIZE("...", "...");
+  ASSERT_NORMALIZE(".../", "...");
+  ASSERT_NORMALIZE("a/", "a");
+  ASSERT_NORMALIZE(".a", ".a");
+  ASSERT_NORMALIZE("..a", "..a");
+  ASSERT_NORMALIZE("...a", "...a");
+  ASSERT_NORMALIZE("./a", "a");
+  ASSERT_NORMALIZE("././a", "a");
+  ASSERT_NORMALIZE("./../a", "..\\a");
+  ASSERT_NORMALIZE(".././a", "..\\a");
+  ASSERT_NORMALIZE("../../a", "..\\..\\a");
+  ASSERT_NORMALIZE("../.../a", "..\\...\\a");
+  ASSERT_NORMALIZE(".../../a", "a");
+  ASSERT_NORMALIZE("a/..", "");
+  ASSERT_NORMALIZE("a/../", "");
+  ASSERT_NORMALIZE("a/./../", "");
+
+  ASSERT_NORMALIZE("c:/", "c:\\");
+  ASSERT_NORMALIZE("c:/a", "c:\\a");
+  ASSERT_NORMALIZE("c:/foo/bar", "c:\\foo\\bar");
+  ASSERT_NORMALIZE("c:/foo/../bar", "c:\\bar");
+  ASSERT_NORMALIZE("d:/a/", "d:\\a");
+  ASSERT_NORMALIZE("D:/foo", "D:\\foo");
+  ASSERT_NORMALIZE("c:/foo/", "c:\\foo");
+  ASSERT_NORMALIZE("c:/.", "c:\\");
+  ASSERT_NORMALIZE("c:/./", "c:\\");
+  ASSERT_NORMALIZE("c:/..", "c:\\");
+  ASSERT_NORMALIZE("c:/../", "c:\\");
+  ASSERT_NORMALIZE("c:/./..", "c:\\");
+  ASSERT_NORMALIZE("c:/./../", "c:\\");
+  ASSERT_NORMALIZE("c:/../.", "c:\\");
+  ASSERT_NORMALIZE("c:/.././", "c:\\");
+  ASSERT_NORMALIZE("c:/...", "c:\\...");
+  ASSERT_NORMALIZE("c:/.../", "c:\\...");
+  ASSERT_NORMALIZE("c:/.a", "c:\\.a");
+  ASSERT_NORMALIZE("c:/..a", "c:\\..a");
+  ASSERT_NORMALIZE("c:/...a", "c:\\...a");
+  ASSERT_NORMALIZE("c:/./a", "c:\\a");
+  ASSERT_NORMALIZE("c:/././a", "c:\\a");
+  ASSERT_NORMALIZE("c:/./../a", "c:\\a");
+  ASSERT_NORMALIZE("c:/.././a", "c:\\a");
+  ASSERT_NORMALIZE("c:/../../a", "c:\\a");
+  ASSERT_NORMALIZE("c:/../.../a", "c:\\...\\a");
+  ASSERT_NORMALIZE("c:/.../../a", "c:\\a");
+  ASSERT_NORMALIZE("c:/a/..", "c:\\");
+  ASSERT_NORMALIZE("c:/a/../", "c:\\");
+  ASSERT_NORMALIZE("c:/a/./../", "c:\\");
+  ASSERT_NORMALIZE("c:/../d:/e", "c:\\d:\\e");
+  ASSERT_NORMALIZE("c:/../d:/../e", "c:\\e");
+
+  ASSERT_NORMALIZE("foo", "foo");
+  ASSERT_NORMALIZE("foo/", "foo");
+  ASSERT_NORMALIZE("foo//bar", "foo\\bar");
+  ASSERT_NORMALIZE("../..//foo/./bar", "..\\..\\foo\\bar");
+  ASSERT_NORMALIZE("../foo/baz/../bar", "..\\foo\\bar");
+  ASSERT_NORMALIZE("c:", "c:\\");
+  ASSERT_NORMALIZE("c:/", "c:\\");
+  ASSERT_NORMALIZE("c:\\", "c:\\");
+  ASSERT_NORMALIZE("c:\\..//foo/./bar/", "c:\\foo\\bar");
+  ASSERT_NORMALIZE("../foo", "..\\foo");
+  ASSERT_NORMALIZE("../foo\\", "..\\foo");
+  ASSERT_NORMALIZE("../foo\\\\", "..\\foo");
+  ASSERT_NORMALIZE("..//foo\\\\", "..\\foo");
+#undef ASSERT_NORMALIZE
+}
+
+static void GetTestTempDirWithCorrectCasing(std::wstring* result,
+                                            std::wstring* result_inverted) {
+  static constexpr size_t kMaxPath = 0x8000;
+  wchar_t buf[kMaxPath];
+  ASSERT_GT(GetEnvironmentVariableW(L"TEST_TMPDIR", buf, kMaxPath), 0);
+  HANDLE h = CreateFileW(buf, 0,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  ASSERT_NE(h, INVALID_HANDLE_VALUE);
+  ASSERT_GT(GetFinalPathNameByHandleW(h, buf, kMaxPath, 0), 0);
+  CloseHandle(h);
+  *result = RemoveUncPrefixMaybe(buf);
+
+  for (wchar_t* c = buf; *c; ++c) {
+    if (*c >= L'A' && *c <= L'Z') {
+      *c = L'a' + *c - L'A';
+    } else if (*c >= L'a' && *c <= L'z') {
+      *c = L'A' + *c - L'a';
+    }
+  }
+  *result_inverted = RemoveUncPrefixMaybe(buf);
+}
+
+TEST(FileTests, TestGetCorrectCase) {
+  EXPECT_EQ(GetCorrectCasing(L""), L"");
+  EXPECT_EQ(GetCorrectCasing(L"d"), L"");
+  EXPECT_EQ(GetCorrectCasing(L"d:"), L"");
+
+  EXPECT_EQ(GetCorrectCasing(L"d:\\"), L"D:\\");
+  EXPECT_EQ(GetCorrectCasing(L"d:/"), L"D:\\");
+  EXPECT_EQ(GetCorrectCasing(L"d:\\\\"), L"D:\\");
+  EXPECT_EQ(GetCorrectCasing(L"d://"), L"D:\\");
+  EXPECT_EQ(GetCorrectCasing(L"d:\\\\\\"), L"D:\\");
+  EXPECT_EQ(GetCorrectCasing(L"d:///"), L"D:\\");
+
+  EXPECT_EQ(GetCorrectCasing(L"A:/Non:Existent"), L"A:\\Non:Existent");
+
+  EXPECT_EQ(GetCorrectCasing(L"A:\\\\Non:Existent"), L"A:\\Non:Existent");
+  EXPECT_EQ(GetCorrectCasing(L"A:\\Non:Existent\\."), L"A:\\Non:Existent");
+  EXPECT_EQ(GetCorrectCasing(L"A:\\Non:Existent\\..\\.."), L"A:\\");
+  EXPECT_EQ(GetCorrectCasing(L"A:\\Non:Existent\\.\\"), L"A:\\Non:Existent");
+
+  std::wstring tmp, tmp_inverse;
+  GetTestTempDirWithCorrectCasing(&tmp, &tmp_inverse);
+  ASSERT_GT(tmp.size(), 0);
+  ASSERT_NE(tmp, tmp_inverse);
+  EXPECT_EQ(GetCorrectCasing(tmp), tmp);
+  EXPECT_EQ(GetCorrectCasing(tmp_inverse), tmp);
+  EXPECT_EQ(GetCorrectCasing(tmp_inverse + L"\\"), tmp);
+  EXPECT_EQ(GetCorrectCasing(tmp_inverse + L"\\Does\\\\Not\\./Exist"),
+            tmp + L"\\Does\\Not\\Exist");
+}
 
 }  // namespace windows
 }  // namespace bazel

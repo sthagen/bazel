@@ -21,11 +21,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.configuredtargets.AbstractConfiguredTarget;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration.TestOptions;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.BuildResult;
 import com.google.devtools.build.lib.buildtool.BuildTool;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
 import com.google.devtools.build.lib.rules.android.WriteAdbArgsAction;
 import com.google.devtools.build.lib.rules.android.WriteAdbArgsAction.StartType;
 import com.google.devtools.build.lib.runtime.BlazeCommand;
@@ -42,6 +44,7 @@ import com.google.devtools.build.lib.util.CommandBuilder;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
@@ -134,6 +137,15 @@ public class MobileInstallCommand implements BlazeCommand {
       help = "The aspect to use for mobile-install."
     )
     public String mobileInstallAspect;
+
+    @Option(
+        name = "mobile_install_supported_rules",
+        defaultValue = "",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        help = "The supported rules for mobile-install.")
+    public List<String> mobileInstallSupportedRules;
   }
 
   private static final String SINGLE_TARGET_MESSAGE =
@@ -204,14 +216,20 @@ public class MobileInstallCommand implements BlazeCommand {
 
     Collection<ConfiguredTarget> targetsBuilt = result.getSuccessfulTargets();
     if (targetsBuilt == null) {
-      env.getReporter().handle(Event.error(NO_TARGET_MESSAGE));
-      return BlazeCommandResult.exitCode(ExitCode.COMMAND_LINE_ERROR);
+      env.getReporter().handle(Event.warn(NO_TARGET_MESSAGE));
+      return BlazeCommandResult.exitCode(ExitCode.SUCCESS);
     }
     if (targetsBuilt.size() != 1) {
       env.getReporter().handle(Event.error(SINGLE_TARGET_MESSAGE));
       return BlazeCommandResult.exitCode(ExitCode.COMMAND_LINE_ERROR);
     }
     ConfiguredTarget targetToRun = Iterables.getOnlyElement(targetsBuilt);
+
+    if (!mobileInstallOptions.mobileInstallSupportedRules.isEmpty()) {
+      if (!isTargetSupported(env, targetToRun, mobileInstallOptions.mobileInstallSupportedRules)) {
+        return BlazeCommandResult.exitCode(ExitCode.RUN_FAILURE);
+      }
+    }
 
     List<String> cmdLine = new ArrayList<>();
     // TODO(bazel-team): Get the executable path from the filesToRun provider from the aspect.
@@ -259,7 +277,8 @@ public class MobileInstallCommand implements BlazeCommand {
       }
     }
 
-    Path workingDir = env.getBlazeWorkspace().getOutputPath().getParentDirectory();
+    Path workingDir =
+        env.getDirectories().getOutputPath(env.getWorkspaceName()).getParentDirectory();
     com.google.devtools.build.lib.shell.Command command =
         new CommandBuilder()
             .addArgs(cmdLine)
@@ -318,12 +337,38 @@ public class MobileInstallCommand implements BlazeCommand {
             "Options required by the skylark implementation of mobile-install command",
             ImmutableList.of(
                 "--aspects=" + options.mobileInstallAspect + "%MIASPECT",
-                "--output_groups=android_incremental_deploy_info",
                 "--output_groups=mobile_install" + INTERNAL_SUFFIX,
                 "--output_groups=mobile_install_launcher" + INTERNAL_SUFFIX));
       }
     } catch (OptionsParsingException e) {
       throw new IllegalStateException(e);
+    }
+  }
+
+  private boolean isTargetSupported(
+      CommandEnvironment env, ConfiguredTarget target, List<String> mobileInstallSupportedRules) {
+    while (target instanceof AliasConfiguredTarget) {
+      target = ((AliasConfiguredTarget) target).getActual();
+    }
+    if (target instanceof AbstractConfiguredTarget) {
+      String ruleType = ((AbstractConfiguredTarget) target).getRuleClassString();
+      return isRuleSupported(env, mobileInstallSupportedRules, ruleType);
+    }
+    return false;
+  }
+
+  private boolean isRuleSupported(
+      CommandEnvironment env, List<String> mobileInstallSupportedRules, String ruleType) {
+    if (!mobileInstallSupportedRules.contains(ruleType)) {
+      env.getReporter()
+          .handle(
+              Event.error(
+                  String.format(
+                      "mobile-install can only be run on %s targets. Got: %s",
+                      mobileInstallSupportedRules, ruleType)));
+      return false;
+    } else {
+      return true;
     }
   }
 }

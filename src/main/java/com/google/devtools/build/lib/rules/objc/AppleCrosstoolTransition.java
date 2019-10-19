@@ -16,8 +16,9 @@ package com.google.devtools.build.lib.rules.objc;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions;
@@ -42,19 +43,13 @@ public class AppleCrosstoolTransition implements PatchTransition {
     BuildOptions result = buildOptions.clone();
 
     AppleCommandLineOptions appleOptions = buildOptions.get(AppleCommandLineOptions.class);
-    BuildConfiguration.Options configOptions = buildOptions.get(BuildConfiguration.Options.class);
+    CoreOptions configOptions = buildOptions.get(CoreOptions.class);
 
-    if (appleOptions.appleCrosstoolInOutputDirectoryName) {
-      if (appleOptions.configurationDistinguisher != ConfigurationDistinguisher.UNKNOWN) {
-        // The configuration distinguisher is only set by AppleCrosstoolTransition and
-        // AppleBinaryTransition, both of which also set the Crosstool and the CPU to Apple ones.
-        // So we are fine not doing anything.
-        return buildOptions;
-      }
-    } else {
-      if (!appleCrosstoolTransitionIsAppliedForAllObjc(buildOptions)) {
-        return buildOptions;
-      }
+    if (appleOptions.configurationDistinguisher != ConfigurationDistinguisher.UNKNOWN) {
+      // The configuration distinguisher is only set by AppleCrosstoolTransition and
+      // AppleBinaryTransition, both of which also set the Crosstool and the CPU to Apple ones.
+      // So we are fine not doing anything.
+      return buildOptions;
     }
 
     String cpu =
@@ -77,55 +72,39 @@ public class AppleCrosstoolTransition implements PatchTransition {
   public static void setAppleCrosstoolTransitionConfiguration(BuildOptions from,
       BuildOptions to, String cpu) {
     Label crosstoolTop = from.get(AppleCommandLineOptions.class).appleCrosstoolTop;
+    Label libcTop = from.get(AppleCommandLineOptions.class).appleLibcTop;
+    String cppCompiler = from.get(AppleCommandLineOptions.class).cppCompiler;
 
-    BuildConfiguration.Options toOptions = to.get(BuildConfiguration.Options.class);
+    CoreOptions toOptions = to.get(CoreOptions.class);
     CppOptions toCppOptions = to.get(CppOptions.class);
 
-    if (toOptions.cpu.equals(cpu) && toCppOptions.crosstoolTop.equals(crosstoolTop)
-        && from.get(AppleCommandLineOptions.class).appleCrosstoolInOutputDirectoryName) {
+    if (toOptions.cpu.equals(cpu) && toCppOptions.crosstoolTop.equals(crosstoolTop)) {
       // If neither the CPU nor the Crosstool changes, do nothing. This is so that C++ to
       // Objective-C dependencies work if the top-level configuration is already an Apple one.
-      // This is arguably a hack, but it helps with rolling out
-      // --apple_crosstool_in_output_directory_name, which in turn helps with removing the
-      // configuration distinguisher (which can't be set from the command line) and putting the
-      // platform type in the output directory name, which would obviate the need for this hack.
+      // Removing the configuration distinguisher (which can't be set from the command line) and
+      // putting the platform type in the output directory name, which would obviate the need for
+      // this hack.
       // TODO(b/112834725): Remove this branch by unifying the distinguisher and the platform type.
       return;
     }
 
     toOptions.cpu = cpu;
     toCppOptions.crosstoolTop = crosstoolTop;
-    to.get(AppleCommandLineOptions.class).targetUsesAppleCrosstool = true;
-    if (from.get(AppleCommandLineOptions.class).appleCrosstoolInOutputDirectoryName) {
-      to.get(AppleCommandLineOptions.class).configurationDistinguisher =
-          ConfigurationDistinguisher.APPLE_CROSSTOOL;
-    }
-
-    // --compiler = "compiler" for all OSX toolchains.  We do not support asan/tsan, cfi, etc. on
-    // darwin.
-    to.get(CppOptions.class).cppCompiler = "compiler";
-
-    // OSX toolchains always use the runtime of the platform they are targeting (i.e. we do not
-    // support custom production environments).
-    to.get(CppOptions.class).libcTopLabel = null;
+    to.get(AppleCommandLineOptions.class).configurationDistinguisher =
+        ConfigurationDistinguisher.APPLE_CROSSTOOL;
+    to.get(CppOptions.class).cppCompiler = cppCompiler;
+    to.get(CppOptions.class).libcTopLabel = libcTop;
 
     // OSX toolchains do not support fission.
     to.get(CppOptions.class).fissionModes = ImmutableList.of();
+
+    // Ensure platforms aren't set so that platform mapping can take place.
+    to.get(PlatformOptions.class).platforms = ImmutableList.of();
   }
 
-  /**
-   * Returns true if the given options imply use of AppleCrosstoolTransition for all apple targets.
-   */
-  public static boolean appleCrosstoolTransitionIsAppliedForAllObjc(BuildOptions options) {
-    return options.get(AppleCommandLineOptions.class).enableAppleCrosstoolTransition;
-  }
-
-  /**
-   * Returns the Apple architecture implied by AppleCommandLineOptions and
-   * BuildConfiguration.Options
-   */
+  /** Returns the Apple architecture implied by AppleCommandLineOptions and CoreOptions */
   private String determineSingleArchitecture(
-      AppleCommandLineOptions appleOptions, BuildConfiguration.Options configOptions) {
+      AppleCommandLineOptions appleOptions, CoreOptions configOptions) {
     if (!Strings.isNullOrEmpty(appleOptions.appleSplitCpu)) {
       return appleOptions.appleSplitCpu;
     }
@@ -137,10 +116,19 @@ public class AppleCrosstoolTransition implements PatchTransition {
           return AppleConfiguration.iosCpuFromCpu(configOptions.cpu);
         }
       case WATCHOS:
+        if (appleOptions.watchosCpus.isEmpty()) {
+          return AppleCommandLineOptions.DEFAULT_WATCHOS_CPU;
+        }
         return appleOptions.watchosCpus.get(0);
       case TVOS:
+        if (appleOptions.tvosCpus.isEmpty()) {
+          return AppleCommandLineOptions.DEFAULT_TVOS_CPU;
+        }
         return appleOptions.tvosCpus.get(0);
       case MACOS:
+        if (appleOptions.macosCpus.isEmpty()) {
+          return AppleCommandLineOptions.DEFAULT_MACOS_CPU;
+        }
         return appleOptions.macosCpus.get(0);
       default:
         throw new IllegalArgumentException(

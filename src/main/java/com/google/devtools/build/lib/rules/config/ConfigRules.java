@@ -17,6 +17,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.RuleSet;
+import com.google.devtools.build.lib.analysis.skylark.StarlarkConfig;
+import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagTaggedTrimmingTransitionFactory.ConfigFeatureFlagTaggedTrimmingTransition;
 import com.google.devtools.build.lib.rules.core.CoreRules;
 import com.google.devtools.build.lib.rules.platform.PlatformRules;
 import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigBootstrap;
@@ -35,13 +37,20 @@ public final class ConfigRules implements RuleSet {
   public void init(ConfiguredRuleClassProvider.Builder builder) {
     builder.addTrimmingTransitionFactory(
         new ConfigFeatureFlagTaggedTrimmingTransitionFactory(BaseRuleClasses.TAGGED_TRIMMING_ATTR));
+
+    // This implementation trims all feature flags out of toolchains. This is performant assuming
+    // toolchains don't need to read feature flags (which should be practically the case). We can
+    // turn this into a no-op should that need ever arise (and pay the added performance cost).
+    builder.setToolchainTaggedTrimmingTransition(ConfigFeatureFlagTaggedTrimmingTransition.EMPTY);
+
     builder.addRuleDefinition(new ConfigRuleClasses.ConfigBaseRule());
     builder.addRuleDefinition(new ConfigRuleClasses.ConfigSettingRule());
-    builder.addConfig(ConfigFeatureFlagOptions.class,
-        new ConfigFeatureFlagConfiguration.Loader());
+    builder.addConfigurationFragment(new ConfigFeatureFlagConfiguration.Loader());
 
     builder.addRuleDefinition(new ConfigRuleClasses.ConfigFeatureFlagRule());
-    builder.addSkylarkBootstrap(new ConfigBootstrap(new ConfigSkylarkCommon()));
+    builder.addSkylarkBootstrap(
+        new ConfigBootstrap(
+            new ConfigSkylarkCommon(), new StarlarkConfig(), new ConfigGlobalLibrary()));
   }
 
   @Override

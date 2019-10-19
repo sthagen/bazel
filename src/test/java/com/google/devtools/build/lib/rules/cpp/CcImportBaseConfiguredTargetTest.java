@@ -17,12 +17,13 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
-import com.google.devtools.build.lib.packages.util.MockCcSupport;
-import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
+import com.google.devtools.build.lib.packages.util.Crosstool.CcToolchainConfig;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -113,23 +114,32 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
   }
 
   @Test
-  public void testWrongCcImportDefinitionsOnWindows() throws Exception {
+  public void testRuntimeOnlyCcImportDefinitionsOnWindows() throws Exception {
     AnalysisMock.get()
         .ccSupport()
-        .setupCrosstool(
+        .setupCcToolchainConfig(
             mockToolsConfig,
-            MockCcSupport.COPY_DYNAMIC_LIBRARIES_TO_BINARY_CONFIGURATION,
-            MockCcSupport.TARGETS_WINDOWS_CONFIGURATION);
+            CcToolchainConfig.builder()
+                .withFeatures(
+                    CppRuleClasses.COPY_DYNAMIC_LIBRARIES_TO_BINARY,
+                    CppRuleClasses.TARGETS_WINDOWS));
     useConfiguration();
-    checkError(
-        "a",
-        "foo",
-        "'interface library' must be specified when using cc_import for shared library on Windows",
-        skylarkImplementationLoadStatement,
-        "cc_import(",
-        "  name = 'foo',",
-        "  shared_library = 'libfoo.dll',",
-        ")");
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
+            "a",
+            "foo",
+            skylarkImplementationLoadStatement,
+            "cc_import(name = 'foo', shared_library = 'libfoo.dll')");
+    Artifact dynamicLibrary =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getResolvedSymlinkDynamicLibrary();
+    Iterable<Artifact> dynamicLibrariesForRuntime =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getDynamicLibrariesForRuntime(/* linkingStatically= */ false);
+    assertThat(dynamicLibrary).isEqualTo(null);
+    assertThat(artifactsToStrings(dynamicLibrariesForRuntime)).containsExactly("src a/libfoo.dll");
   }
 
   @Test
@@ -140,41 +150,10 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
             "foo",
             skylarkImplementationLoadStatement,
             "cc_import(name = 'foo', static_library = 'libfoo.a')");
-    Iterable<Artifact> libraries =
-        LinkerInputs.toNonSolibArtifacts(
-            target
-                .get(CcLinkingInfo.PROVIDER)
-                .getCcLinkParamsStore()
-                .getCcLinkParams(false, false)
-                .getLibraries());
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.a");
-
-    libraries =
-        LinkerInputs.toNonSolibArtifacts(
-            target
-                .get(CcLinkingInfo.PROVIDER)
-                .getCcLinkParamsStore()
-                .getCcLinkParams(false, true)
-                .getLibraries());
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.a");
-
-    libraries =
-        LinkerInputs.toNonSolibArtifacts(
-            target
-                .get(CcLinkingInfo.PROVIDER)
-                .getCcLinkParamsStore()
-                .getCcLinkParams(true, false)
-                .getLibraries());
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.a");
-
-    libraries =
-        LinkerInputs.toNonSolibArtifacts(
-            target
-                .get(CcLinkingInfo.PROVIDER)
-                .getCcLinkParamsStore()
-                .getCcLinkParams(true, true)
-                .getLibraries());
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.a");
+    Artifact library =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getStaticLibrary();
+    assertThat(artifactsToStrings(ImmutableList.of(library))).containsExactly("src a/libfoo.a");
   }
 
   @Test
@@ -186,35 +165,16 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
             "foo",
             skylarkImplementationLoadStatement,
             "cc_import(name = 'foo', shared_library = 'libfoo.so')");
-    CcLinkParams ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, false);
-    Iterable<Artifact> libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    Iterable<Artifact> dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.so");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, true);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.so");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(true, false);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.so");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(true, true);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.so");
+    Artifact dynamicLibrary =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getResolvedSymlinkDynamicLibrary();
+    Iterable<Artifact> dynamicLibrariesForRuntime =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getDynamicLibrariesForRuntime(/* linkingStatically= */ false);
+    assertThat(artifactsToStrings(ImmutableList.of(dynamicLibrary)))
+        .containsExactly("src a/libfoo.so");
     assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
         .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.so");
   }
@@ -229,35 +189,16 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
             skylarkImplementationLoadStatement,
             "cc_import(name = 'foo', shared_library = 'libfoo.so',"
                 + " interface_library = 'libfoo.ifso')");
-    CcLinkParams ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, false);
-    Iterable<Artifact> libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    Iterable<Artifact> dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src b/libfoo.ifso");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sb_Cfoo___Ub/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, true);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src b/libfoo.ifso");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sb_Cfoo___Ub/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(true, false);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src b/libfoo.ifso");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sb_Cfoo___Ub/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(true, true);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src b/libfoo.ifso");
+    ;
+    Artifact library =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getResolvedSymlinkInterfaceLibrary();
+    assertThat(artifactsToStrings(ImmutableList.of(library))).containsExactly("src b/libfoo.ifso");
+    Iterable<Artifact> dynamicLibrariesForRuntime =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getDynamicLibrariesForRuntime(/* linkingStatically= */ false);
     assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
         .containsExactly("bin _solib_k8/_U_S_Sb_Cfoo___Ub/libfoo.so");
   }
@@ -271,35 +212,24 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
             "foo",
             skylarkImplementationLoadStatement,
             "cc_import(name = 'foo', static_library = 'libfoo.a', shared_library = 'libfoo.so')");
-    CcLinkParams ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, false);
-    Iterable<Artifact> libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    Iterable<Artifact> dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.so");
+
+    Artifact library =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getStaticLibrary();
+    assertThat(artifactsToStrings(ImmutableList.of(library))).containsExactly("src a/libfoo.a");
+
+    Artifact dynamicLibrary =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getResolvedSymlinkDynamicLibrary();
+    Iterable<Artifact> dynamicLibrariesForRuntime =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getDynamicLibrariesForRuntime(/* linkingStatically= */ false);
+    assertThat(artifactsToStrings(ImmutableList.of(dynamicLibrary)))
+        .containsExactly("src a/libfoo.so");
     assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
         .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, true);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.so");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
-        .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.so");
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(true, false);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.a");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime)).isEmpty();
-
-    ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(true, true);
-    libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.a");
-    assertThat(artifactsToStrings(dynamicLibrariesForRuntime)).isEmpty();
   }
 
   @Test
@@ -310,16 +240,10 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
             "foo",
             skylarkImplementationLoadStatement,
             "cc_import(name = 'foo', static_library = 'libfoo.a', alwayslink = 1)");
-    LibraryToLink libraryToLink =
-        target
-            .get(CcLinkingInfo.PROVIDER)
-            .getCcLinkParamsStore()
-            .getCcLinkParams(false, false)
-            .getLibraries()
-            .toList()
-            .get(0);
-    assertThat(libraryToLink.getArtifactCategory())
-        .isEqualTo(ArtifactCategory.ALWAYSLINK_STATIC_LIBRARY);
+    boolean alwayslink =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getAlwayslink();
+    assertThat(alwayslink).isTrue();
   }
 
   @Test
@@ -330,11 +254,15 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
             "foo",
             skylarkImplementationLoadStatement,
             "cc_import(name = 'foo', interface_library = 'libfoo.ifso', system_provided = 1)");
-    CcLinkParams ccLinkParams =
-        target.get(CcLinkingInfo.PROVIDER).getCcLinkParamsStore().getCcLinkParams(false, false);
-    Iterable<Artifact> libraries = LinkerInputs.toNonSolibArtifacts(ccLinkParams.getLibraries());
-    Iterable<Artifact> dynamicLibrariesForRuntime = ccLinkParams.getDynamicLibrariesForRuntime();
-    assertThat(artifactsToStrings(libraries)).containsExactly("src a/libfoo.ifso");
+    Artifact library =
+        Iterables.getOnlyElement(target.get(CcInfo.PROVIDER).getCcLinkingContext().getLibraries())
+            .getResolvedSymlinkInterfaceLibrary();
+    assertThat(artifactsToStrings(ImmutableList.of(library))).containsExactly("src a/libfoo.ifso");
+    Iterable<Artifact> dynamicLibrariesForRuntime =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getDynamicLibrariesForRuntime(/* linkingStatically= */ false);
     assertThat(artifactsToStrings(dynamicLibrariesForRuntime)).isEmpty();
   }
 
@@ -346,9 +274,32 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
                 "foo",
                 skylarkImplementationLoadStatement,
                 "cc_import(name = 'foo', static_library = 'libfoo.a', hdrs = ['foo.h'])")
-            .get(CcCompilationInfo.PROVIDER)
+            .get(CcInfo.PROVIDER)
             .getCcCompilationContext()
             .getDeclaredIncludeSrcs();
     assertThat(artifactsToStrings(headers)).containsExactly("src a/foo.h");
+  }
+
+  @Test
+  public void testCcImportLoadedThroughMacro() throws Exception {
+    setupTestCcImportLoadedThroughMacro(/* loadMacro= */ true);
+    assertThat(getConfiguredTarget("//a:a")).isNotNull();
+    assertNoEvents();
+  }
+
+  @Test
+  public void testCcImportNotLoadedThroughMacro() throws Exception {
+    setupTestCcImportLoadedThroughMacro(/* loadMacro= */ false);
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("//a:a");
+    assertContainsEvent("rules are deprecated");
+  }
+
+  private void setupTestCcImportLoadedThroughMacro(boolean loadMacro) throws Exception {
+    useConfiguration("--incompatible_load_cc_rules_from_bzl");
+    scratch.file(
+        "a/BUILD",
+        getAnalysisMock().ccSupport().getMacroLoadStatement(loadMacro, "cc_import"),
+        "cc_import(name='a', static_library='a.a')");
   }
 }

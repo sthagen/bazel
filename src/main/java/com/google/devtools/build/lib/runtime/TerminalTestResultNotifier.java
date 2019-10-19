@@ -22,6 +22,7 @@ import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.exec.TestLogHelper;
 import com.google.devtools.build.lib.exec.TestStrategy.TestOutputFormat;
 import com.google.devtools.build.lib.exec.TestStrategy.TestSummaryFormat;
+import com.google.devtools.build.lib.runtime.TestSummaryPrinter.TestLogPathFormatter;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.util.io.AnsiTerminalPrinter;
 import com.google.devtools.build.lib.view.test.TestStatus.BlazeTestStatus;
@@ -79,17 +80,35 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
               + "match the timeout defined by the test (whether implied or explicit)."
     )
     public boolean testVerboseTimeoutWarnings;
+
+    @Option(
+        name = "print_relative_test_log_paths",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.LOGGING,
+        effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+        help =
+            "If true, when printing the path to a test log, use relative path that makes use of "
+                + "the 'testlogs' convenience symlink. N.B. - A subsequent 'build'/'test'/etc "
+                + "invocation with a different configuration can cause the target of this symlink "
+                + "to change, making the path printed previously no longer useful."
+    )
+    public boolean printRelativeTestLogPaths;
   }
 
   private final AnsiTerminalPrinter printer;
+  private final TestLogPathFormatter testLogPathFormatter;
   private final OptionsParsingResult options;
   private final TestSummaryOptions summaryOptions;
 
   /**
    * @param printer The terminal to print to
    */
-  public TerminalTestResultNotifier(AnsiTerminalPrinter printer, OptionsParsingResult options) {
+  public TerminalTestResultNotifier(
+      AnsiTerminalPrinter printer,
+      TestLogPathFormatter testLogPathFormatter,
+      OptionsParsingResult options) {
     this.printer = printer;
+    this.testLogPathFormatter = testLogPathFormatter;
     this.options = options;
     this.summaryOptions = options.getOptions(TestSummaryOptions.class);
   }
@@ -115,7 +134,13 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
     boolean withConfig = duplicateLabels(summaries);
     for (TestSummary summary : summaries) {
       if (summary.getStatus() != BlazeTestStatus.PASSED) {
-        TestSummaryPrinter.print(summary, printer, summaryOptions.verboseSummary, true, withConfig);
+        TestSummaryPrinter.print(
+            summary,
+            printer,
+            testLogPathFormatter,
+            summaryOptions.verboseSummary,
+            true,
+            withConfig);
       }
     }
   }
@@ -129,7 +154,12 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
       if ((summary.getStatus() != BlazeTestStatus.PASSED
               && summary.getStatus() != BlazeTestStatus.NO_STATUS)
           || showPassingTests) {
-        TestSummaryPrinter.print(summary, printer, summaryOptions.verboseSummary, false,
+        TestSummaryPrinter.print(
+            summary,
+            printer,
+            testLogPathFormatter,
+            summaryOptions.verboseSummary,
+            false,
             withConfig);
       }
     }
@@ -161,7 +191,7 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
       if (summary.isLocalActionCached()
           && TestLogHelper.shouldOutputTestLog(testOutput,
               TestResult.isBlazeTestStatusPassed(summary.getStatus()))) {
-        TestSummaryPrinter.printCachedOutput(summary, testOutput, printer);
+        TestSummaryPrinter.printCachedOutput(summary, testOutput, printer, testLogPathFormatter);
       }
     }
 
@@ -224,9 +254,9 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
 
   private void printStats(TestResultStats stats) {
     TestSummaryFormat testSummaryFormat = options.getOptions(ExecutionOptions.class).testSummary;
-    if ((testSummaryFormat == DETAILED) || (testSummaryFormat == TESTCASE)) {
-      Integer passCount = stats.totalTestCases - stats.totalFailedTestCases;
-      printer.printLn(
+    if (testSummaryFormat == DETAILED || testSummaryFormat == TESTCASE) {
+      int passCount = stats.totalTestCases - stats.totalFailedTestCases;
+      String message =
           String.format(
               "Test cases: finished with %s%d passing%s and %s%d failing%s out of %d test cases",
               passCount > 0 ? AnsiTerminalPrinter.Mode.INFO : "",
@@ -235,7 +265,13 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
               stats.totalFailedTestCases > 0 ? AnsiTerminalPrinter.Mode.ERROR : "",
               stats.totalFailedTestCases,
               AnsiTerminalPrinter.Mode.DEFAULT,
-              stats.totalTestCases));
+              stats.totalTestCases);
+      if (passCount > 0 && stats.totalFailedTestCases == 0 && stats.failedCount > 0) {
+        // It is possible for a target to fail even if all of its test cases pass. To avoid
+        // confusion, we append the following disclaimer.
+        message += "\n(however note that at least one target failed)";
+      }
+      printer.printLn(message);
     }
 
     if (!optionCheckTestsUpToDate()) {

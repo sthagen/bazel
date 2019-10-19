@@ -1,13 +1,10 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 # Description:
 #   singlejar C++ implementation.
 package(default_visibility = ["//src:__subpackages__"])
 
-JAR_TOOL_PATH_COPT_TPL = "-DJAR_TOOL_PATH=\\\"external/local_jdk/bin/jar%s\\\""
-
-JAR_TOOL_PATH_COPTS = select({
-    "//src/conditions:windows": [JAR_TOOL_PATH_COPT_TPL % ".exe"],
-    "//conditions:default": [JAR_TOOL_PATH_COPT_TPL % ""],
-})
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 filegroup(
     name = "srcs",
@@ -15,32 +12,59 @@ filegroup(
     visibility = ["//src:__pkg__"],
 )
 
+SOURCES = [
+    "combiners.cc",
+    "combiners.h",
+    "diag.h",
+    "input_jar.cc",
+    "input_jar.h",
+    "mapped_file.cc",
+    "mapped_file.h",
+    "mapped_file_posix.inc",
+    "mapped_file_windows.inc",
+    "options.cc",
+    "options.h",
+    "output_jar.cc",
+    "output_jar.h",
+    "port.h",
+    "singlejar_main.cc",
+    "token_stream.h",
+    "transient_bytes.h",
+    "zip_headers.h",
+    "zlib_interface.h",
+]
+
 filegroup(
-    name = "embedded_tools",
-    srcs = [
-        "BUILD",
-        "combiners.cc",
-        "combiners.h",
-        "diag.h",
-        "input_jar.cc",
-        "input_jar.h",
-        "mapped_file.cc",
-        "mapped_file.h",
-        "mapped_file_posix.inc",
-        "mapped_file_windows.inc",
-        "options.cc",
-        "options.h",
-        "output_jar.cc",
-        "output_jar.h",
-        "port.cc",
-        "port.h",
-        "singlejar_main.cc",
-        "token_stream.h",
-        "transient_bytes.h",
-        "zip_headers.h",
-        "zlib_interface.h",
+    name = "embedded_java_tools",
+    srcs = SOURCES + [
+        "//src/main/cpp/util:embedded_java_tools",
+        "//third_party/zlib:embedded_tools",
+        "//src/main/protobuf:desugar_deps_filegroup",
     ],
-    visibility = ["//visibility:public"],
+    visibility = ["//src:__pkg__"],
+)
+
+genrule(
+    name = "singlejar_transitive_zip",
+    srcs = [
+        ":singlejar_zip",
+        "//src:zlib_zip",
+        "//src/main/cpp/util:cpp_util_with_deps_zip",
+        "//src/main/protobuf:desugar_deps_zip",
+    ],
+    outs = ["singlejar_transitive.zip"],
+    cmd = "$(location //src:merge_zip_files) - $@ $(SRCS)",
+    tools = ["//src:merge_zip_files"],
+    visibility = ["//src:__pkg__"],
+)
+
+genrule(
+    name = "singlejar_zip",
+    srcs = SOURCES + [":singlejar_local"],
+    outs = ["singlejar.zip"],
+    cmd = "$(location //src:zip_files) src/tools/singlejar $@ $$(echo $(SRCS) | sort)",
+    tools = ["//src:zip_files"],
+    visibility = ["//visibility:private"],
 )
 
 cc_binary(
@@ -89,6 +113,8 @@ cc_test(
         ":zip_headers",
         ":zlib_interface",
     ],
+    # Requires at least 5 GiB of memory
+    exec_compatible_with = ["//:highcpu_machine"],
     deps = [
         ":combiners",
         ":input_jar",
@@ -100,7 +126,7 @@ cc_test(
 cc_test(
     name = "desugar_checking_test",
     srcs = [
-        "combiners_test.cc",
+        "desugar_checking_test.cc",
         ":zip_headers",
         ":zlib_interface",
     ],
@@ -131,6 +157,7 @@ cc_test(
 
 cc_test(
     name = "input_jar_preambled_test",
+    size = "large",
     srcs = [
         "input_jar_preambled_test.cc",
     ],
@@ -152,13 +179,14 @@ cc_test(
         "input_jar_scan_entries_test.h",
         "input_jar_scan_jartool_test.cc",
     ],
-    copts = JAR_TOOL_PATH_COPTS,
-    data = [
-        "@local_jdk//:jar",
-        "@local_jdk//:jdk",
-    ],
+    copts = select({
+        "//src/conditions:windows": ["-DJAR_TOOL_PATH=\\\"io_bazel/$(JAVABASE)/bin/jar.exe\\\""],
+        "//conditions:default": ["-DJAR_TOOL_PATH=\\\"io_bazel/$(JAVABASE)/bin/jar\\\""],
+    }),
+    data = ["@bazel_tools//tools/jdk:current_java_runtime"],
     # Timing out, see https://github.com/bazelbuild/bazel/issues/1555
     tags = ["manual"],
+    toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
     deps = [
         ":input_jar",
         ":test_util",
@@ -224,20 +252,24 @@ cc_test(
     srcs = [
         "output_jar_simple_test.cc",
     ],
-    copts = JAR_TOOL_PATH_COPTS,
+    copts = select({
+        "//src/conditions:windows": ["-DJAR_TOOL_PATH=\\\"io_bazel/$(JAVABASE)/bin/jar.exe\\\""],
+        "//conditions:default": ["-DJAR_TOOL_PATH=\\\"io_bazel/$(JAVABASE)/bin/jar\\\""],
+    }),
     data = [
         ":data1",
         ":data2",
         ":stored_jar",
         ":test1",
         ":test2",
-        "@local_jdk//:jar",
-        "@local_jdk//:jdk-default",
+        "@bazel_tools//tools/jdk:current_java_runtime",
     ],
+    toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
     deps = [
         ":input_jar",
         ":options",
         ":output_jar",
+        ":port",
         ":test_util",
         "//src/main/cpp/util",
         "@com_google_googletest//:gtest_main",
@@ -301,13 +333,14 @@ cc_test(
 sh_test(
     name = "zip64_test",
     srcs = ["zip64_test.sh"],
+    args = ["$(JAVABASE)"],
     data = [
         ":singlejar",
         "//src/test/shell:bashunit",
         "@bazel_tools//tools/bash/runfiles",
         "@bazel_tools//tools/jdk:current_java_runtime",
-        "@local_jdk//:jar",
     ],
+    toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
     deps = ["//src/test/shell:bashunit"],
 )
 
@@ -342,7 +375,6 @@ cc_library(
 
 cc_library(
     name = "port",
-    srcs = ["port.cc"],
     hdrs = ["port.h"],
     visibility = ["//visibility:private"],
 )
@@ -358,6 +390,7 @@ cc_library(
     deps = [
         ":diag",
         ":port",
+        "//src/main/cpp/util",
     ],
 )
 
@@ -411,10 +444,12 @@ cc_library(
 
 cc_library(
     name = "test_util",
+    testonly = 1,
     srcs = ["test_util.cc"],
     hdrs = ["test_util.h"],
     deps = [
         "//src/main/cpp/util",
+        "@bazel_tools//tools/cpp/runfiles",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -422,7 +457,10 @@ cc_library(
 cc_library(
     name = "token_stream",
     hdrs = ["token_stream.h"],
-    deps = [":diag"],
+    deps = [
+        ":diag",
+        "//src/main/cpp/util",
+    ],
 )
 
 filegroup(
@@ -488,6 +526,24 @@ genrule(
         "@bazel_tools//tools/jdk:current_java_runtime",
     ],
     outs = ["stored.jar"],
-    cmd = "$(location @local_jdk//:jar) -0cf \"$@\" $(location :output_jar.cc)",
-    tools = ["@local_jdk//:jar"],
+    cmd = "$(JAVABASE)/bin/jar -0cf \"$@\" $(location :output_jar.cc)",
+    toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
+    tools = ["@bazel_tools//tools/jdk:current_java_runtime"],
+)
+
+test_suite(
+    name = "windows_tests",
+    tags = [
+        "-no_windows",
+        "-slow",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+test_suite(
+    name = "all_windows_tests",
+    tests = [
+        ":windows_tests",
+    ],
+    visibility = ["//src:__pkg__"],
 )

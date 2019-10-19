@@ -14,18 +14,37 @@
 """Rules for manipulation of various packaging."""
 
 load(":path.bzl", "compute_data_path", "dest_path")
+load("//tools/config:common_settings.bzl", "BuildSettingInfo")
 
 # Filetype to restrict inputs
 tar_filetype = [".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2"]
 deb_filetype = [".deb", ".udeb"]
 
+def _remap(remap_paths, path):
+    """If path starts with a key in remap_paths, rewrite it."""
+    for prefix, replacement in remap_paths.items():
+        if path.startswith(prefix):
+            return replacement + path[len(prefix):]
+    return path
+
+def _quote(filename, protect = "="):
+    """Quote the filename, by escaping = by \\= and \\ by \\\\"""
+    return filename.replace("\\", "\\\\").replace(protect, "\\" + protect)
+
 def _pkg_tar_impl(ctx):
     """Implementation of the pkg_tar rule."""
+
+    if ctx.attr._no_build_defs_pkg_flag[BuildSettingInfo].value:
+        fail("The built-in version of pkg_deb has been removed. Please use" +
+             " https://github.com/bazelbuild/rules_pkg/blob/master/pkg.")
 
     # Compute the relative path
     data_path = compute_data_path(ctx.outputs.out, ctx.attr.strip_prefix)
 
-    build_tar = ctx.executable.build_tar
+    # Find a list of path remappings to apply.
+    remap_paths = ctx.attr.remap_paths
+
+    # Start building the arguments.
     args = [
         "--output=" + ctx.outputs.out.path,
         "--directory=" + ctx.attr.package_dir,
@@ -33,33 +52,50 @@ def _pkg_tar_impl(ctx):
         "--owner=" + ctx.attr.owner,
         "--owner_name=" + ctx.attr.ownername,
     ]
-
-    file_inputs = ctx.files.srcs[:]
+    if ctx.attr.mtime != -1:  # Note: Must match default in rule def.
+        if ctx.attr.portable_mtime:
+            fail("You may not set both mtime and portable_mtime")
+        args.append("--mtime=%d" % ctx.attr.mtime)
+    if ctx.attr.portable_mtime:
+        args.append("--mtime=portable")
 
     # Add runfiles if requested
+    file_inputs = []
     if ctx.attr.include_runfiles:
+        runfiles_depsets = []
         for f in ctx.attr.srcs:
-            if hasattr(f, "default_runfiles"):
-                run_files = f.default_runfiles.files.to_list()
-                file_inputs += run_files
+            default_runfiles = f[DefaultInfo].default_runfiles
+            if default_runfiles != None:
+                runfiles_depsets.append(default_runfiles.files)
+
+        # deduplicates files in srcs attribute and their runfiles
+        file_inputs = depset(ctx.files.srcs, transitive = runfiles_depsets).to_list()
+    else:
+        file_inputs = ctx.files.srcs[:]
 
     args += [
-        "--file=%s=%s" % (f.path, dest_path(f, data_path))
+        "--file=%s=%s" % (_quote(f.path), _remap(remap_paths, dest_path(f, data_path)))
         for f in file_inputs
     ]
     for target, f_dest_path in ctx.attr.files.items():
         target_files = target.files.to_list()
         if len(target_files) != 1:
-            fail("Inputs to pkg_tar.files_map must describe exactly one file.")
-        file_inputs += [target_files[0]]
-        args += ["--file=%s=%s" % (target_files[0].path, f_dest_path)]
+            fail("Each input must describe exactly one file.", attr = "files")
+        file_inputs += target_files
+        args += ["--file=%s=%s" % (_quote(target_files[0].path), f_dest_path)]
     if ctx.attr.modes:
-        args += ["--modes=%s=%s" % (key, ctx.attr.modes[key]) for key in ctx.attr.modes]
+        args += [
+            "--modes=%s=%s" % (_quote(key), ctx.attr.modes[key])
+            for key in ctx.attr.modes
+        ]
     if ctx.attr.owners:
-        args += ["--owners=%s=%s" % (key, ctx.attr.owners[key]) for key in ctx.attr.owners]
+        args += [
+            "--owners=%s=%s" % (_quote(key), ctx.attr.owners[key])
+            for key in ctx.attr.owners
+        ]
     if ctx.attr.ownernames:
         args += [
-            "--owner_names=%s=%s" % (key, ctx.attr.ownernames[key])
+            "--owner_names=%s=%s" % (_quote(key), ctx.attr.ownernames[key])
             for key in ctx.attr.ownernames
         ]
     if ctx.attr.empty_files:
@@ -71,18 +107,20 @@ def _pkg_tar_impl(ctx):
         if dotPos > 0:
             dotPos += 1
             args += ["--compression=%s" % ctx.attr.extension[dotPos:]]
+        elif ctx.attr.extension == "tgz":
+            args += ["--compression=gz"]
     args += ["--tar=" + f.path for f in ctx.files.deps]
     args += [
-        "--link=%s:%s" % (k, ctx.attr.symlinks[k])
+        "--link=%s:%s" % (_quote(k, protect = ":"), ctx.attr.symlinks[k])
         for k in ctx.attr.symlinks
     ]
     arg_file = ctx.actions.declare_file(ctx.label.name + ".args")
     ctx.actions.write(arg_file, "\n".join(args))
 
-    ctx.actions.run_shell(
-        command = "%s --flagfile=%s" % (build_tar.path, arg_file.path),
+    ctx.actions.run(
         inputs = file_inputs + ctx.files.deps + [arg_file],
-        tools = [build_tar],
+        executable = ctx.executable.build_tar,
+        arguments = ["--flagfile", arg_file.path],
         outputs = [ctx.outputs.out],
         mnemonic = "PackageTar",
         use_default_shell_env = True,
@@ -90,6 +128,11 @@ def _pkg_tar_impl(ctx):
 
 def _pkg_deb_impl(ctx):
     """The implementation for the pkg_deb rule."""
+
+    if ctx.attr._no_build_defs_pkg_flag[BuildSettingInfo].value:
+        fail("The built-in version of pkg_deb has been removed. Please use" +
+             " https://github.com/bazelbuild/rules_pkg/blob/master/pkg.")
+
     files = [ctx.file.data]
     args = [
         "--output=" + ctx.outputs.deb.path,
@@ -111,6 +154,12 @@ def _pkg_deb_impl(ctx):
     if ctx.attr.postrm:
         args += ["--postrm=@" + ctx.file.postrm.path]
         files += [ctx.file.postrm]
+    if ctx.attr.config:
+        args += ["--config=@" + ctx.file.config.path]
+        files += [ctx.file.config]
+    if ctx.attr.templates:
+        args += ["--templates=@" + ctx.file.templates.path]
+        files += [ctx.file.templates]
 
     # Conffiles can be specified by a file or a string list
     if ctx.attr.conffiles_file:
@@ -151,6 +200,14 @@ def _pkg_deb_impl(ctx):
     elif ctx.attr.built_using:
         args += ["--built_using=" + ctx.attr.built_using]
 
+    if ctx.attr.depends_file:
+        if ctx.attr.depends:
+            fail("Both depends and depends_file attributes were specified")
+        args += ["--depends=@" + ctx.file.depends_file.path]
+        files += [ctx.file.depends_file]
+    elif ctx.attr.depends:
+        args += ["--depends=" + d for d in ctx.attr.depends]
+
     if ctx.attr.priority:
         args += ["--priority=" + ctx.attr.priority]
     if ctx.attr.section:
@@ -160,25 +217,30 @@ def _pkg_deb_impl(ctx):
 
     args += ["--distribution=" + ctx.attr.distribution]
     args += ["--urgency=" + ctx.attr.urgency]
-    args += ["--depends=" + d for d in ctx.attr.depends]
     args += ["--suggests=" + d for d in ctx.attr.suggests]
     args += ["--enhances=" + d for d in ctx.attr.enhances]
     args += ["--conflicts=" + d for d in ctx.attr.conflicts]
     args += ["--pre_depends=" + d for d in ctx.attr.predepends]
     args += ["--recommends=" + d for d in ctx.attr.recommends]
 
-    ctx.action(
+    ctx.actions.run(
         executable = ctx.executable.make_deb,
         arguments = args,
         inputs = files,
         outputs = [ctx.outputs.deb, ctx.outputs.changes],
         mnemonic = "MakeDeb",
     )
-    ctx.action(
+    ctx.actions.run_shell(
         command = "ln -s %s %s" % (ctx.outputs.deb.basename, ctx.outputs.out.path),
         inputs = [ctx.outputs.deb],
         outputs = [ctx.outputs.out],
     )
+    output_groups = {"out": [ctx.outputs.out]}
+    if hasattr(ctx.outputs, "deb"):
+        output_groups["deb"] = [ctx.outputs.deb]
+    if hasattr(ctx.outputs, "changes"):
+        output_groups["changes"] = [ctx.outputs.changes]
+    return OutputGroupInfo(**output_groups)
 
 # A rule for creating a tar file, see README.md
 _real_pkg_tar = rule(
@@ -191,6 +253,9 @@ _real_pkg_tar = rule(
         "files": attr.label_keyed_string_dict(allow_files = True),
         "mode": attr.string(default = "0555"),
         "modes": attr.string_dict(),
+        "mtime": attr.int(default = -1),
+        "portable_mtime": attr.bool(default = True),
+        "out": attr.output(),
         "owner": attr.string(default = "0.0"),
         "ownername": attr.string(default = "."),
         "owners": attr.string_dict(),
@@ -198,8 +263,9 @@ _real_pkg_tar = rule(
         "extension": attr.string(default = "tar"),
         "symlinks": attr.string_dict(),
         "empty_files": attr.string_list(),
-        "include_runfiles": attr.bool(default = False, mandatory = False),
+        "include_runfiles": attr.bool(),
         "empty_dirs": attr.string_list(),
+        "remap_paths": attr.string_dict(),
         # Implicit dependencies.
         "build_tar": attr.label(
             default = Label("//tools/build_defs/pkg:build_tar"),
@@ -207,11 +273,10 @@ _real_pkg_tar = rule(
             executable = True,
             allow_files = True,
         ),
+        "_no_build_defs_pkg_flag": attr.label(
+            default = "//tools/build_defs/pkg:incompatible_no_build_defs_pkg",
+        ),
     },
-    outputs = {
-        "out": "%{name}.%{extension}",
-    },
-    executable = False,
 )
 
 def pkg_tar(**kwargs):
@@ -225,10 +290,14 @@ def pkg_tar(**kwargs):
                       "This attribute was renamed to `srcs`. " +
                       "Consider renaming it in your BUILD file.")
                 kwargs["srcs"] = kwargs.pop("files")
-    _real_pkg_tar(**kwargs)
+    extension = kwargs.get("extension") or "tar"
+    _real_pkg_tar(
+        out = kwargs["name"] + "." + extension,
+        **kwargs
+    )
 
 # A rule for creating a deb file, see README.md
-pkg_deb = rule(
+_pkg_deb = rule(
     implementation = _pkg_deb_impl,
     attrs = {
         "data": attr.label(mandatory = True, allow_single_file = tar_filetype),
@@ -241,6 +310,8 @@ pkg_deb = rule(
         "postinst": attr.label(allow_single_file = True),
         "prerm": attr.label(allow_single_file = True),
         "postrm": attr.label(allow_single_file = True),
+        "config": attr.label(allow_single_file = True),
+        "templates": attr.label(allow_single_file = True),
         "conffiles_file": attr.label(allow_single_file = True),
         "conffiles": attr.string_list(default = []),
         "version_file": attr.label(allow_single_file = True),
@@ -253,6 +324,7 @@ pkg_deb = rule(
         "section": attr.string(),
         "homepage": attr.string(),
         "depends": attr.string_list(default = []),
+        "depends_file": attr.label(allow_single_file = True),
         "suggests": attr.string_list(default = []),
         "enhances": attr.string_list(default = []),
         "conflicts": attr.string_list(default = []),
@@ -265,11 +337,27 @@ pkg_deb = rule(
             executable = True,
             allow_files = True,
         ),
+        # Outputs.
+        "out": attr.output(mandatory = True),
+        "deb": attr.output(mandatory = True),
+        "changes": attr.output(mandatory = True),
+        "_no_build_defs_pkg_flag": attr.label(
+            default = "//tools/build_defs/pkg:incompatible_no_build_defs_pkg",
+        ),
     },
-    outputs = {
-        "out": "%{name}.deb",
-        "deb": "%{package}_%{version}_%{architecture}.deb",
-        "changes": "%{package}_%{version}_%{architecture}.changes",
-    },
-    executable = False,
 )
+
+def pkg_deb(name, package, **kwargs):
+    """Creates a deb file. See README.md."""
+    version = kwargs.get("version", "")
+    architecture = kwargs.get("architecture", "all")
+    out_deb = "%s_%s_%s.deb" % (package, version, architecture)
+    out_changes = "%s_%s_%s.changes" % (package, version, architecture)
+    _pkg_deb(
+        name = name,
+        package = package,
+        out = name + ".deb",
+        deb = out_deb,
+        changes = out_changes,
+        **kwargs
+    )

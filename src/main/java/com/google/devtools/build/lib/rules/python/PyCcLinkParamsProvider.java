@@ -13,46 +13,36 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.python;
 
-import com.google.common.base.Function;
-import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.packages.NativeProvider;
-import com.google.devtools.build.lib.rules.cpp.AbstractCcLinkParamsStore;
-import com.google.devtools.build.lib.rules.cpp.CcLinkingInfo;
+import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.cpp.PyCcLinkParamsProviderApi;
 
 /** A target that provides C++ libraries to be linked into Python targets. */
 @Immutable
 @AutoCodec
-@SkylarkModule(
-    name = "PyCcLinkParamsProvider",
-    documented = false,
-    category = SkylarkModuleCategory.PROVIDER,
-    doc = "Wrapper for every C++ linking provider")
-public final class PyCcLinkParamsProvider extends NativeInfo {
-  public static final NativeProvider<PyCcLinkParamsProvider> PROVIDER =
-      new NativeProvider<PyCcLinkParamsProvider>(
-          PyCcLinkParamsProvider.class, "PyCcLinkParamsProvider") {};
+public final class PyCcLinkParamsProvider extends NativeInfo implements PyCcLinkParamsProviderApi {
+  public static final Provider PROVIDER = new Provider();
 
-  private final CcLinkingInfo ccLinkingInfo;
+  private final CcInfo ccInfo;
 
-  public PyCcLinkParamsProvider(CcLinkingInfo ccLinkingInfo) {
+  public PyCcLinkParamsProvider(CcInfo ccInfo) {
     super(PROVIDER);
-    this.ccLinkingInfo = ccLinkingInfo;
+    this.ccInfo = CcInfo.builder().setCcLinkingContext(ccInfo.getCcLinkingContext()).build();
   }
 
-  @SkylarkCallable(name = "cc_linking_info", doc = "", documented = false)
-  public CcLinkingInfo getCcLinkingInfo() {
-    return ccLinkingInfo;
+  @Override
+  public CcInfo getCcInfo() {
+    return ccInfo;
   }
 
-  public static final Function<TransitiveInfoCollection, AbstractCcLinkParamsStore> TO_LINK_PARAMS =
-      input -> {
-        PyCcLinkParamsProvider provider = input.get(PyCcLinkParamsProvider.PROVIDER);
-        return provider == null ? null : provider.getCcLinkingInfo().getCcLinkParamsStore();
-      };
+  /** Provider class for {@link PyCcLinkParamsProvider} objects. */
+  public static class Provider extends BuiltinProvider<PyCcLinkParamsProvider>
+      implements PyCcLinkParamsProviderApi.Provider {
+    private Provider() {
+      super("PyCcLinkParamsProvider", PyCcLinkParamsProvider.class);
+    }
+  }
 }

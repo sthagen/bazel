@@ -12,19 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include "src/tools/launcher/util/launcher_util.h"
+
 #include <windows.h>
+
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <vector>
 
-#include "src/main/cpp/util/strings.h"
-#include "src/tools/launcher/util/launcher_util.h"
 #include "gtest/gtest.h"
+#include "src/main/cpp/util/path_platform.h"
+#include "src/main/cpp/util/strings.h"
+#include "src/main/native/windows/util.h"
+#include "tools/cpp/runfiles/runfiles.h"
 
 namespace bazel {
 namespace launcher {
 
+using bazel::tools::cpp::runfiles::Runfiles;
 using std::getenv;
 using std::ios;
 using std::ofstream;
@@ -65,30 +76,30 @@ class LaunchUtilTest : public ::testing::Test {
 TEST_F(LaunchUtilTest, GetBinaryPathWithoutExtensionTest) {
   ASSERT_EQ(L"foo", GetBinaryPathWithoutExtension(L"foo.exe"));
   ASSERT_EQ(L"foo.sh", GetBinaryPathWithoutExtension(L"foo.sh.exe"));
+  ASSERT_EQ(L"Foo", GetBinaryPathWithoutExtension(L"Foo.EXE"));
+  ASSERT_EQ(L"Foo.Sh", GetBinaryPathWithoutExtension(L"Foo.Sh.EXE"));
   ASSERT_EQ(L"foo.sh", GetBinaryPathWithoutExtension(L"foo.sh"));
 }
 
 TEST_F(LaunchUtilTest, GetBinaryPathWithExtensionTest) {
   ASSERT_EQ(L"foo.exe", GetBinaryPathWithExtension(L"foo"));
+  ASSERT_EQ(L"foo.exe", GetBinaryPathWithExtension(L"foo.exe"));
+  ASSERT_EQ(L"Foo.EXE", GetBinaryPathWithExtension(L"Foo.EXE"));
   ASSERT_EQ(L"foo.sh.exe", GetBinaryPathWithExtension(L"foo.sh.exe"));
+  ASSERT_EQ(L"Foo.Sh.EXE", GetBinaryPathWithExtension(L"Foo.Sh.EXE"));
   ASSERT_EQ(L"foo.sh.exe", GetBinaryPathWithExtension(L"foo.sh"));
 }
 
-TEST_F(LaunchUtilTest, GetEscapedArgumentTest) {
-  ASSERT_EQ(L"foo", GetEscapedArgument(L"foo", true));
-  ASSERT_EQ(L"\"foo bar\"", GetEscapedArgument(L"foo bar", true));
-  ASSERT_EQ(L"\"\\\"foo bar\\\"\"", GetEscapedArgument(L"\"foo bar\"", true));
-  ASSERT_EQ(L"foo\\\\bar", GetEscapedArgument(L"foo\\bar", true));
-  ASSERT_EQ(L"foo\\\"bar", GetEscapedArgument(L"foo\"bar", true));
-  ASSERT_EQ(L"C:\\\\foo\\\\bar\\\\",
-            GetEscapedArgument(L"C:\\foo\\bar\\", true));
+TEST_F(LaunchUtilTest, BashEscapeArgTest) {
+  ASSERT_EQ(L"\"\"", BashEscapeArg(L""));
+  ASSERT_EQ(L"foo", BashEscapeArg(L"foo"));
+  ASSERT_EQ(L"\"foo bar\"", BashEscapeArg(L"foo bar"));
+  ASSERT_EQ(L"\"\\\"foo bar\\\"\"", BashEscapeArg(L"\"foo bar\""));
+  ASSERT_EQ(L"foo\\\\bar", BashEscapeArg(L"foo\\bar"));
+  ASSERT_EQ(L"foo\\\"bar", BashEscapeArg(L"foo\"bar"));
+  ASSERT_EQ(L"C:\\\\foo\\\\bar\\\\", BashEscapeArg(L"C:\\foo\\bar\\"));
   ASSERT_EQ(L"\"C:\\\\foo foo\\\\bar\\\\\"",
-            GetEscapedArgument(L"C:\\foo foo\\bar\\", true));
-
-  ASSERT_EQ(L"foo\\bar", GetEscapedArgument(L"foo\\bar", false));
-  ASSERT_EQ(L"C:\\foo\\bar\\", GetEscapedArgument(L"C:\\foo\\bar\\", false));
-  ASSERT_EQ(L"\"C:\\foo foo\\bar\\\"",
-            GetEscapedArgument(L"C:\\foo foo\\bar\\", false));
+            BashEscapeArg(L"C:\\foo foo\\bar\\"));
 }
 
 TEST_F(LaunchUtilTest, DoesFilePathExistTest) {

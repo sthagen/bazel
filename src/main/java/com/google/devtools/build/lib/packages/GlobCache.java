@@ -17,7 +17,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Throwables;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -36,15 +35,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Caches the results of glob expansion for a package.
  */
-  // Used outside of Bazel!
 @ThreadSafety.ThreadCompatible
 public class GlobCache {
   /**
@@ -78,10 +76,9 @@ public class GlobCache {
   private AtomicReference<? extends UnixGlob.FilesystemCalls> syscalls;
   private final int maxDirectoriesToEagerlyVisit;
 
-  /**
-   * The thread pool for glob evaluation.
-   */
-  private final ThreadPoolExecutor globExecutor;
+  /** The thread pool for glob evaluation. */
+  private final Executor globExecutor;
+
   private final AtomicBoolean globalStarted = new AtomicBoolean(false);
 
   /**
@@ -100,7 +97,7 @@ public class GlobCache {
       final PackageIdentifier packageId,
       final CachingPackageLocator locator,
       AtomicReference<? extends UnixGlob.FilesystemCalls> syscalls,
-      ThreadPoolExecutor globExecutor,
+      Executor globExecutor,
       int maxDirectoriesToEagerlyVisit) {
     this.packageDirectory = Preconditions.checkNotNull(packageDirectory);
     this.packageId = Preconditions.checkNotNull(packageId);
@@ -208,9 +205,9 @@ public class GlobCache {
         .addPattern(pattern)
         .setExcludeDirectories(excludeDirs)
         .setDirectoryFilter(childDirectoryPredicate)
-        .setThreadPool(globExecutor)
+        .setExecutor(globExecutor)
         .setFilesystemCalls(syscalls)
-        .globAsync(true);
+        .globAsync();
   }
 
   /**
@@ -230,34 +227,39 @@ public class GlobCache {
   }
 
   /**
-   * Helper for evaluating the build language expression "glob(includes, excludes)" in the
-   * context of this package.
+   * Helper for evaluating the build language expression "glob(includes, excludes)" in the context
+   * of this package.
    *
    * <p>Called by PackageFactory via Package.
    */
   public List<String> globUnsorted(
-      List<String> includes,
-      List<String> excludes,
-      boolean excludeDirs) throws IOException, BadGlobException, InterruptedException {
+      List<String> includes, List<String> excludes, boolean excludeDirs, boolean allowEmpty)
+      throws IOException, BadGlobException, InterruptedException {
     // Start globbing all patterns in parallel. The getGlob() calls below will
     // block on an individual pattern's results, but the other globs can
     // continue in the background.
-    for (String pattern : Iterables.concat(includes, excludes)) {
+    for (String pattern : includes) {
       @SuppressWarnings("unused") 
       Future<?> possiblyIgnoredError = getGlobUnsortedAsync(pattern, excludeDirs);
     }
 
     HashSet<String> results = new HashSet<>();
-    for (String pattern : includes) {
-      results.addAll(getGlobUnsorted(pattern, excludeDirs));
-    }
-    for (String pattern : excludes) {
-      for (String excludeMatch : getGlobUnsorted(pattern, excludeDirs)) {
-        results.remove(excludeMatch);
-      }
-    }
-
     Preconditions.checkState(!results.contains(null), "glob returned null");
+    for (String pattern : includes) {
+      List<String> items = getGlobUnsorted(pattern, excludeDirs);
+      if (!allowEmpty && items.isEmpty()) {
+        throw new BadGlobException(
+            "glob pattern '"
+                + pattern
+                + "' didn't match anything, but allow_empty is set to False.");
+      }
+      results.addAll(items);
+    }
+    UnixGlob.removeExcludes(results, excludes);
+    if (!allowEmpty && results.isEmpty()) {
+      throw new BadGlobException(
+          "all files in the glob have been excluded, but allow_empty is set to False.");
+    }
     return new ArrayList<>(results);
   }
 

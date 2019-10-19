@@ -22,71 +22,58 @@ import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Streams;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.LanguageDependentFragment.LibraryLanguage;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.Runfiles;
+import com.google.devtools.build.lib.analysis.Runfiles.Builder;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.Substitution.ComputedSubstitution;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
 import com.google.devtools.build.lib.packages.Attribute.LabelListLateBoundDefault;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
+import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Compression;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType;
-import com.google.devtools.build.lib.rules.java.JavaConfiguration.JavaOptimizationMode;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.OneVersionEnforcementLevel;
 import com.google.devtools.build.lib.rules.java.proto.GeneratedExtensionRegistryProvider;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.File;
-import java.io.Serializable;
 import java.util.List;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /** Pluggable Java compilation semantics. */
 public interface JavaSemantics {
-  LibraryLanguage LANGUAGE = new LibraryLanguage("Java");
+  SafeImplicitOutputsFunction JAVA_LIBRARY_CLASS_JAR = fromTemplates("lib%{name}.jar");
+  SafeImplicitOutputsFunction JAVA_LIBRARY_SOURCE_JAR = fromTemplates("lib%{name}-src.jar");
 
-  SafeImplicitOutputsFunction JAVA_LIBRARY_CLASS_JAR =
-      fromTemplates("lib%{name}.jar");
-  SafeImplicitOutputsFunction JAVA_LIBRARY_SOURCE_JAR =
-      fromTemplates("lib%{name}-src.jar");
+  SafeImplicitOutputsFunction JAVA_BINARY_CLASS_JAR = fromTemplates("%{name}.jar");
+  SafeImplicitOutputsFunction JAVA_BINARY_SOURCE_JAR = fromTemplates("%{name}-src.jar");
 
-  SafeImplicitOutputsFunction JAVA_BINARY_CLASS_JAR =
-      fromTemplates("%{name}.jar");
-  SafeImplicitOutputsFunction JAVA_BINARY_SOURCE_JAR =
-      fromTemplates("%{name}-src.jar");
-
-  SafeImplicitOutputsFunction JAVA_BINARY_DEPLOY_JAR =
-      fromTemplates("%{name}_deploy.jar");
-  SafeImplicitOutputsFunction JAVA_BINARY_MERGED_JAR =
-      fromTemplates("%{name}_merged.jar");
+  SafeImplicitOutputsFunction JAVA_BINARY_DEPLOY_JAR = fromTemplates("%{name}_deploy.jar");
+  SafeImplicitOutputsFunction JAVA_BINARY_MERGED_JAR = fromTemplates("%{name}_merged.jar");
   SafeImplicitOutputsFunction JAVA_UNSTRIPPED_BINARY_DEPLOY_JAR =
       fromTemplates("%{name}_deploy.jar.unstripped");
-  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_MAP =
-      fromTemplates("%{name}_proguard.map");
+  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_MAP = fromTemplates("%{name}_proguard.map");
   SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_PROTO_MAP =
       fromTemplates("%{name}_proguard.pbmap");
-  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_SEEDS =
-      fromTemplates("%{name}_proguard.seeds");
-  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_USAGE =
-      fromTemplates("%{name}_proguard.usage");
+  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_SEEDS = fromTemplates("%{name}_proguard.seeds");
+  SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_USAGE = fromTemplates("%{name}_proguard.usage");
   SafeImplicitOutputsFunction JAVA_BINARY_PROGUARD_CONFIG =
       fromTemplates("%{name}_proguard.config");
-  SafeImplicitOutputsFunction JAVA_ONE_VERSION_ARTIFACT =
-      fromTemplates("%{name}-one-version.txt");
+  SafeImplicitOutputsFunction JAVA_ONE_VERSION_ARTIFACT = fromTemplates("%{name}-one-version.txt");
 
   SafeImplicitOutputsFunction JAVA_COVERAGE_RUNTIME_CLASS_PATH_TXT =
       fromTemplates("%{name}-runtime-classpath.txt");
@@ -94,8 +81,7 @@ public interface JavaSemantics {
   SafeImplicitOutputsFunction JAVA_BINARY_DEPLOY_SOURCE_JAR =
       fromTemplates("%{name}_deploy-src.jar");
 
-  SafeImplicitOutputsFunction JAVA_TEST_CLASSPATHS_FILE =
-      fromTemplates("%{name}_classpaths_file");
+  SafeImplicitOutputsFunction JAVA_TEST_CLASSPATHS_FILE = fromTemplates("%{name}_classpaths_file");
 
   FileType JAVA_SOURCE = FileType.of(".java");
   FileType JAR = FileType.of(".jar");
@@ -104,13 +90,9 @@ public interface JavaSemantics {
   // TODO(bazel-team): Rename this metadata extension to something meaningful.
   FileType COVERAGE_METADATA = FileType.of(".em");
 
-  /**
-   * Label to the Java Toolchain rule. It is resolved from a label given in the java options.
-   */
+  /** Label to the Java Toolchain rule. It is resolved from a label given in the java options. */
   String JAVA_TOOLCHAIN_LABEL = "//tools/jdk:toolchain";
 
-  /** The java_toolchain.compatible_javacopts key for Java 7 javacopts */
-  public static final String JAVA7_JAVACOPTS_KEY = "java7";
   /** The java_toolchain.compatible_javacopts key for Android javacopts */
   public static final String ANDROID_JAVACOPTS_KEY = "android";
   /** The java_toolchain.compatible_javacopts key for proto compilations. */
@@ -118,37 +100,21 @@ public interface JavaSemantics {
   /** The java_toolchain.compatible_javacopts key for testonly compilations. */
   public static final String TESTONLY_JAVACOPTS_KEY = "testonly";
 
-  static LabelLateBoundDefault<JavaConfiguration> javaToolchainAttribute(
-      RuleDefinitionEnvironment environment) {
-    return LabelLateBoundDefault.fromTargetConfiguration(
-        JavaConfiguration.class,
-        environment.getToolsLabel(JAVA_TOOLCHAIN_LABEL),
-        (Attribute.LateBoundDefault.Resolver<JavaConfiguration, Label> & Serializable)
-            (rule, attributes, javaConfig) -> javaConfig.getToolchainLabel());
+  static Label javaToolchainAttribute(RuleDefinitionEnvironment environment) {
+    return environment.getToolsLabel("//tools/jdk:current_java_toolchain");
   }
 
-  /**
-   * Name of the output group used for source jars.
-   */
-  String SOURCE_JARS_OUTPUT_GROUP =
-      OutputGroupInfo.HIDDEN_OUTPUT_GROUP_PREFIX + "source_jars";
+  /** Name of the output group used for source jars. */
+  String SOURCE_JARS_OUTPUT_GROUP = OutputGroupInfo.HIDDEN_OUTPUT_GROUP_PREFIX + "source_jars";
 
   /** Implementation for the :jvm attribute. */
-  static LabelLateBoundDefault<JavaConfiguration> jvmAttribute(RuleDefinitionEnvironment env) {
-    return LabelLateBoundDefault.fromTargetConfiguration(
-        JavaConfiguration.class,
-        env.getToolsLabel(JavaImplicitAttributes.JDK_LABEL),
-        (Attribute.LateBoundDefault.Resolver<JavaConfiguration, Label> & Serializable)
-            (rule, attributes, configuration) -> configuration.getRuntimeLabel());
+  static Label jvmAttribute(RuleDefinitionEnvironment env) {
+    return env.getToolsLabel("//tools/jdk:current_java_runtime");
   }
 
   /** Implementation for the :host_jdk attribute. */
-  static LabelLateBoundDefault<JavaConfiguration> hostJdkAttribute(RuleDefinitionEnvironment env) {
-    return LabelLateBoundDefault.fromHostConfiguration(
-        JavaConfiguration.class,
-        env.getToolsLabel(JavaImplicitAttributes.HOST_JDK_LABEL),
-        (Attribute.LateBoundDefault.Resolver<JavaConfiguration, Label> & Serializable)
-            (rule, attributes, configuration) -> configuration.getRuntimeLabel());
+  static Label hostJdkAttribute(RuleDefinitionEnvironment env) {
+    return env.getToolsLabel("//tools/jdk:current_host_java_runtime");
   }
 
   /**
@@ -206,12 +172,10 @@ public interface JavaSemantics {
           JavaConfiguration.class,
           (rule, attributes, javaConfig) -> {
             // Use a modicum of smarts to avoid implicit dependencies where we don't need them.
-            JavaOptimizationMode optMode = javaConfig.getJavaOptimizationMode();
             boolean hasProguardSpecs =
                 attributes.has("proguard_specs")
                     && !attributes.get("proguard_specs", LABEL_LIST).isEmpty();
-            if (optMode == JavaOptimizationMode.NOOP
-                || (optMode == JavaOptimizationMode.LEGACY && !hasProguardSpecs)) {
+            if (!hasProguardSpecs) {
               return ImmutableList.<Label>of();
             }
             return ImmutableList.copyOf(
@@ -221,10 +185,9 @@ public interface JavaSemantics {
   String JACOCO_METADATA_PLACEHOLDER = "%set_jacoco_metadata%";
   String JACOCO_MAIN_CLASS_PLACEHOLDER = "%set_jacoco_main_class%";
   String JACOCO_JAVA_RUNFILES_ROOT_PLACEHOLDER = "%set_jacoco_java_runfiles_root%";
+  String JAVA_COVERAGE_NEW_IMPLEMENTATION_PLACEHOLDER = "%set_java_coverage_new_implementation%";
 
-  /**
-   * Substitution for exporting the jars needed for jacoco coverage.
-   */
+  /** Substitution for exporting the jars needed for jacoco coverage. */
   class ComputedJacocoSubstitution extends ComputedSubstitution {
     private final NestedSet<Artifact> jars;
     private final String pathPrefix;
@@ -262,22 +225,22 @@ public interface JavaSemantics {
   void checkForProtoLibraryAndJavaProtoLibraryOnSameProto(
       RuleContext ruleContext, JavaCommon javaCommon);
 
-  /**
-   * Returns the main class of a Java binary.
-   */
+  /** Returns the main class of a Java binary. */
   String getMainClass(RuleContext ruleContext, ImmutableList<Artifact> srcsArtifacts);
 
   /**
-   * Returns the primary class for a Java binary - either the main class, or, in case of a test,
-   * the test class (not the test runner main class).
+   * Returns the primary class for a Java binary - either the main class, or, in case of a test, the
+   * test class (not the test runner main class).
    */
   String getPrimaryClass(RuleContext ruleContext, ImmutableList<Artifact> srcsArtifacts);
 
   /**
-   * Returns the resources contributed by a Java rule (usually the contents of the
-   * {@code resources} attribute)
+   * Returns the resources contributed by a Java rule (usually the contents of the {@code resources}
+   * attribute)
    */
   ImmutableList<Artifact> collectResources(RuleContext ruleContext);
+
+  String getTestRunnerMainClass();
 
   /**
    * Constructs the command line to call SingleJar to join all artifacts from {@code classpath}
@@ -323,15 +286,18 @@ public interface JavaSemantics {
       List<String> jvmFlags,
       Artifact executable,
       String javaStartClass,
-      String javaExecutable);
+      String javaExecutable)
+      throws InterruptedException;
 
   /**
    * Same as {@link #createStubAction(RuleContext, JavaCommon, List, Artifact, String, String)}.
    *
-   * <p> In *experimental* coverage mode creates a txt file containing the runtime jars names.
-   * {@code JacocoCoverageRunner} will use it to retrieve the name of the jars considered for
-   * collecting coverage. {@code JacocoCoverageRunner} will *not* collect coverage implicitly
-   * for all the runtime jars, only for those that pack a file ending in "-paths-for-coverage.txt".
+   * <p>In *experimental* coverage mode creates a txt file containing the runtime jars names. {@code
+   * JacocoCoverageRunner} will use it to retrieve the name of the jars considered for collecting
+   * coverage. {@code JacocoCoverageRunner} will *not* collect coverage implicitly for all the
+   * runtime jars, only for those that pack a file ending in "-paths-for-coverage.txt".
+   *
+   * @param createCoverageMetadataJar is false for Java rules and true otherwise (e.g. android)
    */
   public Artifact createStubAction(
       RuleContext ruleContext,
@@ -341,7 +307,9 @@ public interface JavaSemantics {
       String javaStartClass,
       String coverageStartClass,
       NestedSetBuilder<Artifact> filesBuilder,
-      String javaExecutable);
+      String javaExecutable,
+      boolean createCoverageMetadataJar)
+      throws InterruptedException;
 
   /**
    * Returns true if {@code createStubAction} considers {@code javaExecutable} as a substitution.
@@ -356,15 +324,11 @@ public interface JavaSemantics {
   Optional<Artifact> createClasspathsFile(RuleContext ruleContext, JavaCommon javaCommon)
       throws InterruptedException;
 
-  /**
-   * Adds extra runfiles for a {@code java_binary} rule.
-   */
-  void addRunfilesForBinary(RuleContext ruleContext, Artifact launcher,
-      Runfiles.Builder runfilesBuilder);
+  /** Adds extra runfiles for a {@code java_binary} rule. */
+  void addRunfilesForBinary(
+      RuleContext ruleContext, Artifact launcher, Runfiles.Builder runfilesBuilder);
 
-  /**
-   * Adds extra runfiles for a {@code java_library} rule.
-   */
+  /** Adds extra runfiles for a {@code java_library} rule. */
   void addRunfilesForLibrary(RuleContext ruleContext, Runfiles.Builder runfilesBuilder);
 
   /**
@@ -376,9 +340,7 @@ public interface JavaSemantics {
   ImmutableList<String> getCompatibleJavacOptions(
       RuleContext ruleContext, JavaToolchainProvider toolchain);
 
-  /**
-   * Add additional targets to be treated as direct dependencies.
-   */
+  /** Add additional targets to be treated as direct dependencies. */
   void collectTargetsTreatedAsDeps(
       RuleContext ruleContext,
       ImmutableList.Builder<TransitiveInfoCollection> builder,
@@ -390,53 +352,28 @@ public interface JavaSemantics {
    *
    * @return new main class
    */
-  String addCoverageSupport(
-      JavaCompilationHelper helper,
-      JavaTargetAttributes.Builder attributes,
-      Artifact executable,
-      Artifact instrumentationMetadata,
-      JavaCompilationArtifacts.Builder javaArtifactsBuilder,
-      String mainClass)
+  String addCoverageSupport(JavaCompilationHelper helper, Artifact executable)
       throws InterruptedException;
 
-  /**
-   * Same as {@link #addCoverageSupport(JavaCompilationHelper, JavaTargetAttributes.Builder,
-   * Artifact, Artifact, JavaCompilationArtifacts.Builder, String)}.
-   *
-   * <p> In *experimental* coverage mode omits dealing with instrumentation metadata and does not
-   * create the instrumented jar.
-   */
-  String addCoverageSupport(
-      JavaCompilationHelper helper,
-      JavaTargetAttributes.Builder attributes,
-      Artifact executable,
-      Artifact instrumentationMetadata,
-      JavaCompilationArtifacts.Builder javaArtifactsBuilder,
-      String mainClass,
-      boolean isExperimentalCoverage)
-      throws InterruptedException;
-
-  /**
-   * Return the JVM flags to be used in a Java binary.
-   */
+  /** Return the JVM flags to be used in a Java binary. */
   Iterable<String> getJvmFlags(
       RuleContext ruleContext, ImmutableList<Artifact> srcsArtifacts, List<String> userJvmFlags);
 
   /**
    * Adds extra providers to a Java target.
+   *
    * @throws InterruptedException
    */
   void addProviders(
       RuleContext ruleContext,
       JavaCommon javaCommon,
       Artifact gensrcJar,
-      RuleConfiguredTargetBuilder ruleBuilder) throws InterruptedException;
+      RuleConfiguredTargetBuilder ruleBuilder)
+      throws InterruptedException;
 
-  /**
-   * Translates XMB messages to translations artifact suitable for Java targets.
-   */
-  ImmutableList<Artifact> translate(RuleContext ruleContext, JavaConfiguration javaConfig,
-      List<Artifact> messages);
+  /** Translates XMB messages to translations artifact suitable for Java targets. */
+  ImmutableList<Artifact> translate(
+      RuleContext ruleContext, JavaConfiguration javaConfig, List<Artifact> messages);
 
   /**
    * Get the launcher artifact for a java binary, creating the necessary actions for it.
@@ -450,6 +387,8 @@ public interface JavaSemantics {
    * @param jvmFlags the list of flags to pass to the JVM when running the Java binary (mutable).
    * @param attributesBuilder the builder to construct the list of attributes of this target
    *     (mutable).
+   * @param ccToolchain to be used to build the launcher
+   * @param featureConfiguration to be used to configure the cc toolchain
    * @return the launcher and unstripped launcher as an artifact pair. If shouldStrip is false, then
    *     they will be the same.
    * @throws InterruptedException
@@ -459,52 +398,49 @@ public interface JavaSemantics {
       final JavaCommon common,
       DeployArchiveBuilder deployArchiveBuilder,
       DeployArchiveBuilder unstrippedDeployArchiveBuilder,
-      Runfiles.Builder runfilesBuilder,
+      Builder runfilesBuilder,
       List<String> jvmFlags,
       JavaTargetAttributes.Builder attributesBuilder,
-      boolean shouldStrip)
+      boolean shouldStrip,
+      CcToolchainProvider ccToolchain,
+      FeatureConfiguration featureConfiguration)
       throws InterruptedException, RuleErrorException;
 
   /**
    * Add a source artifact to a {@link JavaTargetAttributes.Builder}. It is called when a source
-   * artifact is processed but is not matched by default patterns in the
-   * {@link JavaTargetAttributes.Builder#addSourceArtifacts(Iterable)} method. The semantics can
-   * then detect its custom artifact types and add it to the builder.
+   * artifact is processed but is not matched by default patterns in the {@link
+   * JavaTargetAttributes.Builder#addSourceArtifacts(Iterable)} method. The semantics can then
+   * detect its custom artifact types and add it to the builder.
    */
   void addArtifactToJavaTargetAttribute(JavaTargetAttributes.Builder builder, Artifact srcArtifact);
 
   /**
-   * Takes the path of a Java resource and tries to determine the Java
-   * root relative path of the resource.
+   * Takes the path of a Java resource and tries to determine the Java root relative path of the
+   * resource.
    *
    * <p>This is only used if the Java rule doesn't have a {@code resource_strip_prefix} attribute.
    *
    * @param path the root relative path of the resource.
-   * @return the Java root relative path of the resource of the root
-   *         relative path of the resource if no Java root relative path can be
-   *         determined.
+   * @return the Java root relative path of the resource of the root relative path of the resource
+   *     if no Java root relative path can be determined.
    */
   PathFragment getDefaultJavaResourcePath(PathFragment path);
 
-  /**
-   * @return a list of extra arguments to appends to the runfiles support.
-   */
+  /** @return a list of extra arguments to appends to the runfiles support. */
   List<String> getExtraArguments(RuleContext ruleContext, ImmutableList<Artifact> sources);
 
-  /**
-   * @return main class (entry point) for the Java compiler.
-   */
+  /** @return main class (entry point) for the Java compiler. */
   String getJavaBuilderMainClass();
 
   /**
-   * @return An artifact representing the protobuf-format version of the
-   * proguard mapping, or null if the proguard version doesn't support this.
+   * @return An artifact representing the protobuf-format version of the proguard mapping, or null
+   *     if the proguard version doesn't support this.
    */
   Artifact getProtoMapping(RuleContext ruleContext) throws InterruptedException;
 
   /**
-   * Produces the proto generated extension registry artifacts, or <tt>null</tt>
-   * if no registry needs to be generated for the provided <tt>ruleContext</tt>.
+   * Produces the proto generated extension registry artifacts, or <tt>null</tt> if no registry
+   * needs to be generated for the provided <tt>ruleContext</tt>.
    */
   @Nullable
   GeneratedExtensionRegistryProvider createGeneratedExtensionRegistry(
@@ -523,4 +459,6 @@ public interface JavaSemantics {
    * even if the java_proto_library rule sets strict_deps = 0.
    */
   boolean isJavaProtoLibraryStrictDeps(RuleContext ruleContext);
+
+  void checkDependencyRuleKinds(RuleContext ruleContext);
 }

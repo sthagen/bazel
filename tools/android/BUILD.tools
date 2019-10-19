@@ -1,3 +1,5 @@
+load("//tools/python:private/defs.bzl", "py_library", "py_binary")
+
 package(default_visibility = ["//visibility:public"])
 
 alias(
@@ -61,7 +63,7 @@ sh_binary(
 alias(
     name = "aar_import_deps_checker",
     actual = "//src/java_tools/import_deps_checker/java/com/google/devtools/build/importdeps:ImportDepsChecker_embedded",
-    visibility = ["//visibility:public"]
+    visibility = ["//visibility:public"],
 )
 
 alias(
@@ -77,51 +79,23 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-java_import(
-    name = "singlejar_deploy",
-    jars = select({
-        "//src/conditions:windows": ["@bazel_tools//tools/jdk:singlejar"],
-        "//conditions:default": [],
-    }),
-    visibility = ["//visibility:private"],
-)
-
-java_binary(
-    name = "singlejar_javabin",
-    main_class = "com.google.devtools.build.singlejar.SingleJar",
-    runtime_deps = select({
-        "//src/conditions:windows": [":singlejar_deploy"],
-        "//conditions:default": [],
-    }),
-    visibility = ["//visibility:private"],
-)
-
-gen_java_lang_extras_jar_cmd = """
-    $(location %s) \
-        --exclude_build_data \
-        --dont_change_compression \
-        --sources  $(location @bazel_tools//tools/jdk:platformclasspath8) \
-        --include_prefixes "java/lang/invoke/" \
-        --include_prefixes "java/lang/annotation/" \
-        --output $@
-    """
-
 # javac needs this Jar to compile lambdas, method references, and type annotations.
 # These classes are not part of the android.jar.
 genrule(
     name = "gen_java_lang_extras_jar",
     srcs = [
-        "@bazel_tools//tools/jdk:platformclasspath8"
+        "@bazel_tools//tools/jdk:platformclasspath",
     ],
-    tools = select({
-        "//src/conditions:windows": [":singlejar_javabin"],
-        "//conditions:default": ["@bazel_tools//tools/jdk:singlejar"],
-    }),
     outs = ["java_lang_extras.jar"],
-    cmd = select({
-        "//src/conditions:windows": gen_java_lang_extras_jar_cmd % ":singlejar_javabin",
-        "//conditions:default": gen_java_lang_extras_jar_cmd % "@bazel_tools//tools/jdk:singlejar",
-    }),
+    cmd = """
+    $(location @bazel_tools//tools/jdk:singlejar) \
+        --exclude_build_data \
+        --dont_change_compression \
+        --sources  $(location @bazel_tools//tools/jdk:platformclasspath) \
+        --include_prefixes "java/lang/invoke/" \
+        --include_prefixes "java/lang/annotation/" \
+        --output $@""",
+    tools = ["@bazel_tools//tools/jdk:singlejar"],
     visibility = ["//visibility:private"],
 )
 
@@ -136,8 +110,8 @@ genrule(
     name = "ijar_desugared_java8_legacy_libs",
     srcs = ["desugared_java8_legacy_libs"],
     outs = ["desugared_java8_legacy_libs-ijar.jar"],
-    cmd = "$(location //third_party/ijar) $< $@",
-    tools = ["//third_party/ijar"],
+    cmd = "$(location @bazel_tools//tools/jdk:ijar) $< $@",
+    tools = ["@bazel_tools//tools/jdk:ijar"],
     visibility = ["//visibility:private"],
 )
 
@@ -149,7 +123,7 @@ sh_binary(
         ":desugared_java8_legacy_libs",
         ":dexer",
         "@bazel_tools//src/tools/android/java/com/google/devtools/build/android/desugar/scan:KeepScanner",
-        "@bazel_tools//third_party/java/proguard",
+        "@bazel_tools//tools/jdk:proguard",
     ],
     visibility = ["//visibility:public"],
 )
@@ -170,13 +144,13 @@ filegroup(
 
 genrule(
     name = "desugar_java8_legacy_libs",
-    srcs = ["desugar_jdk_libs.jar"],
+    srcs = ["@android_tools//:desugar_jdk_libs.jar"],
     outs = ["desugared_java8_legacy_libs.jar"],
     cmd = """
     $(location :desugar_java8) \
         --input $< \
         --output $@ \
-        --classpath_entry "$(location @bazel_tools//tools/jdk:platformclasspath8)" \
+        --classpath_entry "$(location @bazel_tools//tools/jdk:platformclasspath)" \
         --core_library --allow_empty_bootclasspath \
         --nobest_effort_tolerate_missing_deps \
         --noemit_dependency_metadata_as_needed \
@@ -201,9 +175,10 @@ genrule(
         --rewrite_core_library_prefix java/util/Spliterator \
         --rewrite_core_library_prefix java/util/StringJoiner \
         --rewrite_core_library_prefix java/util/Tripwire \
+        --rewrite_core_library_prefix java/util/concurrent/ConcurrentHashMap \
+        --rewrite_core_library_prefix java/util/concurrent/DesugarUnsafe \
+        --rewrite_core_library_prefix java/util/concurrent/ThreadLocalRandom \
         --rewrite_core_library_prefix java/util/concurrent/atomic/DesugarAtomic \
-        --retarget_core_library_member "java/util/Arrays#stream->java/util/DesugarArrays" \
-        --retarget_core_library_member "java/util/Arrays#spliterator->java/util/DesugarArrays" \
         --retarget_core_library_member "java/util/LinkedHashSet#spliterator->java/util/DesugarLinkedHashSet" \
         --emulate_core_library_interface java/util/Collection \
         --emulate_core_library_interface java/util/Map \
@@ -213,13 +188,14 @@ genrule(
         --dont_rewrite_core_library_invocation "java/util/Iterator#remove" """,
     tools = [
         ":desugar_java8",
-        "@bazel_tools//tools/jdk:platformclasspath8",
+        "@bazel_tools//tools/jdk:platformclasspath",
     ],
     visibility = ["//visibility:private"],
 )
 
 # No-one should depend on this but :desugared_java8_legacy_libs above
-exports_files(["desugar_jdk_libs.jar"],
+exports_files(
+    ["desugar_jdk_libs.jar"],
     visibility = ["//visibility:private"],
 )
 
@@ -228,8 +204,8 @@ exports_files(["desugar_jdk_libs.jar"],
 java_binary(
     name = "dexer",
     main_class = "com.android.dx.command.Main",
-    runtime_deps = ["//external:android/dx_jar_import"],
     visibility = ["//visibility:private"],
+    runtime_deps = ["//external:android/dx_jar_import"],
 )
 
 alias(
@@ -240,18 +216,21 @@ alias(
 py_binary(
     name = "instrumentation_test_check",
     srcs = ["instrumentation_test_check.py"],
+    python_version = "PY2",
     deps = ["//third_party/py/gflags"],
 )
 
 py_binary(
     name = "build_incremental_dexmanifest",
     srcs = [":build_incremental_dexmanifest.py"],
+    python_version = "PY2",
     deps = [],
 )
 
 py_binary(
     name = "build_split_manifest",
     srcs = ["build_split_manifest.py"],
+    python_version = "PY2",
     deps = [
         "//third_party/py/gflags",
     ],
@@ -260,6 +239,7 @@ py_binary(
 py_binary(
     name = "incremental_install",
     srcs = ["incremental_install.py"],
+    python_version = "PY2",
     deps = [
         "//third_party/py/concurrent:futures",
         "//third_party/py/gflags",
@@ -269,6 +249,7 @@ py_binary(
 py_binary(
     name = "strip_resources",
     srcs = ["strip_resources.py"],
+    python_version = "PY2",
     deps = [
         "//third_party/py/gflags",
     ],
@@ -279,6 +260,7 @@ py_binary(
     srcs = [
         "aar_native_libs_zip_creator.py",
     ],
+    python_version = "PY2",
     deps = [
         ":junction_lib",
         "//third_party/py/gflags",
@@ -288,6 +270,7 @@ py_binary(
 py_binary(
     name = "stubify_manifest",
     srcs = ["stubify_manifest.py"],
+    python_version = "PY2",
     deps = [
         "//third_party/py/gflags",
     ],
@@ -296,6 +279,7 @@ py_binary(
 py_binary(
     name = "aar_embedded_jars_extractor",
     srcs = ["aar_embedded_jars_extractor.py"],
+    python_version = "PY2",
     deps = [
         ":junction_lib",
         "//third_party/py/gflags",
@@ -305,6 +289,7 @@ py_binary(
 py_binary(
     name = "aar_resources_extractor",
     srcs = ["aar_resources_extractor.py"],
+    python_version = "PY2",
     deps = [
         ":junction_lib",
         "//third_party/py/gflags",
@@ -314,6 +299,7 @@ py_binary(
 py_binary(
     name = "resource_extractor",
     srcs = ["resource_extractor.py"],
+    python_version = "PY2",
 )
 
 py_library(
@@ -349,6 +335,14 @@ filegroup(
     srcs = ["bazel_debug.keystore"],
 )
 
+java_binary(
+    name = "exec_binary",
+    main_class = "android.databinding.AndroidDataBinding",
+    runtime_deps = [
+        "//third_party/java/android_databinding:exec",
+    ],
+)
+
 alias(
     name = "databinding_annotation_processor",
     actual = "//external:databinding_annotation_processor",
@@ -374,23 +368,26 @@ alias(
 # helpful error message.
 android_sdk(
     name = "poison_pill_android_sdk",
-    proguard = ":error_message",
     aapt = ":error_message",
-    dx = ":error_message",
-    main_dex_list_creator = ":error_message",
     adb = ":error_message",
-    framework_aidl = ":error_message",
     aidl = ":error_message",
     android_jar = ":error_message.jar",
-    shrinked_android_jar = ":error_message.jar",
-    main_dex_classes = ":error_message",
     apksigner = ":error_message",
+    dx = ":error_message",
+    framework_aidl = ":error_message",
+    main_dex_classes = ":error_message",
+    main_dex_list_creator = ":error_message",
+    proguard = ":error_message",
+    shrinked_android_jar = ":error_message.jar",
     zipalign = ":error_message",
 )
 
 genrule(
     name = "no_android_sdk_repository_error",
-    outs = ["error_message", "error_message.jar"],
+    outs = [
+        "error_message",
+        "error_message.jar",
+    ],
     cmd = """echo \
     This build requires an Android SDK. Please add the android_sdk_repository \
     rule to your WORKSPACE. ; \
@@ -405,14 +402,17 @@ genrule(
 
 config_feature_flag(
     name = "true",
+    allowed_values = [
+        "true",
+        "false",
+    ],
     default_value = "true",
-    allowed_values = ["true", "false"],
 )
 
 config_setting(
     name = "always_true",
     flag_values = {
-        ":true": "true"
+        ":true": "true",
     },
 )
 
@@ -442,4 +442,10 @@ sh_binary(
     name = "dex_list_obfuscator",
     srcs = ["dex_list_obfuscator.sh"],
     visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "bzl_srcs",
+    srcs = glob(["*.bzl"]),
+    visibility = ["//tools:__pkg__"],
 )

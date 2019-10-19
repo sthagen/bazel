@@ -15,7 +15,7 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.base.Supplier;
 import com.google.common.base.VerifyException;
@@ -24,7 +24,6 @@ import com.google.common.collect.Collections2;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Multimap;
@@ -34,9 +33,11 @@ import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.Dependency;
 import com.google.devtools.build.lib.analysis.DependencyResolver;
+import com.google.devtools.build.lib.analysis.DependencyResolver.DependencyKind;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
@@ -56,6 +57,7 @@ import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.skyframe.AbstractSkyKey;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyFunction;
+import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -128,9 +130,9 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
      * deps of given target.
      */
     static class Value implements SkyValue {
-      OrderedSetMultimap<Attribute, ConfiguredTargetAndData> depMap;
+      OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> depMap;
 
-      Value(OrderedSetMultimap<Attribute, ConfiguredTargetAndData> depMap) {
+      Value(OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> depMap) {
         this.depMap = depMap;
       }
     }
@@ -139,14 +141,14 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
     public SkyValue compute(SkyKey skyKey, Environment env)
         throws EvalException, InterruptedException {
       try {
-        OrderedSetMultimap<Attribute, ConfiguredTargetAndData> depMap =
+        OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> depMap =
             ConfiguredTargetFunction.computeDependencies(
                 env,
                 new SkyframeDependencyResolver(env),
                 (TargetAndConfiguration) skyKey.argument(),
                 ImmutableList.<Aspect>of(),
                 ImmutableMap.<Label, ConfigMatchingProvider>of(),
-                /*toolchainLabels=*/ ImmutableSet.of(),
+                /*toolchainContext=*/ null,
                 stateProvider.lateBoundRuleClassProvider(),
                 stateProvider.lateBoundHostConfig(),
                 NestedSetBuilder.<Package>stableOrder(),
@@ -217,15 +219,12 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
   @Override
   protected AnalysisMock getAnalysisMock() {
     return new AnalysisMockWithComputeDepsFunction(
-        new LateBoundStateProvider(),
-        () -> {
-          return skyframeExecutor.getDefaultBuildOptions();
-        });
+        new LateBoundStateProvider(), () -> skyframeExecutor.getDefaultBuildOptions());
   }
 
   /** Returns the configured deps for a given target. */
-  private Multimap<Attribute, ConfiguredTargetAndData> getConfiguredDeps(ConfiguredTarget target)
-      throws Exception {
+  private Multimap<DependencyKind, ConfiguredTargetAndData> getConfiguredDeps(
+      ConfiguredTarget target) throws Exception {
     String targetLabel = AliasProvider.getDependencyLabel(target).toString();
     SkyKey key = ComputeDependenciesFunction.key(getTarget(targetLabel), getConfiguration(target));
     // Must re-enable analysis for Skyframe functions that create configured targets.
@@ -257,12 +256,13 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
   protected List<ConfiguredTarget> getConfiguredDeps(ConfiguredTarget target, String attrName)
       throws Exception {
     String targetLabel = AliasProvider.getDependencyLabel(target).toString();
-    Multimap<Attribute, ConfiguredTargetAndData> allDeps = getConfiguredDeps(target);
-    for (Attribute attribute : allDeps.keySet()) {
+    Multimap<DependencyKind, ConfiguredTargetAndData> allDeps = getConfiguredDeps(target);
+    for (DependencyKind kind : allDeps.keySet()) {
+      Attribute attribute = kind.getAttribute();
       if (attribute.getName().equals(attrName)) {
         return ImmutableList.copyOf(
             Collections2.transform(
-                allDeps.get(attribute), ConfiguredTargetAndData::getConfiguredTarget));
+                allDeps.get(kind), ConfiguredTargetAndData::getConfiguredTarget));
       }
     }
     throw new AssertionError(
@@ -286,18 +286,22 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
   private void internalTestPutOnlyEntry(Multimap<String, String> map) throws Exception {
     ConfigurationResolver.putOnlyEntry(map, "foo", "bar");
     ConfigurationResolver.putOnlyEntry(map, "baz", "bar");
-    try {
-      ConfigurationResolver.putOnlyEntry(map, "foo", "baz");
-      fail("Expected an exception when trying to add a new value to an existing key");
-    } catch (VerifyException e) {
-      assertThat(e).hasMessage("couldn't insert baz: map already has values for key foo: [bar]");
-    }
-    try {
-      ConfigurationResolver.putOnlyEntry(map, "foo", "bar");
-      fail("Expected an exception when trying to add a pre-existing <key, value> pair");
-    } catch (VerifyException e) {
-      assertThat(e).hasMessage("couldn't insert bar: map already has values for key foo: [bar]");
-    }
+    VerifyException e =
+        assertThrows(
+            "Expected an exception when trying to add a new value to an existing key",
+            VerifyException.class,
+            () -> ConfigurationResolver.putOnlyEntry(map, "foo", "baz"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo("couldn't insert baz: map already has values for key foo: [bar]");
+    e =
+        assertThrows(
+            "Expected an exception when trying to add a pre-existing <key, value> pair",
+            VerifyException.class,
+            () -> ConfigurationResolver.putOnlyEntry(map, "foo", "bar"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo("couldn't insert bar: map already has values for key foo: [bar]");
   }
 
   @Test
@@ -342,6 +346,7 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
     if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
       return;
     }
+    getAnalysisMock().ccSupport().setupCcToolchainConfigForCpu(mockToolsConfig, "armeabi-v7a");
     scratch.file(
         "java/a/BUILD",
         "cc_library(name = 'lib', srcs = ['lib.cc'])",
@@ -361,5 +366,74 @@ public class ConfigurationsForTargetsTest extends AnalysisTestCase {
                 Dependency.withConfiguration(dep1.getLabel(), getConfiguration(dep1)),
                 Dependency.withConfiguration(dep2.getLabel(), getConfiguration(dep2))))
         .isLessThan(0);
+  }
+
+  /**
+   * {@link ConfigurationResolver#resolveConfigurations} caches the transitions applied to deps. In
+   * other words, if a parent rule has 100 deps that all set { compilation_mode=dbg }, there's no
+   * need to compute that transition and request the resulting dep configuration from Skyframe 100
+   * times.
+   *
+   * <p>But we do need to make sure <bold>different</bold> transitions don't trigger false cache
+   * hits. This test checks a subtle version of that: if the same Starlark transition applies to two
+   * deps, but that transition reads their attributes and their attribute values are different, we
+   * need to make sure they're distinctly computed.
+   */
+  @Test
+  public void sameTransitionDifferentParameters() throws Exception {
+    scratch.file(
+        "tools/whitelists/function_transition_whitelist/BUILD",
+        "package_group(",
+        "    name = 'function_transition_whitelist',",
+        "    packages = [",
+        "        '//a/...',",
+        "    ],",
+        ")");
+    scratch.file(
+        "a/defs.bzl",
+        "def _transition_impl(settings, attr):",
+        "    return {'//command_line_option:compilation_mode': attr.myattr}",
+        "my_transition = transition(",
+        "    implementation = _transition_impl,",
+        "    inputs = [],",
+        "    outputs = ['//command_line_option:compilation_mode'])",
+        "def _parent_rule_impl(ctx):",
+        "    pass",
+        "parent_rule = rule(",
+        "    implementation = _parent_rule_impl,",
+        "    attrs = {",
+        "        'dep1': attr.label(),",
+        "        'dep2': attr.label(),",
+        "    })",
+        "def _child_rule_impl(ctx):",
+        "    pass",
+        "child_rule = rule(",
+        "    implementation = _child_rule_impl,",
+        "    cfg = my_transition,",
+        "    attrs = {",
+        "        'myattr': attr.string(),",
+        "        '_whitelist_function_transition': attr.label(",
+        "            default = '//tools/whitelists/function_transition_whitelist')",
+        "    }",
+        ")");
+    scratch.file(
+        "a/BUILD",
+        "load('//a:defs.bzl', 'parent_rule', 'child_rule')",
+        "child_rule(",
+        "    name = 'child1',",
+        "    myattr = 'dbg')", // For this dep, my_transition reads myattr="dbg".
+        "child_rule(",
+        "    name = 'child2',",
+        "    myattr = 'opt')", // For this dep, my_transition reads myattr="opt".
+        "parent_rule(",
+        "    name = 'buildme',",
+        "    dep1 = ':child1',",
+        "    dep2 = ':child2')");
+
+    ConfiguredTarget child1 = Iterables.getOnlyElement(getConfiguredDeps("//a:buildme", "dep1"));
+    ConfiguredTarget child2 = Iterables.getOnlyElement(getConfiguredDeps("//a:buildme", "dep2"));
+    // Check that each dep ends up with a distinct compilation_mode value.
+    assertThat(getConfiguration(child1).getCompilationMode()).isEqualTo(CompilationMode.DBG);
+    assertThat(getConfiguration(child2).getCompilationMode()).isEqualTo(CompilationMode.OPT);
   }
 }

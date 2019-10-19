@@ -14,28 +14,23 @@
 package com.google.devtools.build.lib.analysis.config;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.util.ConfigurationTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
-import com.google.devtools.build.lib.packages.NoSuchPackageException;
-import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
-import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.objc.J2ObjcConfiguration;
 import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.common.options.Options;
 import java.util.Map;
-import java.util.regex.Pattern;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -91,12 +86,7 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
     assertThat(env).containsEntry("LANG", "en_US");
     assertThat(env).containsKey("PATH");
     assertThat(env.get("PATH")).contains("/bin:/usr/bin");
-    try {
-      env.put("FOO", "bar");
-      fail("modifiable default environment");
-    } catch (UnsupportedOperationException ignored) {
-      //expected exception
-    }
+    assertThrows(UnsupportedOperationException.class, () -> env.put("FOO", "bar"));
   }
 
   @Test
@@ -107,45 +97,22 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
 
     BuildConfigurationCollection configs = createCollection("--cpu=piii");
     BuildConfiguration config = Iterables.getOnlyElement(configs.getTargetConfigurations());
-    assertThat(config.getFragment(CppConfiguration.class).getCcToolchainRuleLabel())
-        .isEqualTo(Label.parseAbsoluteUnchecked("//third_party/crosstool/mock:cc-compiler-piii"));
+    assertThat(config.getFragment(CppConfiguration.class).getRuleProvidingCcToolchainProvider())
+        .isEqualTo(Label.parseAbsoluteUnchecked("//tools/cpp:toolchain"));
 
     BuildConfiguration hostConfig = configs.getHostConfiguration();
-    assertThat(hostConfig.getFragment(CppConfiguration.class).getCcToolchainRuleLabel())
-        .isEqualTo(Label.parseAbsoluteUnchecked("//third_party/crosstool/mock:cc-compiler-k8"));
-  }
-
-  @Test
-  public void testMakeEnvFlags() throws Exception {
-    BuildConfiguration config = create();
-    assertThat(config.getMakeEnvironment().get("STRIP")).contains("strip");
+    assertThat(hostConfig.getFragment(CppConfiguration.class).getRuleProvidingCcToolchainProvider())
+        .isEqualTo(Label.parseAbsoluteUnchecked("//tools/cpp:toolchain"));
   }
 
   @Test
   public void testCaching() throws Exception {
-    BuildConfiguration.Options a = Options.getDefaults(BuildConfiguration.Options.class);
-    BuildConfiguration.Options b = Options.getDefaults(BuildConfiguration.Options.class);
-    // The String representations of the BuildConfiguration.Options must be equal even if these are
+    CoreOptions a = Options.getDefaults(CoreOptions.class);
+    CoreOptions b = Options.getDefaults(CoreOptions.class);
+    // The String representations of the CoreOptions must be equal even if these are
     // different objects, if they were created with the same options (no options in this case).
     assertThat(b.toString()).isEqualTo(a.toString());
     assertThat(b.cacheKey()).isEqualTo(a.cacheKey());
-  }
-
-  @Test
-  public void testInvalidCpu() throws Exception {
-    // TODO(ulfjack): It would be better to get the better error message also if the Jvm is enabled.
-    // Currently: "No JVM target found under //tools/jdk:jdk that would work for bogus"
-    try {
-      create("--cpu=bogus");
-      fail();
-    } catch (InvalidConfigurationException e) {
-      assertThat(e)
-          .hasMessageThat()
-          .matches(
-              Pattern.compile(
-                  "No default_toolchain found for cpu 'bogus'. "
-                      + "Valid cpus are: \\[\n(  [\\w-]+,\n)+]"));
-    }
   }
 
   @Test
@@ -207,58 +174,6 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
     assertThat(noEnvsConfig.getTargetEnvironments()).isEmpty();
   }
 
-  @SafeVarargs
-  @SuppressWarnings("unchecked")
-  private final ConfigurationFragmentFactory createMockFragment(
-      final Class<? extends Fragment> creates, final Class<? extends Fragment>... dependsOn) {
-    return new ConfigurationFragmentFactory() {
-
-      @Override
-      public Class<? extends Fragment> creates() {
-        return creates;
-      }
-
-      @Override
-      public ImmutableSet<Class<? extends FragmentOptions>> requiredOptions() {
-        return ImmutableSet.of();
-      }
-
-      @Override
-      public Fragment create(ConfigurationEnvironment env, BuildOptions buildOptions)
-          throws InvalidConfigurationException, InterruptedException {
-        for (Class<? extends Fragment> fragmentType : dependsOn) {
-          env.getFragment(buildOptions, fragmentType);
-        }
-        return new Fragment() {};
-      }
-    };
-  }
-
-  @Test
-  public void testCycleInFragments() throws Exception {
-    configurationFragmentFactories = ImmutableList.of(
-        createMockFragment(CppConfiguration.class, JavaConfiguration.class),
-        createMockFragment(JavaConfiguration.class, CppConfiguration.class));
-    try {
-      createCollection();
-      fail();
-    } catch (IllegalStateException e) {
-      // expected
-    }
-  }
-
-  @Test
-  public void testMissingFragment() throws Exception {
-    configurationFragmentFactories = ImmutableList.of(
-        createMockFragment(CppConfiguration.class, JavaConfiguration.class));
-    try {
-      createCollection();
-      fail();
-    } catch (RuntimeException e) {
-      // expected
-    }
-  }
-
   @Test
   public void testGlobalMakeVariableOverride() throws Exception {
     assertThat(create().getMakeEnvironment()).containsEntry("COMPILATION_MODE", "fastbuild");
@@ -311,10 +226,10 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
     BuildConfiguration config3 = create("--j2objc_translation_flags=baz");
     // Shared because all j2objc options are the same:
     assertThat(config1.getFragment(J2ObjcConfiguration.class))
-        .isSameAs(config2.getFragment(J2ObjcConfiguration.class));
+        .isSameInstanceAs(config2.getFragment(J2ObjcConfiguration.class));
     // Distinct because the j2objc options differ:
     assertThat(config1.getFragment(J2ObjcConfiguration.class))
-        .isNotSameAs(config3.getFragment(J2ObjcConfiguration.class));
+        .isNotSameInstanceAs(config3.getFragment(J2ObjcConfiguration.class));
   }
 
   @Test
@@ -332,6 +247,36 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
   public void testCommandLineVariablesOverride() throws Exception {
     BuildConfiguration config = create("--define", "a=b", "--define", "a=c");
     assertThat(config.getCommandLineBuildVariables().get("a")).isEqualTo("c");
+  }
+
+  @Test
+  public void testNormalization_definesWithSameName_collapseDuplicateDefinesDisabled()
+      throws Exception {
+    BuildConfiguration config =
+        create("--nocollapse_duplicate_defines", "--define", "a=1", "--define", "a=2");
+    CoreOptions options = config.getOptions().get(CoreOptions.class);
+    assertThat(ImmutableListMultimap.copyOf(options.commandLineBuildVariables))
+        .containsExactly("a", "1", "a", "2")
+        .inOrder();
+    assertThat(config).isNotEqualTo(create("--nocollapse_duplicate_defines", "--define", "a=2"));
+  }
+
+  @Test
+  public void testNormalization_definesWithDifferentNames() throws Exception {
+    BuildConfiguration config =
+        create("--collapse_duplicate_defines", "--define", "a=1", "--define", "b=2");
+    CoreOptions options = config.getOptions().get(CoreOptions.class);
+    assertThat(ImmutableMap.copyOf(options.commandLineBuildVariables))
+        .containsExactly("a", "1", "b", "2");
+  }
+
+  @Test
+  public void testNormalization_definesWithSameName() throws Exception {
+    BuildConfiguration config =
+        create("--collapse_duplicate_defines", "--define", "a=1", "--define", "a=2");
+    CoreOptions options = config.getOptions().get(CoreOptions.class);
+    assertThat(ImmutableMap.copyOf(options.commandLineBuildVariables)).containsExactly("a", "2");
+    assertThat(config).isEqualTo(create("--collapse_duplicate_defines", "--define", "a=2"));
   }
 
   // This is really a test of option parsing, not command-line variable
@@ -371,63 +316,10 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
     assertThat(cfg.getCompilationMode()).isEqualTo(CompilationMode.DBG);
   }
 
-  /**
-   * Returns a mock config fragment that loads the given label and does nothing else.
-   */
-  private static ConfigurationFragmentFactory createMockFragmentWithLabelDep(final String label) {
-    return new ConfigurationFragmentFactory() {
-      @Override
-      public Fragment create(ConfigurationEnvironment env, BuildOptions buildOptions)
-          throws InterruptedException {
-        try {
-          env.getTarget(Label.parseAbsoluteUnchecked(label));
-        } catch (NoSuchPackageException e) {
-          fail("cannot load mock fragment's dep label " + label + ": " + e.getMessage());
-        } catch (NoSuchTargetException e) {
-          fail("cannot load mock fragment's dep label " + label + ": " + e.getMessage());
-        }
-        return new Fragment() {};
-      }
-
-      @Override
-      public Class<? extends Fragment> creates() {
-        return CppConfiguration.class;
-      }
-
-      @Override
-      public ImmutableSet<Class<? extends FragmentOptions>> requiredOptions() {
-        return ImmutableSet.<Class<? extends FragmentOptions>>of();
-      }
-    };
-  }
-
   @Test
-  public void depLabelCycleOnConfigurationLoading() throws Exception {
-    configurationFragmentFactories = ImmutableList.of(createMockFragmentWithLabelDep("//foo"));
-    getScratch().file("foo/BUILD",
-        "load('//skylark:one.bzl', 'one')",
-        "cc_library(name = 'foo')");
-    getScratch().file("skylark/BUILD");
-    getScratch().file("skylark/one.bzl",
-        "load('//skylark:two.bzl', 'two')",
-        "def one():",
-        "  pass");
-    getScratch().file("skylark/two.bzl",
-        "load('//skylark:one.bzl', 'one')",
-        "def two():",
-        "  pass");
-    checkError(String.join("\n",
-        "ERROR <no location>: cycle detected in extension files: ",
-        "    foo/BUILD",
-        ".-> //skylark:one.bzl",
-        "|   //skylark:two.bzl",
-        "`-- //skylark:one.bzl"));
-  }
-
-  @Test
-  public void testNoSeparateGenfilesDirectory() throws Exception {
-    BuildConfiguration target = create("--noexperimental_separate_genfiles_directory");
-    BuildConfiguration host = createHost("--noexperimental_separate_genfiles_directory");
+  public void testIncompatibleMergeGenfilesDirectory() throws Exception {
+    BuildConfiguration target = create("--incompatible_merge_genfiles_directory");
+    BuildConfiguration host = createHost("--incompatible_merge_genfiles_directory");
     assertThat(target.getGenfilesDirectory(RepositoryName.MAIN))
         .isEqualTo(target.getBinDirectory(RepositoryName.MAIN));
     assertThat(host.getGenfilesDirectory(RepositoryName.MAIN))
@@ -441,7 +333,7 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
         create("--javacopt=foo"),
         create("--platform_suffix=-test"),
         create("--target_environment=//foo", "--target_environment=//bar"),
-        create("--noexperimental_separate_genfiles_directory"),
+        create("--incompatible_merge_genfiles_directory"),
         create(
             "--define",
             "foo=#foo",

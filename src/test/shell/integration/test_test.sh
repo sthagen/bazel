@@ -115,7 +115,7 @@ EOF
 function test_build_fail_terse_summary() {
     local -r pkg=$FUNCNAME
     mkdir -p $pkg || fail "mkdir -p $pkg failed"
-    cat > $pkg/BUILD <<'EOF'
+    cat > $pkg/BUILD <<EOF
 genrule(
   name = "testsrc",
   outs = ["test.sh"],
@@ -132,7 +132,7 @@ sh_test(
 genrule(
   name = "slowtestsrc",
   outs = ["slowtest.sh"],
-  cmd = "sleep 20 && echo '#!/bin/sh' > $@ && echo 'true' >> $@ && chmod 755 $@",
+  cmd = "sleep 200 && echo '#!/bin/sh' > \$@ && echo '#${RANDOM} and ${RANDOM} to prevent caching' >> \$@ && echo 'true' >> \$@ && chmod 755 \$@",
 )
 sh_test(
   name = "willbeskipped",
@@ -202,6 +202,53 @@ EOF
   bazel test --noexpand_test_suites //$pkg:suite &> $TEST_log || fail "expected test to pass"
   expect_log "//$pkg:test_a"
   expect_log "//$pkg:test_b"
+}
+
+function test_print_relative_test_log_paths() {
+  # The symlink resolution done by PathPrettyPrinter doesn't seem to work on
+  # Windows.
+  # TODO(nharmata): Fix this.
+  [[ "$is_windows" == "true" ]] && return 0
+
+  local -r pkg="$FUNCNAME"
+  mkdir -p "$pkg" || fail "mkdir -p $pkg failed"
+  cat > "$pkg"/BUILD <<'EOF'
+sh_test(name = 'fail', srcs = ['fail.sh'])
+EOF
+  cat > "$pkg"/fail.sh <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+  chmod +x "$pkg"/fail.sh
+
+  local testlogs_dir=$(bazel info ${PRODUCT_NAME}-testlogs 2> /dev/null)
+
+  bazel test --print_relative_test_log_paths=false //"$pkg":fail &> $TEST_log \
+    && fail "expected failure"
+  expect_log "^  $testlogs_dir/$pkg/fail/test.log$"
+
+  bazel test --print_relative_test_log_paths=true //"$pkg":fail &> $TEST_log \
+    && fail "expected failure"
+  expect_log "^  ${PRODUCT_NAME}-testlogs/$pkg/fail/test.log$"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/pull/8322
+# As of 2019-09-06, "bazel test" does not forward input from stdin to the test binary.
+# Maybe Bazel will support that in the future, but until then this test guards the current status.
+# See also test_run_a_test_and_a_binary_rule_with_input_from_stdin() in
+# //src/test/shell/integration:run_test
+function test_a_test_rule_with_input_from_stdin() {
+  local -r pkg="$FUNCNAME"
+  mkdir -p "$pkg" || fail "mkdir -p $pkg failed"
+  echo 'sh_test(name = "x", srcs = ["x.sh"])' > "$pkg/BUILD"
+  cat > "$pkg/x.sh" <<'eof'
+#!/bin/bash
+read -n5 FOO
+echo "foo=($FOO)"
+eof
+  chmod +x "$pkg/x.sh"
+  echo helloworld | bazel test "//$pkg:x" --test_output=all > "$TEST_log" || fail "Expected success"
+  expect_log "foo=()"
 }
 
 run_suite "test tests"

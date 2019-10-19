@@ -19,35 +19,41 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
+import com.google.devtools.build.lib.analysis.config.StarlarkDefinedConfigTransition;
+import com.google.devtools.build.lib.analysis.config.TransitionFactories;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
+import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.AllowedValueSet;
 import com.google.devtools.build.lib.packages.Attribute.ImmutableAttributeFactory;
 import com.google.devtools.build.lib.packages.Attribute.SkylarkComputedDefaultTemplate;
-import com.google.devtools.build.lib.packages.Attribute.SplitTransitionProvider;
 import com.google.devtools.build.lib.packages.AttributeValueSource;
+import com.google.devtools.build.lib.packages.BazelStarlarkContext;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.SkylarkAspect;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StarlarkCallbackHelper;
+import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.packages.Type.ConversionException;
+import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAttrApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.Runtime;
-import com.google.devtools.build.lib.syntax.SkylarkCallbackFunction;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkType;
-import com.google.devtools.build.lib.syntax.Type;
-import com.google.devtools.build.lib.syntax.Type.ConversionException;
-import com.google.devtools.build.lib.syntax.Type.LabelClass;
-import com.google.devtools.build.lib.syntax.UserDefinedFunction;
+import com.google.devtools.build.lib.syntax.SkylarkUtils;
+import com.google.devtools.build.lib.syntax.StarlarkFunction;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import java.util.List;
@@ -76,9 +82,6 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       builder.allowedFileTypes(FileTypeSet.ANY_FILE);
     } else if (fileTypesObj == Boolean.FALSE) {
       builder.allowedFileTypes(FileTypeSet.NO_FILE);
-    } else if (fileTypesObj instanceof SkylarkFileType) {
-      // TODO(laurentlb): deprecated, to be removed
-      builder.allowedFileTypes(((SkylarkFileType) fileTypesObj).getFileTypeSet());
     } else if (fileTypesObj instanceof SkylarkList) {
       List<String> arg =
           SkylarkList.castSkylarkListOrNoneToList(
@@ -91,42 +94,51 @@ public final class SkylarkAttr implements SkylarkAttrApi {
   }
 
   private static ImmutableAttributeFactory createAttributeFactory(
-      Type<?> type, SkylarkDict<String, Object> arguments, FuncallExpression ast, Environment env)
+      Type<?> type,
+      String doc,
+      SkylarkDict<String, Object> arguments,
+      FuncallExpression ast,
+      StarlarkThread thread)
       throws EvalException {
     // We use an empty name now so that we can set it later.
     // This trick makes sense only in the context of Skylark (builtin rules should not use it).
-    return createAttributeFactory(type, arguments, ast, env, "");
+    return createAttributeFactory(type, doc, arguments, ast, thread, "");
   }
 
   private static ImmutableAttributeFactory createAttributeFactory(
       Type<?> type,
+      String doc,
       SkylarkDict<String, Object> arguments,
       FuncallExpression ast,
-      Environment env,
+      StarlarkThread thread,
       String name)
       throws EvalException {
-    return createAttribute(type, arguments, ast, env, name).buildPartial();
+    return createAttribute(type, doc, arguments, ast, thread, name).buildPartial();
   }
 
   private static Attribute.Builder<?> createAttribute(
       Type<?> type,
+      String doc,
       SkylarkDict<String, Object> arguments,
       FuncallExpression ast,
-      Environment env,
+      StarlarkThread thread,
       String name)
       throws EvalException {
-    Attribute.Builder<?> builder = Attribute.attr(name, type);
+    Attribute.Builder<?> builder = Attribute.attr(name, type).setDoc(doc);
 
     Object defaultValue = arguments.get(DEFAULT_ARG);
     if (!EvalUtils.isNullOrNone(defaultValue)) {
-      if (defaultValue instanceof UserDefinedFunction) {
+      if (defaultValue instanceof StarlarkFunction) {
         // Computed attribute. Non label type attributes already caused a type check error.
-        SkylarkCallbackFunction callback =
-            new SkylarkCallbackFunction(
-                (UserDefinedFunction) defaultValue, ast, env.getSemantics());
+        StarlarkCallbackHelper callback =
+            new StarlarkCallbackHelper(
+                (StarlarkFunction) defaultValue,
+                ast,
+                thread.getSemantics(),
+                BazelStarlarkContext.from(thread));
         // SkylarkComputedDefaultTemplate needs to know the names of all attributes that it depends
         // on. However, this method does not know anything about other attributes.
-        // We solve this problem by asking the SkylarkCallbackFunction for the parameter names used
+        // We solve this problem by asking the StarlarkCallbackHelper for the parameter names used
         // in the function definition, which must be the names of attributes used by the callback.
         builder.value(
             new SkylarkComputedDefaultTemplate(
@@ -134,7 +146,12 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       } else if (defaultValue instanceof SkylarkLateBoundDefault) {
         builder.value((SkylarkLateBoundDefault) defaultValue);
       } else {
-        builder.defaultValue(defaultValue, env.getGlobals().getTransitiveLabel(), DEFAULT_ARG);
+        builder.defaultValue(
+            defaultValue,
+            new BuildType.LabelConversionContext(
+                (Label) thread.getGlobals().getLabel(),
+                BazelStarlarkContext.from(thread).getRepoMapping()),
+            DEFAULT_ARG);
       }
     }
 
@@ -149,10 +166,11 @@ public final class SkylarkAttr implements SkylarkAttrApi {
 
     if (containsNonNoneKey(arguments, NON_EMPTY_ARG)
         && (Boolean) arguments.get(NON_EMPTY_ARG)) {
-      if (env.getSemantics().incompatibleDisableDeprecatedAttrParams()) {
-        throw new EvalException(ast.getLocation(),
+      if (thread.getSemantics().incompatibleDisableDeprecatedAttrParams()) {
+        throw new EvalException(
+            ast.getLocation(),
             "'non_empty' is no longer supported. use allow_empty instead. You can use "
-                + "--incompatible_disable_deprecated_attr_params to temporarily disable this "
+                + "--incompatible_disable_deprecated_attr_params=false to temporarily disable this "
                 + "check.");
       }
 
@@ -177,11 +195,11 @@ public final class SkylarkAttr implements SkylarkAttrApi {
 
     if (containsNonNoneKey(arguments, SINGLE_FILE_ARG)
         && (Boolean) arguments.get(SINGLE_FILE_ARG)) {
-      if (env.getSemantics().incompatibleDisableDeprecatedAttrParams()) {
+      if (thread.getSemantics().incompatibleDisableDeprecatedAttrParams()) {
         throw new EvalException(
             ast.getLocation(),
             "'single_file' is no longer supported. use allow_single_file instead. You can use "
-                + "--incompatible_disable_deprecated_attr_params to temporarily disable this "
+                + "--incompatible_disable_deprecated_attr_params=false to temporarily disable this "
                 + "check.");
       }
       if (containsNonNoneKey(arguments, ALLOW_SINGLE_FILE_ARG)) {
@@ -237,25 +255,42 @@ public final class SkylarkAttr implements SkylarkAttrApi {
 
     if (containsNonNoneKey(arguments, CONFIGURATION_ARG)) {
       Object trans = arguments.get(CONFIGURATION_ARG);
-      if (trans.equals("data")) {
-        // This used to apply the "disable LIPO" (a.k.a. "data") transition. But now that LIPO is
-        // turned down this is a noop. Still, there are cfg = "data"' references in the depot. So
-        // we have to remove them via b/28688645 before we can remove this path.
-        if (env.getSemantics().incompatibleDisallowDataTransition()) {
-          throw new EvalException(ast.getLocation(),
-              "Using cfg = \"data\" on an attribute is a noop and no longer supported. Please "
-                  + "remove it. You can use --incompatible_disallow_data_transition=false to "
-                  + "temporarily disable this check.");
-        }
-      } else if (trans.equals("host")) {
-        builder.cfg(HostTransition.INSTANCE);
+      boolean isSplit =
+          trans instanceof SplitTransition
+              || trans instanceof TransitionFactory
+              || trans instanceof StarlarkDefinedConfigTransition;
+      if (isSplit && defaultValue instanceof SkylarkLateBoundDefault) {
+        throw new EvalException(
+            ast.getLocation(),
+            "late-bound attributes must not have a split configuration transition");
+      }
+      if (trans.equals("host")) {
+        builder.cfg(HostTransition.createFactory());
+      } else if (trans.equals("exec")) {
+        builder.cfg(new ExecutionTransitionFactory());
       } else if (trans instanceof SplitTransition) {
-        builder.cfg((SplitTransition) trans);
-      } else if (trans instanceof SplitTransitionProvider) {
-        builder.cfg((SplitTransitionProvider) trans);
+        builder.cfg(TransitionFactories.of((SplitTransition) trans));
+      } else if (trans instanceof TransitionFactory) {
+        builder.cfg((TransitionFactory) trans);
+      } else if (trans instanceof StarlarkDefinedConfigTransition) {
+        StarlarkDefinedConfigTransition starlarkDefinedTransition =
+            (StarlarkDefinedConfigTransition) trans;
+        if (starlarkDefinedTransition.isForAnalysisTesting()) {
+          builder.hasAnalysisTestTransition();
+        } else {
+          if (!thread.getSemantics().experimentalStarlarkConfigTransitions()) {
+            throw new EvalException(
+                ast.getLocation(),
+                "Starlark-defined transitions on rule attributes is experimental and disabled by "
+                    + "default. This API is in development and subject to change at any time. Use "
+                    + "--experimental_starlark_config_transitions to use this experimental API.");
+          }
+          builder.hasStarlarkDefinedTransition();
+        }
+        builder.cfg(new StarlarkAttributeTransitionProvider(starlarkDefinedTransition));
       } else if (!trans.equals("target")) {
-        throw new EvalException(ast.getLocation(),
-            "cfg must be either 'data', 'host', or 'target'.");
+        // TODO(b/121134880): update error message when starlark build configurations is ready.
+        throw new EvalException(ast.getLocation(), "cfg must be either 'host' or 'target'.");
       }
     }
 
@@ -360,10 +395,10 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       SkylarkDict<String, Object> kwargs,
       Type<?> type,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
     try {
-      return new Descriptor(name, createAttributeFactory(type, kwargs, ast, env));
+      return new Descriptor(name, createAttributeFactory(type, null, kwargs, ast, thread));
     } catch (ConversionException e) {
       throw new EvalException(ast.getLocation(), e.getMessage());
     }
@@ -390,7 +425,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       SkylarkDict<String, Object> kwargs,
       Type<?> type,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
     String whyNotConfigurableReason =
         Preconditions.checkNotNull(maybeGetNonConfigurableReason(type), type);
@@ -399,7 +434,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       // This trick makes sense only in the context of Skylark (builtin rules should not use it).
       return new Descriptor(
           name,
-          createAttribute(type, kwargs, ast, env, "")
+          createAttribute(type, null, kwargs, ast, thread, "")
               .nonconfigurable(whyNotConfigurableReason)
               .buildPartial());
     } catch (ConversionException e) {
@@ -419,17 +454,17 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Boolean mandatory,
       SkylarkList<?> values,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
     // TODO(bazel-team): Replace literal strings with constants.
-    env.checkLoadingOrWorkspacePhase("attr.int", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.int", ast.getLocation());
     return createAttrDescriptor(
         "int",
         EvalUtils.<String, Object>optionMap(
-            env, DEFAULT_ARG, defaultInt, MANDATORY_ARG, mandatory, VALUES_ARG, values),
+            thread, DEFAULT_ARG, defaultInt, MANDATORY_ARG, mandatory, VALUES_ARG, values),
         Type.INTEGER,
         ast,
-        env);
+        thread);
   }
 
   @Override
@@ -439,16 +474,16 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Boolean mandatory,
       SkylarkList<?> values,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.string", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.string", ast.getLocation());
     return createAttrDescriptor(
         "string",
         EvalUtils.<String, Object>optionMap(
-            env, DEFAULT_ARG, defaultString, MANDATORY_ARG, mandatory, VALUES_ARG, values),
+            thread, DEFAULT_ARG, defaultString, MANDATORY_ARG, mandatory, VALUES_ARG, values),
         Type.STRING,
         ast,
-        env);
+        thread);
   }
 
   @Override
@@ -465,15 +500,16 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.label", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.label", ast.getLocation());
     try {
       ImmutableAttributeFactory attribute =
           createAttributeFactory(
               BuildType.LABEL,
+              doc,
               EvalUtils.<String, Object>optionMap(
-                  env,
+                  thread,
                   DEFAULT_ARG,
                   defaultO,
                   EXECUTABLE_ARG,
@@ -495,7 +531,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
                   ASPECTS_ARG,
                   aspects),
               ast,
-              env,
+              thread,
               "label");
       return new Descriptor("label", attribute);
     } catch (EvalException e) {
@@ -511,13 +547,13 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       SkylarkList<?> defaultList,
       String doc,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.string_list", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.string_list", ast.getLocation());
     return createAttrDescriptor(
         "string_list",
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultList,
             MANDATORY_ARG,
@@ -528,7 +564,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
             allowEmpty),
         Type.STRING_LIST,
         ast,
-        env);
+        thread);
   }
 
   @Override
@@ -539,13 +575,13 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       SkylarkList<?> defaultList,
       String doc,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.int_list", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.int_list", ast.getLocation());
     return createAttrDescriptor(
         "int_list",
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultList,
             MANDATORY_ARG,
@@ -556,7 +592,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
             allowEmpty),
         Type.INTEGER_LIST,
         ast,
-        env);
+        thread);
   }
 
   @Override
@@ -573,12 +609,12 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.label_list", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.label_list", ast.getLocation());
     SkylarkDict<String, Object> kwargs =
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultList,
             ALLOW_FILES_ARG,
@@ -601,7 +637,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
             aspects);
     try {
       ImmutableAttributeFactory attribute =
-          createAttributeFactory(BuildType.LABEL_LIST, kwargs, ast, env, "label_list");
+          createAttributeFactory(BuildType.LABEL_LIST, doc, kwargs, ast, thread, "label_list");
       return new Descriptor("label_list", attribute);
     } catch (EvalException e) {
       throw new EvalException(ast.getLocation(), e.getMessage(), e);
@@ -622,12 +658,13 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.label_keyed_string_dict", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(
+        thread, "attr.label_keyed_string_dict", ast.getLocation());
     SkylarkDict<String, Object> kwargs =
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultList,
             ALLOW_FILES_ARG,
@@ -651,7 +688,12 @@ public final class SkylarkAttr implements SkylarkAttrApi {
     try {
       ImmutableAttributeFactory attribute =
           createAttributeFactory(
-              BuildType.LABEL_KEYED_STRING_DICT, kwargs, ast, env, "label_keyed_string_dict");
+              BuildType.LABEL_KEYED_STRING_DICT,
+              doc,
+              kwargs,
+              ast,
+              thread,
+              "label_keyed_string_dict");
       return new Descriptor("label_keyed_string_dict", attribute);
     } catch (EvalException e) {
       throw new EvalException(ast.getLocation(), e.getMessage(), e);
@@ -660,45 +702,49 @@ public final class SkylarkAttr implements SkylarkAttrApi {
 
   @Override
   public Descriptor boolAttribute(
-      Boolean defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
+      Boolean defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.bool", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.bool", ast.getLocation());
     return createAttrDescriptor(
         "bool",
-        EvalUtils.<String, Object>optionMap(env, DEFAULT_ARG, defaultO, MANDATORY_ARG, mandatory),
+        EvalUtils.<String, Object>optionMap(
+            thread, DEFAULT_ARG, defaultO, MANDATORY_ARG, mandatory),
         Type.BOOLEAN,
         ast,
-        env);
+        thread);
   }
 
   @Override
   public Descriptor outputAttribute(
-      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
+      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.output", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.output", ast.getLocation());
+
     return createNonconfigurableAttrDescriptor(
         "output",
-        EvalUtils.<String, Object>optionMap(env, DEFAULT_ARG, defaultO, MANDATORY_ARG, mandatory),
+        EvalUtils.<String, Object>optionMap(
+            thread, DEFAULT_ARG, defaultO, MANDATORY_ARG, mandatory),
         BuildType.OUTPUT,
         ast,
-        env);
+        thread);
   }
 
   @Override
   public Descriptor outputListAttribute(
       Boolean allowEmpty,
-      SkylarkList defaultList,
+      Object defaultList,
       String doc,
       Boolean mandatory,
       Boolean nonEmpty,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.output_list", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.output_list", ast.getLocation());
+
     return createAttrDescriptor(
         "output_list",
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultList,
             MANDATORY_ARG,
@@ -709,7 +755,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
             allowEmpty),
         BuildType.OUTPUT_LIST,
         ast,
-        env);
+        thread);
   }
 
   @Override
@@ -720,13 +766,13 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Boolean mandatory,
       Boolean nonEmpty,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.string_dict", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.string_dict", ast.getLocation());
     return createAttrDescriptor(
         "string_dict",
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultO,
             MANDATORY_ARG,
@@ -737,7 +783,7 @@ public final class SkylarkAttr implements SkylarkAttrApi {
             allowEmpty),
         Type.STRING_DICT,
         ast,
-        env);
+        thread);
   }
 
   @Override
@@ -748,13 +794,13 @@ public final class SkylarkAttr implements SkylarkAttrApi {
       Boolean mandatory,
       Boolean nonEmpty,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.string_list_dict", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.string_list_dict", ast.getLocation());
     return createAttrDescriptor(
         "string_list_dict",
         EvalUtils.<String, Object>optionMap(
-            env,
+            thread,
             DEFAULT_ARG,
             defaultO,
             MANDATORY_ARG,
@@ -765,20 +811,21 @@ public final class SkylarkAttr implements SkylarkAttrApi {
             allowEmpty),
         Type.STRING_LIST_DICT,
         ast,
-        env);
+        thread);
   }
 
   @Override
   public Descriptor licenseAttribute(
-      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
+      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
       throws EvalException {
-    env.checkLoadingOrWorkspacePhase("attr.license", ast.getLocation());
+    SkylarkUtils.checkLoadingOrWorkspacePhase(thread, "attr.license", ast.getLocation());
     return createNonconfigurableAttrDescriptor(
         "license",
-        EvalUtils.<String, Object>optionMap(env, DEFAULT_ARG, defaultO, MANDATORY_ARG, mandatory),
+        EvalUtils.<String, Object>optionMap(
+            thread, DEFAULT_ARG, defaultO, MANDATORY_ARG, mandatory),
         BuildType.LICENSE,
         ast,
-        env);
+        thread);
   }
 
   /** A descriptor of an attribute defined in Skylark. */

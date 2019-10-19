@@ -14,25 +14,40 @@
 
 package com.google.devtools.build.lib.skylarkbuildapi.cpp;
 
-import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkList;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /** Interface for a structured representation of the compilation outputs of a C++ rule. */
 @SkylarkModule(
-    name = "cc_compilation_outputs",
+    name = "CcCompilationOutputs",
     category = SkylarkModuleCategory.BUILTIN,
-    documented = false,
+    documented = true,
     doc = "Helper class containing CC compilation outputs.")
-public interface CcCompilationOutputsApi {
+public interface CcCompilationOutputsApi<FileT extends FileApi> {
+
+  /** @deprecated use {@link #getSkylarkObjects} or {@link #getSkylarkPicObjects}. */
   @SkylarkCallable(
       name = "object_files",
-      documented = false,
+      doc = "Do not use. Use eiher 'objects' or 'pic_objects'.",
+      useStarlarkThread = true,
+      useLocation = true,
       parameters = {
         @Param(name = "use_pic", doc = "use_pic", positional = false, named = true),
       })
-  SkylarkList<Artifact> getSkylarkObjectFiles(boolean usePic);
+  @Deprecated
+  SkylarkList<FileT> getSkylarkObjectFiles(boolean usePic, Location location, StarlarkThread thread)
+      throws EvalException;
+
+  @SkylarkCallable(name = "objects", documented = false, useLocation = true, structField = true)
+  SkylarkList<FileT> getSkylarkObjects(Location location) throws EvalException;
+
+  @SkylarkCallable(name = "pic_objects", documented = false, useLocation = true, structField = true)
+  SkylarkList<FileT> getSkylarkPicObjects(Location location) throws EvalException;
 }

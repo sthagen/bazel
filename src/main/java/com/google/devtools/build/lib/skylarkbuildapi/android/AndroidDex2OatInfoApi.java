@@ -13,7 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skylarkbuildapi.android;
 
+import com.google.devtools.build.lib.skylarkbuildapi.ProviderApi;
 import com.google.devtools.build.lib.skylarkbuildapi.StructApi;
+import com.google.devtools.build.lib.skylarkinterface.Param;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 
 /**
@@ -26,4 +29,21 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
         "Do not use this module. It is intended for migration purposes only. If you depend on it, "
             + "you will be broken when it is removed.",
     documented = false)
-public interface AndroidDex2OatInfoApi extends StructApi {}
+public interface AndroidDex2OatInfoApi extends StructApi {
+  /** The name of the provider for this info object. */
+  String NAME = "AndroidDex2OatInfo";
+
+  /** Provider for {@link AndroidDex2OatInfoApi} objects. */
+  @SkylarkModule(name = "Provider", documented = false, doc = "")
+  interface Provider extends ProviderApi {
+    @SkylarkCallable(
+        name = "AndroidDex2OatInfo",
+        doc = "The <code>AndroidDex2OatInfo</code> constructor.",
+        documented = false,
+        parameters = {
+          @Param(name = "enabled", positional = false, named = true, type = Boolean.class),
+        },
+        selfCall = true)
+    AndroidDex2OatInfoApi androidDex2OatInfo(Boolean enabled);
+  }
+}

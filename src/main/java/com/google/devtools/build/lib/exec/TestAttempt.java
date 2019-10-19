@@ -156,6 +156,11 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
     return cachedLocally;
   }
 
+  @VisibleForTesting
+  public int getAttempt() {
+    return attempt;
+  }
+
   @Override
   public BuildEventId getEventId() {
     return BuildEventId.testResult(
@@ -196,7 +201,9 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
             : LocalFileType.FAILED_TEST_OUTPUT;
     ImmutableList.Builder<LocalFile> localFiles = ImmutableList.builder();
     for (Pair<String, Path> file : files) {
-      localFiles.add(new LocalFile(file.getSecond(), localFileType));
+      if (file.getSecond() != null) {
+        localFiles.add(new LocalFile(file.getSecond(), localFileType));
+      }
     }
     return localFiles.build();
   }

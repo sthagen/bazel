@@ -18,7 +18,7 @@ import build.bazel.remote.execution.v2.ToolDetails;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
-import com.google.devtools.build.lib.remote.util.DigestUtil.ActionKey;
+import com.google.devtools.build.lib.remote.common.SimpleBlobStore.ActionKey;
 import io.grpc.ClientInterceptor;
 import io.grpc.Context;
 import io.grpc.Contexts;
@@ -52,19 +52,7 @@ public class TracingMetadataUtils {
    */
   public static Context contextWithMetadata(
       String buildRequestId, String commandId, ActionKey actionKey) {
-    Preconditions.checkNotNull(buildRequestId);
-    Preconditions.checkNotNull(commandId);
-    Preconditions.checkNotNull(actionKey);
-    RequestMetadata.Builder metadata =
-        RequestMetadata.newBuilder()
-            .setCorrelatedInvocationsId(buildRequestId)
-            .setToolInvocationId(commandId);
-    metadata.setActionId(actionKey.getDigest().getHash());
-    metadata.setToolDetails(ToolDetails.newBuilder()
-            .setToolName("bazel")
-            .setToolVersion(BlazeVersionInfo.instance().getVersion()))
-            .build();
-    return Context.current().withValue(CONTEXT_KEY, metadata.build());
+    return contextWithMetadata(buildRequestId, commandId, actionKey.getDigest().getHash());
   }
 
   /**
@@ -78,14 +66,17 @@ public class TracingMetadataUtils {
       String buildRequestId, String commandId, String actionId) {
     Preconditions.checkNotNull(buildRequestId);
     Preconditions.checkNotNull(commandId);
+    Preconditions.checkNotNull(actionId);
     RequestMetadata.Builder metadata =
         RequestMetadata.newBuilder()
             .setCorrelatedInvocationsId(buildRequestId)
             .setToolInvocationId(commandId);
     metadata.setActionId(actionId);
-    metadata.setToolDetails(ToolDetails.newBuilder()
-        .setToolName("bazel")
-        .setToolVersion(BlazeVersionInfo.instance().getVersion()))
+    metadata
+        .setToolDetails(
+            ToolDetails.newBuilder()
+                .setToolName("bazel")
+                .setToolVersion(BlazeVersionInfo.instance().getVersion()))
         .build();
     return Context.current().withValue(CONTEXT_KEY, metadata.build());
   }
@@ -134,7 +125,11 @@ public class TracingMetadataUtils {
         ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
       RequestMetadata meta = requestMetadataFromHeaders(headers);
       if (meta == null) {
-        throw new IllegalStateException("RequestMetadata not received from the client.");
+        throw io.grpc.Status.INVALID_ARGUMENT
+            .withDescription(
+                "RequestMetadata not received from the client for "
+                    + call.getMethodDescriptor().getFullMethodName())
+            .asRuntimeException();
       }
       Context ctx = Context.current().withValue(CONTEXT_KEY, meta);
       return Contexts.interceptCall(ctx, call, headers, next);

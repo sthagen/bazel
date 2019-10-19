@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.EventHandler;
@@ -42,13 +43,12 @@ import java.util.Map;
 import javax.annotation.Nullable;
 
 /**
- * Action to create a manifest of input files for processing by a subsequent build step (e.g.
- * runfiles symlinking or archive building).
+ * Creates a manifest file describing a symlink tree.
  *
- * <p>The manifest's format is specifiable by {@link ManifestType}, in accordance with the needs of
- * the calling functionality.
+ * <p>In addition to symlink trees (whose manifests are a tree position -> exec path map), this
+ * action can also create manifest consisting of just exec paths for historical reasons.
  *
- * <p>Note that this action carefully avoids building the manifest content in memory.
+ * <p>This action carefully avoids building the manifest content in memory because it can be large.
  */
 @AutoCodec
 @Immutable // if all ManifestWriter implementations are immutable
@@ -125,14 +125,19 @@ public final class SourceManifestAction extends AbstractFileWriteAction {
   @VisibleForTesting
   public void writeOutputFile(OutputStream out, EventHandler eventHandler)
       throws IOException {
-    writeFile(out, runfiles.getRunfilesInputs(eventHandler, getOwner().getLocation()));
+    writeFile(out,
+        runfiles.getRunfilesInputs(
+            eventHandler,
+            getOwner().getLocation(),
+            ArtifactPathResolver.IDENTITY));
   }
 
   @Override
   public DeterministicWriter newDeterministicWriter(ActionExecutionContext ctx)
       throws IOException {
     final Map<PathFragment, Artifact> runfilesInputs =
-        runfiles.getRunfilesInputs(ctx.getEventHandler(), getOwner().getLocation());
+        runfiles.getRunfilesInputs(ctx.getEventHandler(), getOwner().getLocation(),
+            ctx.getPathResolver());
     return out -> writeFile(out, runfilesInputs);
   }
 

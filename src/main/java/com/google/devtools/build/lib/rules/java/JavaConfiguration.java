@@ -13,14 +13,14 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.java;
 
-import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.base.Ascii;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.StrictDepsMode;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.skylark.annotations.SkylarkConfigurationField;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -28,15 +28,12 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkbuildapi.java.JavaConfigurationApi;
 import com.google.devtools.common.options.TriState;
-import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
 
 /** A java compiler configuration containing the flags required for compilation. */
-@AutoCodec
 @Immutable
 public final class JavaConfiguration extends Fragment implements JavaConfigurationApi {
 
@@ -46,6 +43,8 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     OFF,
     /** JavaBuilder computes the reduced classpath before invoking javac. */
     JAVABUILDER,
+    /** Bazel computes the reduced classpath and tries it in a separate action invocation. */
+    BAZEL
   }
 
   /** Values for the --experimental_one_version_enforcement option */
@@ -74,91 +73,19 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     ERROR
   }
 
-  /**
-   * Values for the --java_optimization_mode option, which controls how Proguard is run over binary
-   * and test targets. Note that for the moment this has no effect when building library targets.
-   */
-  public enum JavaOptimizationMode {
-    /** Proguard is used iff top-level target has {@code proguard_specs} attribute. */
-    LEGACY,
-    /**
-     * No link-time optimizations are applied, regardless of the top-level target's attributes. In
-     * practice this mode skips Proguard completely, rather than invoking Proguard as a no-op.
-     */
-    NOOP("-dontshrink", "-dontoptimize", "-dontobfuscate"),
-    /**
-     * Symbols have different names except where configured not to rename.  This mode is primarily
-     * intended to aid in identifying missing configuration directives that prevent symbols accessed
-     * reflectively etc. from being renamed or removed.
-     */
-    RENAME("-dontshrink", "-dontoptimize"),
-    /**
-     * "Quickly" produce small binary typically without changing code structure.  In practice this
-     * mode removes unreachable code and uses short symbol names except where configured not to
-     * rename or remove.  This mode should build faster than {@link #OPTIMIZE_MINIFY} and may hence
-     * be preferable during development.
-     */
-    FAST_MINIFY("-dontoptimize"),
-    /**
-     * Produce fully optimized binary with short symbol names and unreachable code removed.  Unlike
-     * {@link #FAST_MINIFY}, this mode may apply code transformations, in addition to removing and
-     * renaming code as the configuration allows, to produce a more compact binary.  This mode
-     * should be preferable for producing and testing release binaries.
-     */
-    OPTIMIZE_MINIFY;
-
-    private final String proguardDirectives;
-
-    JavaOptimizationMode(String... donts) {
-      StringBuilder proguardDirectives = new StringBuilder();
-      for (String dont : donts) {
-        checkArgument(dont.startsWith("-dont"), "invalid Proguard directive: %s", dont);
-        proguardDirectives.append(dont).append('\n');
-      }
-      this.proguardDirectives = proguardDirectives.toString();
-    }
-
-    /**
-     * Returns additional Proguard directives necessary for this mode (can be empty).
-     */
-    public String getImplicitProguardDirectives() {
-      return proguardDirectives;
-    }
-
-    /**
-     * Returns true if all affected targets should produce mappings from original to renamed symbol
-     * names, regardless of the proguard_generate_mapping attribute.  This should be the case for
-     * all modes that force symbols to be renamed.  By contrast, the {@link #NOOP} mode will never
-     * produce a mapping file since no symbols are ever renamed.
-     */
-    public boolean alwaysGenerateOutputMapping() {
-      switch (this) {
-        case LEGACY:
-        case NOOP:
-          return false;
-        case RENAME:
-        case FAST_MINIFY:
-        case OPTIMIZE_MINIFY:
-          return true;
-        default:
-          throw new AssertionError("Unexpected mode: " + this);
-      }
-    }
-  }
-
   private final ImmutableList<String> commandLineJavacFlags;
   private final Label javaLauncherLabel;
   private final boolean useIjars;
   private final boolean useHeaderCompilation;
   private final boolean generateJavaDeps;
   private final boolean strictDepsJavaProtos;
-  private final boolean protoGeneratedStrictDeps;
-  private final boolean isJavaProtoExportsEnabled;
+  private final boolean isDisallowStrictDepsForJpl;
   private final OneVersionEnforcementLevel enforceOneVersion;
   private final boolean enforceOneVersionOnJavaTests;
   private final ImportDepsCheckingLevel importDepsCheckingLevel;
   private final boolean allowRuntimeDepsOnNeverLink;
   private final JavaClasspathMode javaClasspath;
+  private final boolean inmemoryJdepsFiles;
   private final ImmutableList<String> defaultJvmFlags;
   private final ImmutableList<String> checkedConstraints;
   private final StrictDepsMode strictJavaDeps;
@@ -167,22 +94,25 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   private final ImmutableList<Label> extraProguardSpecs;
   private final TriState bundleTranslations;
   private final ImmutableList<Label> translationTargets;
-  private final JavaOptimizationMode javaOptimizationMode;
   private final ImmutableMap<String, Optional<Label>> bytecodeOptimizers;
+  private final boolean enforceProguardFileExtension;
   private final Label toolchainLabel;
   private final Label runtimeLabel;
   private final boolean explicitJavaTestDeps;
   private final boolean experimentalTestRunner;
   private final boolean jplPropagateCcLinkParamsStore;
   private final boolean addTestSupportToCompileTimeDeps;
+  private final boolean isJlplStrictDepsEnforced;
   private final ImmutableList<Label> pluginList;
+  private final boolean requireJavaToolchainHeaderCompilerDirect;
+  private final boolean disallowResourceJars;
+  private final boolean loadJavaRulesFromBzl;
+  private final boolean disallowLegacyJavaToolchainFlags;
 
   // TODO(dmarting): remove once we have a proper solution for #2539
   private final boolean useLegacyBazelJavaTest;
 
-  JavaConfiguration(
-      JavaOptions javaOptions)
-      throws InvalidConfigurationException {
+  JavaConfiguration(JavaOptions javaOptions) throws InvalidConfigurationException {
     this.commandLineJavacFlags =
         ImmutableList.copyOf(JavaHelper.tokenizeJavaOptions(javaOptions.javacOpts));
     this.javaLauncherLabel = javaOptions.javaLauncher;
@@ -191,20 +121,20 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.generateJavaDeps =
         javaOptions.javaDeps || javaOptions.javaClasspath != JavaClasspathMode.OFF;
     this.javaClasspath = javaOptions.javaClasspath;
+    this.inmemoryJdepsFiles = javaOptions.inmemoryJdepsFiles;
     this.defaultJvmFlags = ImmutableList.copyOf(javaOptions.jvmOpts);
     this.checkedConstraints = ImmutableList.copyOf(javaOptions.checkedConstraints);
     this.strictJavaDeps = javaOptions.strictJavaDeps;
     this.fixDepsTool = javaOptions.fixDepsTool;
     this.proguardBinary = javaOptions.proguard;
     this.extraProguardSpecs = ImmutableList.copyOf(javaOptions.extraProguardSpecs);
+    this.enforceProguardFileExtension = javaOptions.enforceProguardFileExtension;
     this.bundleTranslations = javaOptions.bundleTranslations;
     this.toolchainLabel = javaOptions.javaToolchain;
     this.runtimeLabel = javaOptions.javaBase;
-    this.javaOptimizationMode = javaOptions.javaOptimizationMode;
     this.useLegacyBazelJavaTest = javaOptions.legacyBazelJavaTest;
     this.strictDepsJavaProtos = javaOptions.strictDepsJavaProtos;
-    this.protoGeneratedStrictDeps = javaOptions.protoGeneratedStrictDeps;
-    this.isJavaProtoExportsEnabled = javaOptions.isJavaProtoExportsEnabled;
+    this.isDisallowStrictDepsForJpl = javaOptions.isDisallowStrictDepsForJpl;
     this.enforceOneVersion = javaOptions.enforceOneVersion;
     this.enforceOneVersionOnJavaTests = javaOptions.enforceOneVersionOnJavaTests;
     this.importDepsCheckingLevel = javaOptions.importDepsCheckingLevel;
@@ -212,6 +142,9 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.explicitJavaTestDeps = javaOptions.explicitJavaTestDeps;
     this.experimentalTestRunner = javaOptions.experimentalTestRunner;
     this.jplPropagateCcLinkParamsStore = javaOptions.jplPropagateCcLinkParamsStore;
+    this.isJlplStrictDepsEnforced = javaOptions.isJlplStrictDepsEnforced;
+    this.disallowResourceJars = javaOptions.disallowResourceJars;
+    this.loadJavaRulesFromBzl = javaOptions.loadJavaRulesFromBzl;
     this.addTestSupportToCompileTimeDeps = javaOptions.addTestSupportToCompileTimeDeps;
 
     ImmutableList.Builder<Label> translationsBuilder = ImmutableList.builder();
@@ -220,8 +153,12 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
         Label label = Label.parseAbsolute(s, ImmutableMap.of());
         translationsBuilder.add(label);
       } catch (LabelSyntaxException e) {
-        throw new InvalidConfigurationException("Invalid translations target '" + s + "', make " +
-            "sure it uses correct absolute path syntax.", e);
+        throw new InvalidConfigurationException(
+            "Invalid translations target '"
+                + s
+                + "', make "
+                + "sure it uses correct absolute path syntax.",
+            e);
       }
     }
     this.translationTargets = translationsBuilder.build();
@@ -236,72 +173,37 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     }
     this.bytecodeOptimizers = optimizersBuilder.build();
     this.pluginList = ImmutableList.copyOf(javaOptions.pluginList);
-  }
+    this.requireJavaToolchainHeaderCompilerDirect =
+        javaOptions.requireJavaToolchainHeaderCompilerDirect;
+    this.disallowLegacyJavaToolchainFlags = javaOptions.disallowLegacyJavaToolchainFlags;
 
-  @AutoCodec.Instantiator
-  JavaConfiguration(
-      ImmutableList<String> commandLineJavacFlags,
-      Label javaLauncherLabel,
-      boolean useIjars,
-      boolean useHeaderCompilation,
-      boolean generateJavaDeps,
-      boolean strictDepsJavaProtos,
-      boolean protoGeneratedStrictDeps,
-      boolean isJavaProtoExportsEnabled,
-      OneVersionEnforcementLevel enforceOneVersion,
-      boolean enforceOneVersionOnJavaTests,
-      ImportDepsCheckingLevel importDepsCheckingLevel,
-      boolean allowRuntimeDepsOnNeverLink,
-      JavaClasspathMode javaClasspath,
-      ImmutableList<String> defaultJvmFlags,
-      ImmutableList<String> checkedConstraints,
-      StrictDepsMode strictJavaDeps,
-      String fixDepsTool,
-      Label proguardBinary,
-      ImmutableList<Label> extraProguardSpecs,
-      TriState bundleTranslations,
-      ImmutableList<Label> translationTargets,
-      JavaOptimizationMode javaOptimizationMode,
-      ImmutableMap<String, Optional<Label>> bytecodeOptimizers,
-      Label toolchainLabel,
-      Label runtimeLabel,
-      boolean explicitJavaTestDeps,
-      boolean experimentalTestRunner,
-      boolean jplPropagateCcLinkParamsStore,
-      boolean addTestSupportToCompileTimeDeps,
-      ImmutableList<Label> pluginList,
-      boolean useLegacyBazelJavaTest) {
-    this.commandLineJavacFlags = commandLineJavacFlags;
-    this.javaLauncherLabel = javaLauncherLabel;
-    this.useIjars = useIjars;
-    this.useHeaderCompilation = useHeaderCompilation;
-    this.generateJavaDeps = generateJavaDeps;
-    this.strictDepsJavaProtos = strictDepsJavaProtos;
-    this.protoGeneratedStrictDeps = protoGeneratedStrictDeps;
-    this.isJavaProtoExportsEnabled = isJavaProtoExportsEnabled;
-    this.enforceOneVersion = enforceOneVersion;
-    this.enforceOneVersionOnJavaTests = enforceOneVersionOnJavaTests;
-    this.importDepsCheckingLevel = importDepsCheckingLevel;
-    this.allowRuntimeDepsOnNeverLink = allowRuntimeDepsOnNeverLink;
-    this.javaClasspath = javaClasspath;
-    this.defaultJvmFlags = defaultJvmFlags;
-    this.checkedConstraints = checkedConstraints;
-    this.strictJavaDeps = strictJavaDeps;
-    this.fixDepsTool = fixDepsTool;
-    this.proguardBinary = proguardBinary;
-    this.extraProguardSpecs = extraProguardSpecs;
-    this.bundleTranslations = bundleTranslations;
-    this.translationTargets = translationTargets;
-    this.javaOptimizationMode = javaOptimizationMode;
-    this.bytecodeOptimizers = bytecodeOptimizers;
-    this.toolchainLabel = toolchainLabel;
-    this.runtimeLabel = runtimeLabel;
-    this.explicitJavaTestDeps = explicitJavaTestDeps;
-    this.experimentalTestRunner = experimentalTestRunner;
-    this.jplPropagateCcLinkParamsStore = jplPropagateCcLinkParamsStore;
-    this.addTestSupportToCompileTimeDeps = addTestSupportToCompileTimeDeps;
-    this.pluginList = pluginList;
-    this.useLegacyBazelJavaTest = useLegacyBazelJavaTest;
+    if (javaOptions.disallowLegacyJavaToolchainFlags) {
+      if (!javaOptions.javaBase.equals(javaOptions.defaultJavaBase())) {
+        throw new InvalidConfigurationException(
+            String.format(
+                "--javabase=%s is no longer supported, use --platforms instead (see #7849)",
+                javaOptions.javaBase));
+      }
+      if (!javaOptions.getHostJavaBase().equals(javaOptions.defaultHostJavaBase())) {
+        throw new InvalidConfigurationException(
+            String.format(
+                "--host_javabase=%s is no longer supported, use --platforms instead (see #7849)",
+                javaOptions.getHostJavaBase()));
+      }
+      if (!javaOptions.javaToolchain.equals(javaOptions.defaultJavaToolchain())) {
+        throw new InvalidConfigurationException(
+            String.format(
+                "--java_toolchain=%s is no longer supported, use --platforms instead (see #7849)",
+                javaOptions.javaToolchain));
+      }
+      if (!javaOptions.hostJavaToolchain.equals(javaOptions.defaultJavaToolchain())) {
+        throw new InvalidConfigurationException(
+            String.format(
+                "--host_java_toolchain=%s is no longer supported, use --platforms instead (see"
+                    + " #7849)",
+                javaOptions.hostJavaToolchain));
+      }
+    }
   }
 
   @Override
@@ -313,20 +215,20 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
 
   @Override
   public String getStrictJavaDepsName() {
-    return strictJavaDeps.name().toLowerCase();
+    return Ascii.toLowerCase(strictJavaDeps.name());
   }
 
   @Override
   public void reportInvalidOptions(EventHandler reporter, BuildOptions buildOptions) {
     if ((bundleTranslations == TriState.YES) && translationTargets.isEmpty()) {
-      reporter.handle(Event.error("Translations enabled, but no message translations specified. " +
-          "Use '--message_translations' to select the message translations to use"));
+      reporter.handle(
+          Event.error(
+              "Translations enabled, but no message translations specified. "
+                  + "Use '--message_translations' to select the message translations to use"));
     }
   }
 
-  /**
-   * Returns true iff Java compilation should use ijars.
-   */
+  /** Returns true iff Java compilation should use ijars. */
   public boolean getUseIjars() {
     return useIjars;
   }
@@ -336,15 +238,17 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return useHeaderCompilation;
   }
 
-  /**
-   * Returns true iff dependency information is generated after compilation.
-   */
+  /** Returns true iff dependency information is generated after compilation. */
   public boolean getGenerateJavaDeps() {
     return generateJavaDeps;
   }
 
   public JavaClasspathMode getReduceJavaClasspath() {
     return javaClasspath;
+  }
+
+  public boolean inmemoryJdepsFiles() {
+    return inmemoryJdepsFiles;
   }
 
   public ImmutableList<String> getDefaultJvmFlags() {
@@ -365,7 +269,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
       case STRICT:
       case DEFAULT:
         return StrictDepsMode.ERROR;
-      default:   // OFF, WARN, ERROR
+      default: // OFF, WARN, ERROR
         return strict;
     }
   }
@@ -375,9 +279,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return fixDepsTool;
   }
 
-  /**
-   * @return proper label only if --java_launcher= is specified, otherwise null.
-   */
+  /** @return proper label only if --java_launcher= is specified, otherwise null. */
   public Label getJavaLauncherLabel() {
     return javaLauncherLabel;
   }
@@ -392,30 +294,27 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return proguardBinary;
   }
 
-  /**
-   * Returns all labels provided with --extra_proguard_specs.
-   */
+  /** Returns all labels provided with --extra_proguard_specs. */
   public ImmutableList<Label> getExtraProguardSpecs() {
     return extraProguardSpecs;
   }
 
-  /**
-   * Returns the raw translation targets.
-   */
+  /** Returns whether ProGuard configuration files are required to use a *.pgcfg extension. */
+  public boolean enforceProguardFileExtension() {
+    return enforceProguardFileExtension;
+  }
+
+  /** Returns the raw translation targets. */
   public ImmutableList<Label> getTranslationTargets() {
     return translationTargets;
   }
 
-  /**
-   * Returns true if the we should build translations.
-   */
+  /** Returns true if the we should build translations. */
   public boolean buildTranslations() {
     return (bundleTranslations != TriState.NO) && !translationTargets.isEmpty();
   }
 
-  /**
-   * Returns whether translations were explicitly disabled.
-   */
+  /** Returns whether translations were explicitly disabled. */
   public boolean isTranslationsDisabled() {
     return bundleTranslations == TriState.NO;
   }
@@ -427,28 +326,18 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
       defaultLabel = "//tools/jdk:toolchain",
       defaultInToolRepository = true)
   public Label getToolchainLabel() {
+    if (disallowLegacyJavaToolchainFlags) {
+      throw new IllegalStateException("--java_toolchain is no longer supported");
+    }
     return toolchainLabel;
   }
 
-  /**
-   * Returns the label of the {@code java_runtime} rule representing the JVM in use.
-   */
+  /** Returns the label of the {@code java_runtime} rule representing the JVM in use. */
   public Label getRuntimeLabel() {
     return runtimeLabel;
   }
 
-  /**
-   * Returns the --java_optimization_mode flag setting. Note that running with a different mode over
-   * the same binary or test target typically invalidates the cached output Jar for that target,
-   * but since Proguard doesn't run on libraries, the outputs for library targets remain valid.
-   */
-  public JavaOptimizationMode getJavaOptimizationMode() {
-    return javaOptimizationMode;
-  }
-
-  /**
-   * Returns ordered list of optimizers to run.
-   */
+  /** Returns ordered list of optimizers to run. */
   public ImmutableMap<String, Optional<Label>> getBytecodeOptimizers() {
     return bytecodeOptimizers;
   }
@@ -481,8 +370,8 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
    * Returns an enum representing whether or not Bazel should attempt to enforce one-version
    * correctness on java_binary rules using the 'oneversion' tool in the java_toolchain.
    *
-   * One-version correctness will inspect for multiple non-identical versions of java classes in the
-   * transitive dependencies for a java_binary.
+   * <p>One-version correctness will inspect for multiple non-identical versions of java classes in
+   * the transitive dependencies for a java_binary.
    */
   public OneVersionEnforcementLevel oneVersionEnforcementLevel() {
     return enforceOneVersion;
@@ -504,12 +393,8 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return strictDepsJavaProtos;
   }
 
-  public boolean isProtoGeneratedStrictDeps() {
-    return protoGeneratedStrictDeps;
-  }
-
-  public boolean isJavaProtoExportsEnabled() {
-    return isJavaProtoExportsEnabled;
+  public boolean isDisallowStrictDepsForJpl() {
+    return isDisallowStrictDepsForJpl;
   }
 
   public boolean jplPropagateCcLinkParamsStore() {
@@ -520,7 +405,24 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return addTestSupportToCompileTimeDeps;
   }
 
-  public List<Label> getPlugins() {
+  public boolean isJlplStrictDepsEnforced() {
+    return isJlplStrictDepsEnforced;
+  }
+
+  @Override
+  public ImmutableList<Label> getPlugins() {
     return pluginList;
+  }
+
+  public boolean requireJavaToolchainHeaderCompilerDirect() {
+    return requireJavaToolchainHeaderCompilerDirect;
+  }
+
+  public boolean disallowResourceJars() {
+    return disallowResourceJars;
+  }
+
+  public boolean loadJavaRulesFromBzl() {
+    return loadJavaRulesFromBzl;
   }
 }

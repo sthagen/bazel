@@ -1,9 +1,6 @@
-package(default_visibility = ["//visibility:private"])
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
-exports_files(
-    ["resources.o"],
-    visibility = ["//src/main/cpp:__pkg__"],
-)
+package(default_visibility = ["//visibility:private"])
 
 filegroup(
     name = "srcs",
@@ -12,44 +9,57 @@ filegroup(
 )
 
 filegroup(
-    name = "cc-srcs",
+    name = "embedded_tools",
     srcs = glob([
         "*.cc",
         "*.h",
-    ]),
-)
-
-filegroup(
-    name = "embedded_tools",
-    srcs = [
+    ]) + [
         "BUILD",
-        ":cc-srcs",
     ],
     visibility = ["//src/main/native:__pkg__"],
 )
 
 cc_library(
     name = "lib-file",
-    srcs = ["file.cc"],
-    hdrs = ["file.h"],
+    srcs = [
+        "file.cc",
+        "util.cc",
+    ],
+    hdrs = [
+        "file.h",
+        "util.h",
+    ],
     visibility = [
         "//src/main/cpp:__subpackages__",
+        "//src/main/tools:__pkg__",
         "//src/test/cpp:__subpackages__",
         "//src/test/native:__subpackages__",
+        "//src/tools/launcher/util:__pkg__",
+        "//tools/test:__pkg__",
     ],
-    deps = [":lib-util"],
 )
 
 cc_library(
-    name = "lib-util",
-    srcs = ["util.cc"],
-    hdrs = ["util.h"],
+    name = "lib-process",
+    srcs = ["process.cc"],
+    hdrs = ["process.h"],
+    visibility = [
+        "//src/main/cpp:__pkg__",
+        "//src/test/native:__subpackages__",
+        "//src/tools/launcher:__pkg__",
+        "//tools/test:__pkg__",
+    ],
+    deps = [":lib-file"],
 )
 
 cc_binary(
     name = "windows_jni.dll",
     srcs = [
-        ":cc-srcs",
+        "file-jni.cc",
+        "jni-util.cc",
+        "jni-util.h",
+        "processes-jni.cc",
+        "sleep_prevention_jni.cc",
         "//src/main/native:jni.h",
         "//src/main/native:jni_md.h",
     ],
@@ -59,4 +69,29 @@ cc_binary(
         "//src/test/java/com/google/devtools/build/lib:__subpackages__",
         "//src/tools/android/java/com/google/devtools/build/android:__subpackages__",
     ],
+    deps = [
+        ":lib-file",
+        ":lib-process",
+    ],
+)
+
+filegroup(
+    name = "embedded_java_tools",
+    srcs = [
+        "file.cc",
+        "file.h",
+        "util.cc",
+        "util.h",
+    ],
+    visibility = ["//src/main/cpp/util:__pkg__"],
+)
+
+# A zip containing source files used by ijar.
+genrule(
+    name = "native_windows_zip",
+    srcs = [":embedded_java_tools"],
+    outs = ["native_windows.zip"],
+    cmd = "$(location //src:zip_files) src/main/native/windows $@ $(SRCS)",
+    tools = ["//src:zip_files"],
+    visibility = ["//src/main/cpp/util:__pkg__"],
 )

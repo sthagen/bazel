@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(
     default_visibility = ["//src:__subpackages__"],
 )
@@ -21,6 +23,5 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/apple",
         "//src/main/java/com/google/devtools/build/skydoc/fakebuildapi",
         "//third_party:guava",
-        "//third_party:jsr305",
     ],
 )

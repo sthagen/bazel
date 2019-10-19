@@ -25,19 +25,18 @@ import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleStaticLibraryInf
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
+import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
-/**
- * Interface for a module with useful functions for creating apple-related rule implementations.
- */
+/** Interface for a module with useful functions for creating apple-related rule implementations. */
 @SkylarkModule(
     name = "apple_common",
-    doc = "Functions for skylark to access internals of the apple rule implementations."
-)
-public interface AppleCommonApi<FileApiT extends FileApi,
+    doc = "Functions for Starlark to access internals of the apple rule implementations.")
+public interface AppleCommonApi<
+    FileApiT extends FileApi,
     ObjcProviderApiT extends ObjcProviderApi<?>,
     XcodeConfigProviderApiT extends XcodeConfigProviderApi<?, ?>,
     ApplePlatformApiT extends ApplePlatformApi> {
@@ -280,84 +279,77 @@ public interface AppleCommonApi<FileApiT extends FileApi,
   public SplitTransitionProviderApi getMultiArchSplitProvider();
 
   @SkylarkCallable(
-    name = "new_objc_provider",
-    doc = "Creates a new ObjcProvider instance.",
-    parameters = {
-      @Param(
-        name = "uses_swift",
-        type = Boolean.class,
-        defaultValue = "False",
-        named = true,
-        positional = false,
-        doc = "Whether this provider should enable Swift support."
-      )
-    },
-    extraKeywords =
+      name = "new_objc_provider",
+      doc = "Creates a new ObjcProvider instance.",
+      parameters = {
         @Param(
-          name = "kwargs",
-          type = SkylarkDict.class,
-          defaultValue = "{}",
-          doc = "Dictionary of arguments."
-        ),
-    useEnvironment = true
-  )
+            name = "uses_swift",
+            type = Boolean.class,
+            defaultValue = "False",
+            named = true,
+            positional = false,
+            doc = "Whether this provider should enable Swift support.")
+      },
+      extraKeywords =
+          @Param(
+              name = "kwargs",
+              type = SkylarkDict.class,
+              defaultValue = "{}",
+              doc = "Dictionary of arguments."),
+      useStarlarkThread = true)
   // This method is registered statically for skylark, and never called directly.
   public ObjcProviderApi<?> newObjcProvider(
-      Boolean usesSwift,
-      SkylarkDict<?, ?> kwargs,
-      Environment environment);
+      Boolean usesSwift, SkylarkDict<?, ?> kwargs, StarlarkThread thread) throws EvalException;
 
   @SkylarkCallable(
-    name = "new_dynamic_framework_provider",
-    doc = "Creates a new AppleDynamicFramework provider instance.",
-    parameters = {
-      @Param(
-        name = "binary",
-        type = FileApi.class,
-        named = true,
-        positional = false,
-        doc = "The dylib binary artifact of the dynamic framework."
-      ),
-      @Param(
-        name = "objc",
-        type = ObjcProviderApi.class,
-        named = true,
-        positional = false,
-        doc =
-            "An ObjcProvider which contains information about the transitive "
-                + "dependencies linked into the binary."
-      ),
-      @Param(
-        name = "framework_dirs",
-        type = SkylarkNestedSet.class,
-        generic1 = String.class,
-        named = true,
-        noneable = true,
-        positional = false,
-        defaultValue = "None",
-        doc =
-            "The framework path names used as link inputs in order to link against the dynamic "
-                + "framework."
-      ),
-      @Param(
-        name = "framework_files",
-        type = SkylarkNestedSet.class,
-        generic1 = FileApi.class,
-        named = true,
-        noneable = true,
-        positional = false,
-        defaultValue = "None",
-        doc =
-            "The full set of artifacts that should be included as inputs to link against the "
-                + "dynamic framework"
-      )
-    }
-  )
+      name = "new_dynamic_framework_provider",
+      doc = "Creates a new AppleDynamicFramework provider instance.",
+      parameters = {
+        @Param(
+            name = "binary",
+            type = FileApi.class,
+            named = true,
+            noneable = true,
+            positional = false,
+            defaultValue = "None",
+            doc = "The dylib binary artifact of the dynamic framework."),
+        @Param(
+            name = "objc",
+            type = ObjcProviderApi.class,
+            named = true,
+            positional = false,
+            doc =
+                "An ObjcProvider which contains information about the transitive "
+                    + "dependencies linked into the binary."),
+        @Param(
+            name = "framework_dirs",
+            type = SkylarkNestedSet.class,
+            generic1 = String.class,
+            named = true,
+            noneable = true,
+            positional = false,
+            defaultValue = "None",
+            doc =
+                "The framework path names used as link inputs in order to link against the dynamic "
+                    + "framework."),
+        @Param(
+            name = "framework_files",
+            type = SkylarkNestedSet.class,
+            generic1 = FileApi.class,
+            named = true,
+            noneable = true,
+            positional = false,
+            defaultValue = "None",
+            doc =
+                "The full set of artifacts that should be included as inputs to link against the "
+                    + "dynamic framework")
+      })
   public AppleDynamicFrameworkInfoApi<?, ?> newDynamicFrameworkProvider(
-      FileApiT dylibBinary,
+      Object dylibBinary,
       ObjcProviderApiT depsObjcProvider,
       Object dynamicFrameworkDirs,
-      Object dynamicFrameworkFiles);
+      Object dynamicFrameworkFiles)
+      throws EvalException;
 
   @SkylarkCallable(
       name = "link_multi_arch_binary",
@@ -365,7 +357,7 @@ public interface AppleCommonApi<FileApiT extends FileApi,
           "Links a (potentially multi-architecture) binary targeting Apple platforms. This "
               + "method comprises a bulk of the logic of the <code>apple_binary</code> rule, and "
               + "is exposed as an API to iterate on migration of <code>apple_binary</code> to "
-              + "Skylark.\n"
+              + "Starlark.\n"
               + "<p>This API is <b>highly experimental</b> and subject to change at any time. Do "
               + "not depend on the stability of this function at this time.",
       parameters = {
@@ -374,26 +366,43 @@ public interface AppleCommonApi<FileApiT extends FileApi,
             type = SkylarkRuleContextApi.class,
             named = true,
             positional = false,
-            doc = "The Skylark rule context."),
+            doc = "The Starlark rule context."),
+        @Param(
+            name = "extra_linkopts",
+            type = SkylarkList.class,
+            generic1 = String.class,
+            named = true,
+            positional = false,
+            defaultValue = "[]",
+            doc = "Extra linkopts to be passed to the linker action."),
+        @Param(
+            name = "extra_link_inputs",
+            type = SkylarkList.class,
+            generic1 = FileApi.class,
+            named = true,
+            positional = false,
+            defaultValue = "[]",
+            doc = "Extra files to pass to the linker action."),
       },
-      useEnvironment = true)
+      useStarlarkThread = true)
   // TODO(b/70937317): Iterate on, improve, and solidify this API.
   public StructApi linkMultiArchBinary(
-      SkylarkRuleContextApi skylarkRuleContext, Environment environment)
+      SkylarkRuleContextApi skylarkRuleContext,
+      SkylarkList<?> extraLinkopts, // <String> expected.
+      SkylarkList<?> extraLinkInputs, // <? extends FileApi> expected.
+      StarlarkThread thread)
       throws EvalException, InterruptedException;
 
   @SkylarkCallable(
-    name = "dotted_version",
-    doc = "Creates a new <a href=\"DottedVersion.html\">DottedVersion</a> instance.",
-    parameters = {
-      @Param(
-        name = "version",
-        type = String.class,
-        doc = "The string representation of the DottedVersion."
-      )
-    }
-  )
-  public DottedVersionApi<?> dottedVersion(String version);
+      name = "dotted_version",
+      doc = "Creates a new <a href=\"DottedVersion.html\">DottedVersion</a> instance.",
+      parameters = {
+        @Param(
+            name = "version",
+            type = String.class,
+            doc = "The string representation of the DottedVersion.")
+      })
+  public DottedVersionApi<?> dottedVersion(String version) throws EvalException;
 
   @SkylarkCallable(
     name = "objc_proto_aspect",

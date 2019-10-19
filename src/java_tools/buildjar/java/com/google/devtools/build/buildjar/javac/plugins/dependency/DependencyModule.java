@@ -37,6 +37,7 @@ import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -63,6 +64,11 @@ public final class DependencyModule {
     /** Fail the build when transitive dependencies are used directly. */
     ERROR
   }
+
+  private static final ImmutableSet<String> SJD_EXEMPT_PROCESSORS =
+      ImmutableSet.of(
+          // Relax strict deps for dagger-generated code (b/17979436).
+          "dagger.internal.codegen.ComponentProcessor");
 
   private final StrictJavaDeps strictJavaDeps;
   private final FixTool fixDepsTool;
@@ -119,7 +125,8 @@ public final class DependencyModule {
    * <p>We collect precise dependency information to allow Blaze to analyze both strict and unused
    * dependencies, as well as packages contained by the output jar.
    */
-  public void emitDependencyInformation(ImmutableList<Path> classpath, boolean successful)
+  public void emitDependencyInformation(
+      ImmutableList<Path> classpath, boolean successful, boolean requiresFallback)
       throws IOException {
     if (outputDepsProtoFile == null) {
       return;
@@ -127,19 +134,23 @@ public final class DependencyModule {
 
     try (BufferedOutputStream out =
         new BufferedOutputStream(Files.newOutputStream(outputDepsProtoFile))) {
-      buildDependenciesProto(classpath, successful).writeTo(out);
+      buildDependenciesProto(classpath, successful, requiresFallback).writeTo(out);
     } catch (IOException ex) {
       throw new IOException("Cannot write dependencies to " + outputDepsProtoFile, ex);
     }
   }
 
   @VisibleForTesting
-  Dependencies buildDependenciesProto(ImmutableList<Path> classpath, boolean successful) {
+  Dependencies buildDependenciesProto(
+      ImmutableList<Path> classpath, boolean successful, boolean requiresFallback) {
     Dependencies.Builder deps = Dependencies.newBuilder();
     if (targetLabel != null) {
       deps.setRuleLabel(targetLabel);
     }
     deps.setSuccess(successful);
+    if (requiresFallback) {
+      deps.setRequiresReducedClasspathFallback(true);
+    }
 
     deps.addAllContainedPackage(
         packages
@@ -204,8 +215,8 @@ public final class DependencyModule {
     return outputDepsProtoFile;
   }
 
-  @VisibleForTesting
-  Set<Path> getUsedClasspath() {
+  /** Returns the classpath that was actually used during the compilation. */
+  public Set<Path> getUsedClasspath() {
     return usedClasspath;
   }
 
@@ -332,7 +343,7 @@ public final class DependencyModule {
     private Path outputDepsProtoFile;
     private boolean strictClasspathMode = false;
     private FixMessage fixMessage = new DefaultFixMessage();
-    private final Set<String> exemptGenerators = new HashSet<>();
+    private final Set<String> exemptGenerators = new LinkedHashSet<>(SJD_EXEMPT_PROCESSORS);
 
     private static class DefaultFixMessage implements FixMessage {
       @Override

@@ -14,7 +14,10 @@
 package com.google.devtools.build.skyframe;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableList;
+import com.google.common.base.Preconditions;
+import com.google.common.graph.GraphBuilder;
+import com.google.common.graph.ImmutableGraph;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.util.GroupedList;
@@ -50,6 +53,9 @@ public interface SkyFunction {
    * <p>This method may return {@link Restart} in rare circumstances. See its docs. Do not return
    * values of this type unless you know exactly what you are doing.
    *
+   * <p>If version information is discovered for the given {@code skyKey}, {@link
+   * Environment#injectVersionForNonHermeticFunction(Version)} may be called on {@code env}.
+   *
    * @throws SkyFunctionException on failure
    * @throws InterruptedException if interrupted
    */
@@ -72,8 +78,8 @@ public interface SkyFunction {
   /**
    * Sentinel {@link SkyValue} type for {@link #compute} to return, indicating that something went
    * wrong, and that the evaluation returning this value must be restarted, and the nodes associated
-   * with the specified keys (which should be direct or transitive dependencies of the failed
-   * evaluation) must also be restarted.
+   * with other keys in {@link #rewindGraph()} (whose directed edges should correspond to the nodes'
+   * direct dependencies) must also be restarted.
    *
    * <p>An intended cause for returning this is external data loss; e.g., if a dependency's
    * "done-ness" is intended to mean that certain data is available in an external system, but
@@ -83,22 +89,24 @@ public interface SkyFunction {
    * <p>Values of this type will <em>never</em> be returned by {@link Environment}'s getValue
    * methods or from {@link NodeEntry#getValue()}.
    *
-   * <p>TODO(mschaller): the ability to specify arbitrary additional keys to restart is error-prone.
-   * It would be safer to require nodes requesting restarts to provide dependency paths, which the
-   * framework could efficiently verify before restarting.
+   * <p>All {@link ListenableFuture}s used in calls to {@link Environment#dependOnFuture} which were
+   * not already complete will be cancelled.
    */
   interface Restart extends SkyValue {
-    Restart SELF = ImmutableList::of;
+    ImmutableGraph<SkyKey> EMPTY_SKYKEY_GRAPH =
+        ImmutableGraph.copyOf(GraphBuilder.directed().allowsSelfLoops(false).build());
 
-    static Restart selfAnd(SkyKey... additionalKeysToRestart) {
-      return selfAnd(ImmutableList.copyOf(additionalKeysToRestart));
+    Restart SELF = () -> EMPTY_SKYKEY_GRAPH;
+
+    static Restart selfAnd(ImmutableGraph<SkyKey> rewindGraph) {
+      Preconditions.checkArgument(
+          rewindGraph.isDirected(), "rewindGraph undirected: %s", rewindGraph);
+      Preconditions.checkArgument(
+          !rewindGraph.allowsSelfLoops(), "rewindGraph allows self loops: %s", rewindGraph);
+      return () -> rewindGraph;
     }
 
-    static Restart selfAnd(ImmutableList<SkyKey> additionalKeysToRestart) {
-      return () -> additionalKeysToRestart;
-    }
-
-    ImmutableList<SkyKey> getAdditionalKeysToRestart();
+    ImmutableGraph<SkyKey> rewindGraph();
   }
 
   /**
@@ -321,10 +329,26 @@ public interface SkyFunction {
     }
 
     /**
+     * Injects non-hermetic {@link Version} information for this environment.
+     *
+     * <p>This may be called during the course of {@link SkyFunction#compute(SkyKey, Environment)}
+     * if the function discovers version information for the {@link SkyKey}.
+     *
+     * <p>Environments that either do not need or wish to ignore non-hermetic version information
+     * may keep the default no-op implementation.
+     */
+    default void injectVersionForNonHermeticFunction(Version version) {}
+
+    /**
      * Register dependencies on keys without necessarily requiring their values.
      *
      * <p>WARNING: Dependencies here MUST be done! Only use this function if you know what you're
      * doing.
+     *
+     * <p>If the {@link EvaluationVersionBehavior} is {@link
+     * EvaluationVersionBehavior#MAX_CHILD_VERSIONS} then this method may fall back to just doing a
+     * {@link #getValues} call internally. Thus, any graph evaluations that require this method to
+     * be performant <i>must</i> run with {@link EvaluationVersionBehavior#GRAPH_VERSION}.
      */
     default void registerDependencies(Iterable<SkyKey> keys) throws InterruptedException {
       getValues(keys);
@@ -333,5 +357,21 @@ public interface SkyFunction {
     /** Returns whether we are currently in error bubbling. */
     @VisibleForTesting
     boolean inErrorBubblingForTesting();
+
+    /**
+     * Adds a dependency on a Skyframe-external event. If the given future is already complete, this
+     * method silently returns without doing anything (to avoid unnecessary function restarts).
+     * Otherwise, Skyframe adds a listener to the passed-in future, and only re-enqueues the current
+     * node after the future completes and all requested deps are done. The added listener will
+     * perform the minimum amount of work on the thread completing the future necessary for Skyframe
+     * bookkeeping.
+     *
+     * <p>Callers of this method must check {@link #valuesMissing} before returning {@code null}
+     * from a {@link SkyFunction}.
+     *
+     * <p>This API is intended for performing async computations (e.g., remote execution) in another
+     * thread pool without blocking the current Skyframe thread.
+     */
+    void dependOnFuture(ListenableFuture<?> future);
   }
 }

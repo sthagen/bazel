@@ -20,6 +20,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -33,20 +34,13 @@ import org.junit.runners.JUnit4;
 /** Tests for RunfilesSupplierImpl */
 @RunWith(JUnit4.class)
 public class RunfilesSupplierImplTest {
-
-  private Path execRoot;
   private ArtifactRoot rootDir;
-  private ArtifactRoot middlemanRoot;
 
   @Before
   public final void setRoot() throws IOException {
     Scratch scratch = new Scratch();
-    execRoot = scratch.getFileSystem().getPath("/");
+    Path execRoot = scratch.getFileSystem().getPath("/");
     rootDir = ArtifactRoot.asDerivedRoot(execRoot, scratch.dir("/fake/root/dont/matter"));
-
-    Path middlemanExecPath = scratch.dir("/still/fake/root/dont/matter");
-    middlemanRoot =
-        ArtifactRoot.middlemanRoot(middlemanExecPath, middlemanExecPath.getChild("subdir"));
   }
 
   @Test
@@ -62,15 +56,20 @@ public class RunfilesSupplierImplTest {
   @Test
   public void testGetManifestsWhenNone() {
     RunfilesSupplier underTest =
-        new RunfilesSupplierImpl(PathFragment.create("ignored"), Runfiles.EMPTY, null);
+        new RunfilesSupplierImpl(PathFragment.create("ignored"), Runfiles.EMPTY);
     assertThat(underTest.getManifests()).isEmpty();
   }
 
   @Test
   public void testGetManifestsWhenSupplied() {
-    Artifact manifest = new Artifact(PathFragment.create("manifest"), rootDir);
+    Artifact manifest = ActionsTestUtil.createArtifact(rootDir, "manifest");
     RunfilesSupplier underTest =
-        new RunfilesSupplierImpl(PathFragment.create("ignored"), Runfiles.EMPTY, manifest);
+        new RunfilesSupplierImpl(
+            PathFragment.create("ignored"),
+            Runfiles.EMPTY,
+            manifest,
+            /* buildRunfileLinks= */ false,
+            /* runfileLinksEnabled= */ false);
     assertThat(underTest.getManifests()).containsExactly(manifest);
   }
 
@@ -81,7 +80,7 @@ public class RunfilesSupplierImplTest {
   private static List<Artifact> mkArtifacts(ArtifactRoot rootDir, String... paths) {
     ImmutableList.Builder<Artifact> builder = ImmutableList.builder();
     for (String path : paths) {
-      builder.add(new Artifact(PathFragment.create(path), rootDir));
+      builder.add(ActionsTestUtil.createArtifact(rootDir, path));
     }
     return builder.build();
   }

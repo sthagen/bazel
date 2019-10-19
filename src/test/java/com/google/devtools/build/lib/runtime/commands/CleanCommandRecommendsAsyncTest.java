@@ -19,10 +19,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration;
-import com.google.devtools.build.lib.bazel.rules.DefaultBuildOptionsForDiffing;
 import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
@@ -90,15 +89,13 @@ public class CleanCommandRecommendsAsyncTest {
             .setProductName(productName)
             .setServerDirectories(serverDirectories)
             .setStartupOptionsProvider(
-                OptionsParser.newOptionsParser(BlazeServerStartupOptions.class))
+                OptionsParser.builder().optionsClasses(BlazeServerStartupOptions.class).build())
             .addBlazeModule(
                 new BlazeModule() {
                   @Override
                   public void initializeRuleClasses(ConfiguredRuleClassProvider.Builder builder) {
                     // We must add these options so that the defaults package can be created.
-                    builder.addConfigurationOptions(BuildConfiguration.Options.class);
-                    // Need to have some defaults values to satisfy DefaultsPackage.getContent()
-                    // TODO(dbabkin): remove when DefaultsPackage been deprecated b/792390529
+                    builder.addConfigurationOptions(CoreOptions.class);
                     builder.addConfigurationOptions(TestConfiguration.TestOptions.class);
                     // The tools repository is needed for createGlobals
                     builder.setToolsRepository(TestConstants.TOOLS_REPOSITORY);
@@ -108,7 +105,7 @@ public class CleanCommandRecommendsAsyncTest {
                 new BlazeModule() {
                   @Override
                   public BuildOptions getDefaultBuildOptions(BlazeRuntime runtime) {
-                    return DefaultBuildOptionsForDiffing.getDefaultBuildOptionsForFragments(
+                    return BuildOptions.getDefaultBuildOptionsForFragments(
                         runtime.getRuleClassProvider().getConfigurationOptions());
                   }
                 })

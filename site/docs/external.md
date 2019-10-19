@@ -42,7 +42,8 @@ filesystem or downloaded from the internet. Users can also write custom
 
 This `WORKSPACE` file uses the same syntax as BUILD files, but allows a
 different set of rules. The full list of built-in rules are in the Build
-Encyclopedia's [Workspace Rules](be/workspace.html).
+Encyclopedia's [Workspace Rules](be/workspace.html) and the documentation
+for [Embedded Starlark Repository Rules](repo/index.html).
 
 <a name="types"></a>
 ## Supported types of external dependencies
@@ -59,8 +60,8 @@ A few basic types of external dependencies can be used:
 If you want to use targets from a second Bazel project, you can
 use
 [`local_repository`](http://docs.bazel.build/be/workspace.html#local_repository),
-[`git_repository`](https://docs.bazel.build/be/workspace.html#git_repository)
-or [`http_archive`](http://docs.bazel.build/be/workspace.html#http_archive)
+[`git_repository`](repo/git.html#git_repository)
+or [`http_archive`](repo/http.html#http_archive)
 to symlink it from the local filesystem, reference a git repository or download
 it (respectively).
 
@@ -79,17 +80,15 @@ local_repository(
 
 If your coworker has a target `//foo:bar`, your project can refer to it as
 `@coworkers_project//foo:bar`. External project names must be
-[valid workspace names](be/functions.html#workspace), so `_` (valid) is used to
+[valid workspace names](skylark/lib/globals.html#workspace), so `_` (valid) is used to
 replace `-` (invalid) in the name `coworkers_project`.
 
 <a name="non-bazel-projects"></a>
 ### Depending on non-Bazel projects
 
-Rules prefixed with `new_` (e.g.,
+Rules prefixed with `new_`, e.g.,
 [`new_local_repository`](http://docs.bazel.build/be/workspace.html#new_local_repository),
-[`new_git_repository`](https://docs.bazel.build/be/workspace.html#new_git_repository)
-and [`new_http_archive`](http://docs.bazel.build/be/workspace.html#new_http_archive)
-) allow you to create targets from projects that do not use Bazel.
+allow you to create targets from projects that do not use Bazel.
 
 For example, suppose you are working on a project, `my-project/`, and you want
 to depend on your coworker's project, `coworkers-project/`. Your coworker's
@@ -122,19 +121,22 @@ files.
 ### Depending on external packages
 
 <a name="maven-repositories"></a>
-#### Maven repositories
+#### Maven artifacts and repositories
 
-Use the rule [`maven_jar`](https://docs.bazel.build/be/workspace.html#maven_jar)
-(and optionally the rule [`maven_server`](https://docs.bazel.build/be/workspace.html#maven_server))
-to download a jar from a Maven repository and make it available as a Java
-dependency.
+Use the ruleset [`rules_jvm_external`](https://github.com/bazelbuild/rules_jvm_external)
+to download artifacts from Maven repositories and make them available as Java
+dependencies.
 
 <a name="fetching-dependencies"></a>
 ## Fetching dependencies
 
 By default, external dependencies are fetched as needed during `bazel build`. If
-you would like to disable this behavior or prefetch dependencies, use
-[`bazel fetch`](http://docs.bazel.build/user-manual.html#fetch).
+you would like to prefetch the dependencies needed for a specific set of targets, use
+[`bazel fetch`](https://docs.bazel.build/versions/master/command-line-reference.html#commands).
+To unconditionally fetch all external dependencies, use
+[`bazel sync`](https://docs.bazel.build/versions/master/command-line-reference.html#commands).
+As fetched repositories are [stored in the output base](#layout), fetching
+happens per workspace.
 
 <a name="shadowing-dependencies"></a>
 ## Shadowing dependencies
@@ -147,6 +149,8 @@ shadow dependencies. Consider the following scenario:
 myproject/WORKSPACE
 
 ```python
+workspace(name = "myproject")
+
 local_repository(
     name = "A",
     path = "../A",
@@ -160,6 +164,8 @@ local_repository(
 A/WORKSPACE
 
 ```python
+workspace(name = "A")
+
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "testrunner",
@@ -171,6 +177,8 @@ http_archive(
 B/WORKSPACE
 
 ```python
+workspace(name = "B")
+
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "testrunner",
@@ -186,6 +194,8 @@ other since they have the same name. To declare both dependencies,
 update myproject/WORKSPACE:
 
 ```python
+workspace(name = "myproject")
+
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "testrunner-v1",
@@ -213,9 +223,6 @@ This mechanism can also be used to join diamonds. For example if `A` and `B`
 had the same dependency but call it by different names, those dependencies can
 be joined in myproject/WORKSPACE.
 
-This behavior is currently gated behind a flag,
-`--experimental_enable_repo_mapping`.
-
 
 <a name="using-proxies"></a>
 ## Using Proxies
@@ -233,21 +240,24 @@ and `C` to your project's `WORKSPACE` file. This requirement can balloon the
 `WORKSPACE` file size, but hopefully limits the chances of having one library
 include `C` at version 1.0 and another include `C` at 2.0.
 
-Large `WORKSPACE` files can be generated using the tool `generate_workspace`.
-For details, see
-[Generate external dependencies from Maven projects](generate-workspace.md).
-
 <a name="caching"></a>
 ## Caching of external dependencies
 
-Bazel caches external dependencies and re-downloads or updates them when
-the `WORKSPACE` file changes.
+By default, Bazel will only re-download external dependencies if their
+definition changes. Changes to files referenced in the definition (e.g., patches
+or `BUILD` files) are also taken into account by bazel.
+
+To force a re-download, use `bazel sync`.
+
 
 <a name="layout"></a>
 ## Layout
 
-External dependencies are all downloaded and symlinked under a directory named
-`external`. You can see this directory by running:
+External dependencies are all downloaded to a directory under the subdirectory
+`external` in the [output base](output_directories.html). In case of a
+[local repository](be/workspace.html#local_repository), a symlink is created
+there instead of creating a new directory.
+You can see the `external` directory by running:
 
 ```
 ls $(bazel info output_base)/external
@@ -255,3 +265,59 @@ ls $(bazel info output_base)/external
 
 Note that running `bazel clean` will not actually delete the external
 directory. To remove all external artifacts, use `bazel clean --expunge`.
+
+## Offline builds
+
+It is sometimes desirable or necessary to run a build in an offline fashion. For
+simple use cases, e.g., traveling on an airplane,
+[prefetching](#fetching-dependencies) the needed
+repositories with `bazel fetch` or `bazel sync` can be enough; moreover, the
+using the option `--nofetch`, fetching of further repositories can be disabled
+during the build.
+
+For true offline builds, where the providing of the needed files is to be done
+by an entity different from bazel, bazel supports the option
+`--distdir`. Whenever a repository rule asks bazel to fetch a file via
+[`ctx.download`](skylark/lib/repository_ctx.html#download) or
+[`ctx.download_and_extract`](skylark/lib/repository_ctx.html#download_and_extract)
+and provides a hash sum of the file
+needed, bazel will first look into the directories specified by that option for
+a file matching the basename of the first URL provided, and use that local copy
+if the hash matches.
+
+Bazel itself uses this technique to bootstrap offline from the [distribution
+artifact](https://bazel.build/designs/2016/10/11/distribution-artifact.html).
+It does so by [collecting all the needed external
+dependencies](https://github.com/bazelbuild/bazel/blob/5cfa0303d6ac3b5bd031ff60272ce80a704af8c2/WORKSPACE#L116)
+in an internal
+[`distdir_tar`](https://github.com/bazelbuild/bazel/blob/5cfa0303d6ac3b5bd031ff60272ce80a704af8c2/distdir.bzl#L44).
+
+However, bazel allows the exeuction of arbitrary commands in repository rules,
+without knowing if they call out to the network. Therefore, bazel has no option
+to enforce builds being fully offline. So testing if a build works correctly
+offline requires external blocking of the network, as bazel does in its
+bootstrap test.
+
+## Best practices
+
+### Repository rules
+
+Prefer [`http_archive`](repo/http.html#http_archive) to `git_repository` and
+`new_git_repository`.
+
+Do not use `bind()`.  See "[Consider removing
+bind](https://github.com/bazelbuild/bazel/issues/1952)" for a long discussion of its issues and
+alternatives.
+
+### Repository rules
+
+A repository rule should generally be responsible for:
+
+-  Detecting system settings and writing them to files.
+-  Finding resources elsewhere on the system.
+-  Downloading resources from URLs.
+-  Generating or symlinking BUILD files into the external repository directory.
+
+Avoid using `repository_ctx.execute` when possible.  For example, when using a non-Bazel C++
+library that has a build using Make, it is preferable to use `repository_ctx.download()` and then
+write a BUILD file that builds it, instead of running `ctx.execute(["make"])`.

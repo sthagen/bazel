@@ -16,15 +16,9 @@ package com.google.devtools.build.docgen;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
-import com.google.devtools.build.docgen.skylark.SkylarkModuleDoc;
-import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
-import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
-import java.util.Map;
-import java.util.TreeMap;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -35,22 +29,7 @@ import org.junit.runners.JUnit4;
  * anywhere in the classpath.
  */
 @RunWith(JUnit4.class)
-public class SkylarkDocumentationFailuresTest extends SkylarkTestCase {
-
-  @Before
-  public final void createBuildFile() throws Exception {
-    scratch.file("foo/BUILD",
-        "genrule(name = 'foo',",
-        "  cmd = 'dummy_cmd',",
-        "  srcs = ['a.txt', 'b.img'],",
-        "  tools = ['t.exe'],",
-        "  outs = ['c.txt'])");
-  }
-
-  @Override
-  protected EvaluationTestCase createEvaluationTestCase(SkylarkSemantics semantics) {
-    return new EvaluationTestCase();
-  }
+public final class SkylarkDocumentationFailuresTest {
 
   /** MockClassCommonNameOne */
   @SkylarkModule(name = "MockClassCommonName",
@@ -91,15 +70,12 @@ public class SkylarkDocumentationFailuresTest extends SkylarkTestCase {
 
   @Test
   public void testModuleNameConflict() {
-    IllegalStateException expected =
-        assertThrows(IllegalStateException.class, () -> collect(PointsToCommonName.class));
-    assertThat(expected.getMessage()).contains("are both modules with the same documentation");
-  }
-
-  private Map<String, SkylarkModuleDoc> collect(Class<?> classObject) {
-    Map<String, SkylarkModuleDoc> modules = new TreeMap<>();
-    SkylarkDocumentationCollector.collectJavaObjects(
-        classObject.getAnnotation(SkylarkModule.class), classObject, modules);
-    return modules;
+    IllegalStateException ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                SkylarkDocumentationCollector.collectModules(
+                    ImmutableList.of(PointsToCommonName.class)));
+    assertThat(ex).hasMessageThat().contains("are both modules with the same documentation");
   }
 }

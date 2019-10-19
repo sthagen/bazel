@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.analysis.util.ActionTester;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
 import com.google.devtools.build.lib.util.io.FileOutErr;
@@ -53,6 +54,9 @@ public abstract class FileWriteActionTestCase extends BuildViewTestCase {
     action = createAction(NULL_ACTION_OWNER, outputArtifact, "Hello World", false);
   }
 
+  protected abstract Action createAction(
+      ActionOwner actionOwner, Artifact outputArtifact, String data, boolean makeExecutable);
+
   @Before
   public final void createExecutorAndContext() throws Exception {
     BinTools binTools = BinTools.forUnitTesting(directories, analysisMock.getEmbeddedTools());
@@ -65,15 +69,13 @@ public abstract class FileWriteActionTestCase extends BuildViewTestCase {
             actionKeyContext,
             null,
             new FileOutErr(),
+            new StoredEventHandler(),
             ImmutableMap.<String, String>of(),
             ImmutableMap.of(),
             null,
             null,
             null);
   }
-
-  protected abstract Action createAction(
-      ActionOwner actionOwner, Artifact outputArtifact, String data, boolean makeExecutable);
 
   protected void checkNoInputsByDefault() {
     assertThat(action.getInputs()).isEmpty();

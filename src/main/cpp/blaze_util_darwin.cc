@@ -21,7 +21,9 @@
 #include <sys/un.h>
 
 #include <libproc.h>
+#include <pthread/spawn.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -32,10 +34,12 @@
 #include <cstring>
 
 #include "src/main/cpp/blaze_util.h"
+#include "src/main/cpp/startup_options.h"
 #include "src/main/cpp/util/errors.h"
 #include "src/main/cpp/util/exit_code.h"
 #include "src/main/cpp/util/file.h"
 #include "src/main/cpp/util/logging.h"
+#include "src/main/cpp/util/path.h"
 #include "src/main/cpp/util/strings.h"
 
 namespace blaze {
@@ -95,11 +99,12 @@ string GetOutputRoot() {
   return "/var/tmp";
 }
 
-void WarnFilesystemType(const string& output_base) {
+void WarnFilesystemType(const blaze_util::Path &output_base) {
   // Check to see if we are on a non-local drive.
   CFScopedReleaser<CFURLRef> cf_url(CFURLCreateFromFileSystemRepresentation(
-      kCFAllocatorDefault, reinterpret_cast<const UInt8 *>(output_base.c_str()),
-      output_base.length(), true));
+      kCFAllocatorDefault,
+      reinterpret_cast<const UInt8 *>(output_base.AsNativePath().c_str()),
+      output_base.AsNativePath().length(), true));
   CFBooleanRef cf_local = NULL;
   CFErrorRef cf_error = NULL;
   if (!cf_url.isValid() ||
@@ -107,13 +112,13 @@ void WarnFilesystemType(const string& output_base) {
                                        &cf_local, &cf_error)) {
     CFScopedReleaser<CFErrorRef> cf_error_releaser(cf_error);
     BAZEL_LOG(WARNING) << "couldn't get file system type information for '"
-                       << output_base
+                       << output_base.AsPrintablePath()
                        << "': " << DescriptionFromCFError(cf_error_releaser);
     return;
   }
   CFScopedReleaser<CFBooleanRef> cf_local_releaser(cf_local);
   if (!CFBooleanGetValue(cf_local_releaser)) {
-    BAZEL_LOG(WARNING) << "Output base '" << output_base
+    BAZEL_LOG(WARNING) << "Output base '" << output_base.AsPrintablePath()
                        << "' is on a non-local drive. This may lead to "
                           "surprising failures and undetermined behavior.";
   }
@@ -146,13 +151,13 @@ void SetScheduling(bool batch_cpu_scheduling, int io_nice_level) {
   // stubbed out so we can compile for Darwin.
 }
 
-string GetProcessCWD(int pid) {
+blaze_util::Path GetProcessCWD(int pid) {
   struct proc_vnodepathinfo info = {};
   if (proc_pidinfo(
           pid, PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info)) {
-    return "";
+    return blaze_util::Path();
   }
-  return string(info.pvi_cdir.vip_path);
+  return blaze_util::Path(string(info.pvi_cdir.vip_path));
 }
 
 bool IsSharedLibrary(const string &filename) {
@@ -160,9 +165,14 @@ bool IsSharedLibrary(const string &filename) {
 }
 
 string GetSystemJavabase() {
-  string java_home = GetEnv("JAVA_HOME");
+  string java_home = GetPathEnv("JAVA_HOME");
   if (!java_home.empty()) {
-    return java_home;
+    string javac = blaze_util::JoinPath(java_home, "bin/javac");
+    if (access(javac.c_str(), X_OK) == 0) {
+      return java_home;
+    }
+    BAZEL_LOG(WARNING)
+        << "Ignoring JAVA_HOME, because it must point to a JDK, not a JRE.";
   }
 
   // java_home will print a warning if no JDK could be found
@@ -187,11 +197,15 @@ string GetSystemJavabase() {
   return javabase.substr(0, javabase.length()-1);
 }
 
-void WriteSystemSpecificProcessIdentifier(
-    const string& server_dir, pid_t server_pid) {
+int ConfigureDaemonProcess(posix_spawnattr_t *attrp,
+                           const StartupOptions &options) {
+  return posix_spawnattr_set_qos_class_np(attrp, options.macos_qos_class);
 }
 
-bool VerifyServerProcess(int pid, const string &output_base) {
+void WriteSystemSpecificProcessIdentifier(const blaze_util::Path &server_dir,
+                                          pid_t server_pid) {}
+
+bool VerifyServerProcess(int pid, const blaze_util::Path &output_base) {
   // TODO(lberki): This only checks for the process's existence, not whether
   // its start time matches. Therefore this might accidentally kill an
   // unrelated process if the server died and the PID got reused.
@@ -200,19 +214,22 @@ bool VerifyServerProcess(int pid, const string &output_base) {
 
 // Sets a flag on path to exclude the path from Apple's automatic backup service
 // (Time Machine)
-void ExcludePathFromBackup(const string &path) {
+void ExcludePathFromBackup(const blaze_util::Path &path) {
   CFScopedReleaser<CFURLRef> cf_url(CFURLCreateFromFileSystemRepresentation(
-      kCFAllocatorDefault, reinterpret_cast<const UInt8 *>(path.c_str()),
-      path.length(), true));
+      kCFAllocatorDefault,
+      reinterpret_cast<const UInt8 *>(path.AsNativePath().c_str()),
+      path.AsNativePath().length(), true));
   if (!cf_url.isValid()) {
-    BAZEL_LOG(WARNING) << "unable to exclude '" << path << "' from backups";
+    BAZEL_LOG(WARNING) << "unable to exclude '" << path.AsPrintablePath()
+                       << "' from backups";
     return;
   }
   CFErrorRef cf_error = NULL;
   if (!CFURLSetResourcePropertyForKey(cf_url, kCFURLIsExcludedFromBackupKey,
                                       kCFBooleanTrue, &cf_error)) {
     CFScopedReleaser<CFErrorRef> cf_error_releaser(cf_error);
-    BAZEL_LOG(WARNING) << "unable to exclude '" << path << "' from backups: "
+    BAZEL_LOG(WARNING) << "unable to exclude '" << path.AsPrintablePath()
+                       << "' from backups: "
                        << DescriptionFromCFError(cf_error_releaser);
     return;
   }

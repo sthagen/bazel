@@ -14,8 +14,10 @@
 package com.google.devtools.build.lib.pkgcache;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static org.junit.Assert.fail;
 
+import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -34,15 +36,13 @@ import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
-import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.SkylarkSemanticsOptions;
+import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
 import com.google.devtools.build.lib.packages.Target;
+import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
-import com.google.devtools.build.lib.skyframe.DiffAwareness;
-import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
-import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
-import com.google.devtools.build.lib.syntax.BuildFileAST;
+import com.google.devtools.build.lib.syntax.StarlarkFile;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -50,7 +50,7 @@ import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.Root;
-import com.google.devtools.common.options.InvocationPolicyEnforcer;
+import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import java.io.IOException;
@@ -100,28 +100,20 @@ public class PackageCacheTest extends FoundationTestCase {
       throw new RuntimeException(e);
     }
     skyframeExecutor =
-        SequencedSkyframeExecutor.create(
-            packageFactoryBuilder.build(ruleClassProvider),
-            fileSystem,
-            directories,
-            actionKeyContext,
-            /* workspaceStatusActionFactory= */ null,
-            ruleClassProvider.getBuildInfoFactories(),
-            ImmutableList.<DiffAwareness.Factory>of(),
-            analysisMock.getSkyFunctions(directories),
-            ImmutableList.<SkyValueDirtinessChecker>of(),
-            BazelSkyframeExecutorConstants.HARDCODED_BLACKLISTED_PACKAGE_PREFIXES,
-            BazelSkyframeExecutorConstants.ADDITIONAL_BLACKLISTED_PACKAGE_PREFIXES_FILE,
-            BazelSkyframeExecutorConstants.CROSS_REPOSITORY_LABEL_VIOLATION_STRATEGY,
-            BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY,
-            BazelSkyframeExecutorConstants.ACTION_ON_IO_EXCEPTION_READING_BUILD_FILE,
-            defaultBuildOptions);
+        BazelSkyframeExecutorConstants.newBazelSkyframeExecutorBuilder()
+            .setPkgFactory(packageFactoryBuilder.build(ruleClassProvider, fileSystem))
+            .setFileSystem(fileSystem)
+            .setDirectories(directories)
+            .setActionKeyContext(actionKeyContext)
+            .setDefaultBuildOptions(defaultBuildOptions)
+            .setExtraSkyFunctions(analysisMock.getSkyFunctions(directories))
+            .build();
     TestConstants.processSkyframeExecutorForTesting(skyframeExecutor);
     setUpSkyframe(parsePackageCacheOptions(), parseSkylarkSemanticsOptions());
   }
 
   private void setUpSkyframe(
-      PackageCacheOptions packageCacheOptions, SkylarkSemanticsOptions skylarkSemanticsOptions) {
+      PackageCacheOptions packageCacheOptions, StarlarkSemanticsOptions starlarkSemanticsOptions) {
     PathPackageLocator pkgLocator =
         PathPackageLocator.create(
             null,
@@ -132,11 +124,15 @@ public class PackageCacheTest extends FoundationTestCase {
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY);
     packageCacheOptions.showLoadingProgress = true;
     packageCacheOptions.globbingThreads = 7;
+    skyframeExecutor.injectExtraPrecomputedValues(
+        ImmutableList.of(
+            PrecomputedValue.injected(
+                RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE,
+                Optional.<RootedPath>absent())));
     skyframeExecutor.preparePackageLoading(
         pkgLocator,
         packageCacheOptions,
-        skylarkSemanticsOptions,
-        analysisMock.getDefaultsPackageContent(),
+        starlarkSemanticsOptions,
         UUID.randomUUID(),
         ImmutableMap.<String, String>of(),
         new TimestampGranularityMonitor(BlazeClock.instance()));
@@ -147,16 +143,11 @@ public class PackageCacheTest extends FoundationTestCase {
 
   private OptionsParser parse(String... options) throws Exception {
     OptionsParser parser =
-        OptionsParser.newOptionsParser(PackageCacheOptions.class, SkylarkSemanticsOptions.class);
+        OptionsParser.builder()
+            .optionsClasses(PackageCacheOptions.class, StarlarkSemanticsOptions.class)
+            .build();
     parser.parse("--default_visibility=public");
     parser.parse(options);
-
-    InvocationPolicyEnforcer optionsPolicyEnforcer = analysisMock.getInvocationPolicyEnforcer();
-    try {
-      optionsPolicyEnforcer.enforce(parser);
-    } catch (OptionsParsingException e) {
-      throw new IllegalStateException(e);
-    }
 
     return parser;
   }
@@ -165,8 +156,9 @@ public class PackageCacheTest extends FoundationTestCase {
     return parse(options).getOptions(PackageCacheOptions.class);
   }
 
-  private SkylarkSemanticsOptions parseSkylarkSemanticsOptions(String... options) throws Exception {
-    return parse(options).getOptions(SkylarkSemanticsOptions.class);
+  private StarlarkSemanticsOptions parseSkylarkSemanticsOptions(String... options)
+      throws Exception {
+    return parse(options).getOptions(StarlarkSemanticsOptions.class);
   }
 
   protected void setOptions(String... options) throws Exception {
@@ -203,12 +195,9 @@ public class PackageCacheTest extends FoundationTestCase {
 
   // Check that a substring is present in an error message.
   private void checkGetPackageFails(String packageName, String expectedMessage) throws Exception {
-    try {
-      getPackage(packageName);
-      fail();
-    } catch (NoSuchPackageException e) {
-      assertThat(e).hasMessageThat().contains(expectedMessage);
-    }
+    NoSuchPackageException e =
+        assertThrows(NoSuchPackageException.class, () -> getPackage(packageName));
+    assertThat(e).hasMessageThat().contains(expectedMessage);
   }
 
   @Test
@@ -216,22 +205,21 @@ public class PackageCacheTest extends FoundationTestCase {
     createPkg1();
     Package pkg1 = getPackage("pkg1");
     assertThat(pkg1.getName()).isEqualTo("pkg1");
-    assertThat(pkg1.getFilename().toString()).isEqualTo("/workspace/pkg1/BUILD");
+    assertThat(pkg1.getFilename().asPath().getPathString()).isEqualTo("/workspace/pkg1/BUILD");
     assertThat(getPackageManager().getPackage(reporter, PackageIdentifier.createInMainRepo("pkg1")))
-        .isSameAs(pkg1);
+        .isSameInstanceAs(pkg1);
   }
 
   @Test
   public void testASTIsNotRetained() throws Exception {
     createPkg1();
     Package pkg1 = getPackage("pkg1");
-    MoreAsserts.assertInstanceOfNotReachable(pkg1, BuildFileAST.class);
+    MoreAsserts.assertInstanceOfNotReachable(pkg1, StarlarkFile.class);
   }
 
   @Test
   public void testGetNonexistentPackage() throws Exception {
-    checkGetPackageFails(
-        "not-there", "no such package 'not-there': " + "BUILD file not found on package path");
+    checkGetPackageFails("not-there", "no such package 'not-there': " + "BUILD file not found");
   }
 
   @Test
@@ -253,15 +241,13 @@ public class PackageCacheTest extends FoundationTestCase {
   @Test
   public void testGetNonexistentTarget() throws Exception {
     createPkg1();
-    try {
-      getTarget("//pkg1:not-there");
-      fail();
-    } catch (NoSuchTargetException e) {
-      assertThat(e)
-          .hasMessage(
-              "no such target '//pkg1:not-there': target 'not-there' "
-                  + "not declared in package 'pkg1' defined by /workspace/pkg1/BUILD");
-    }
+    NoSuchTargetException e =
+        assertThrows(NoSuchTargetException.class, () -> getTarget("//pkg1:not-there"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "no such target '//pkg1:not-there': target 'not-there' "
+                + "not declared in package 'pkg1' defined by /workspace/pkg1/BUILD");
   }
 
   /**
@@ -270,19 +256,16 @@ public class PackageCacheTest extends FoundationTestCase {
    */
   @Test
   public void testRepeatedAttemptsToParseMissingPackage() throws Exception {
-    checkGetPackageFails(
-        "missing", "no such package 'missing': " + "BUILD file not found on package path");
+    checkGetPackageFails("missing", "no such package 'missing': " + "BUILD file not found");
 
     // Still missing:
-    checkGetPackageFails(
-        "missing", "no such package 'missing': " + "BUILD file not found on package path");
+    checkGetPackageFails("missing", "no such package 'missing': " + "BUILD file not found");
 
     // Update the BUILD file on disk so "missing" is no longer missing:
     scratch.file("missing/BUILD", "# an ok build file");
 
     // Still missing:
-    checkGetPackageFails(
-        "missing", "no such package 'missing': " + "BUILD file not found on package path");
+    checkGetPackageFails("missing", "no such package 'missing': " + "BUILD file not found");
 
     invalidatePackages();
 
@@ -312,12 +295,9 @@ public class PackageCacheTest extends FoundationTestCase {
     Path brokenBuildFile = scratch.file("broken/BUILD");
     brokenBuildFile.setReadable(false);
 
-    try {
-      getPackage("broken");
-      fail();
-    } catch (BuildFileContainsErrorsException e) {
-      assertThat(e).hasMessageThat().contains("/workspace/broken/BUILD (Permission denied)");
-    }
+    BuildFileContainsErrorsException e =
+        assertThrows(BuildFileContainsErrorsException.class, () -> getPackage("broken"));
+    assertThat(e).hasMessageThat().contains("/workspace/broken/BUILD (Permission denied)");
     eventCollector.clear();
 
     // Update the BUILD file on disk so "broken" is no longer broken:
@@ -340,16 +320,16 @@ public class PackageCacheTest extends FoundationTestCase {
     setOptions("--package_path=/workspace:/otherroot");
 
     Package oldPkg = getPackage("pkg");
-    assertThat(getPackage("pkg")).isSameAs(oldPkg); // change not yet visible
-    assertThat(oldPkg.getFilename()).isEqualTo(buildFile1);
+    assertThat(getPackage("pkg")).isSameInstanceAs(oldPkg); // change not yet visible
+    assertThat(oldPkg.getFilename().asPath()).isEqualTo(buildFile1);
     assertThat(oldPkg.getSourceRoot()).isEqualTo(Root.fromPath(rootDirectory));
 
     buildFile1.delete();
     invalidatePackages();
 
     Package newPkg = getPackage("pkg");
-    assertThat(newPkg).isNotSameAs(oldPkg);
-    assertThat(newPkg.getFilename()).isEqualTo(buildFile2);
+    assertThat(newPkg).isNotSameInstanceAs(oldPkg);
+    assertThat(newPkg.getFilename().asPath()).isEqualTo(buildFile2);
     assertThat(newPkg.getSourceRoot()).isEqualTo(Root.fromPath(scratch.dir("/otherroot")));
 
     // TODO(bazel-team): (2009) test BUILD file moves in the other direction too.
@@ -502,9 +482,7 @@ public class PackageCacheTest extends FoundationTestCase {
 
     // now:
     assertPackageLoadingFails(
-        "pkg",
-        "Label '//pkg:x/y.cc' crosses boundary of subpackage 'pkg/x' "
-            + "(perhaps you meant to put the colon here: '//pkg/x:y.cc'?)");
+        "pkg", "Label '//pkg:x/y.cc' is invalid because 'pkg/x' is a subpackage");
   }
 
   @Test
@@ -518,7 +496,8 @@ public class PackageCacheTest extends FoundationTestCase {
     // root.  It's as if we've merged c and c/d in the first root.
 
     // c/d is still a subpackage--found in the second root:
-    assertThat(getPackage("c/d").getFilename()).isEqualTo(rootDir2.getRelative("c/d/BUILD"));
+    assertThat(getPackage("c/d").getFilename().asPath())
+        .isEqualTo(rootDir2.getRelative("c/d/BUILD"));
 
     // Subpackage labels are still valid...
     assertLabelValidity(true, "//c/d:foo.txt");
@@ -526,8 +505,8 @@ public class PackageCacheTest extends FoundationTestCase {
     assertLabelValidity(false, "//c:d/x");
     assertPackageLoadingFails(
         "c",
-        "Label '//c:d/x' crosses boundary of subpackage 'c/d' (have you deleted c/d/BUILD? "
-            + "If so, use the --deleted_packages=c/d option)");
+        "Label '//c:d/x' is invalid because 'c/d' is a subpackage; have you deleted c/d/BUILD? "
+            + "If so, use the --deleted_packages=c/d option");
 
     assertThat(getPackageManager().isPackage(reporter, PackageIdentifier.createInMainRepo("c/d")))
         .isTrue();
@@ -540,14 +519,11 @@ public class PackageCacheTest extends FoundationTestCase {
 
     // c/d is no longer a subpackage--even though there's a BUILD file in the
     // second root:
-    try {
-      getPackage("c/d");
-      fail();
-    } catch (NoSuchPackageException e) {
-      assertThat(e)
-          .hasMessage(
-              "no such package 'c/d': Package is considered deleted due to --deleted_packages");
-    }
+    NoSuchPackageException e = assertThrows(NoSuchPackageException.class, () -> getPackage("c/d"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "no such package 'c/d': Package is considered deleted due to --deleted_packages");
 
     // Labels in the subpackage are no longer valid...
     assertLabelValidity(false, "//c/d:x");
@@ -561,8 +537,7 @@ public class PackageCacheTest extends FoundationTestCase {
         "peach/BUILD",
         "package(features = ['crosstool_default_false'])",
         "cc_library(name = 'cc', srcs = ['cc.cc'])");
-    Rule cc = (Rule) getTarget("//peach:cc");
-    assertThat(cc.getFeatures()).hasSize(1);
+    assertThat(getPackage("peach").getFeatures()).hasSize(1);
   }
 
   @Test

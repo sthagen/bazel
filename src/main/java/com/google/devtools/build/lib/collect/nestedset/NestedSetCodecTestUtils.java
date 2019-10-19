@@ -104,8 +104,8 @@ public class NestedSetCodecTestUtils {
       boolean assertSymmetricEquality) {
     return (subject, deserialized) -> {
       if (assertSymmetricEquality) {
-        assertThat(subject).isEqualTo(deserialized);
         assertThat(deserialized).isEqualTo(subject);
+        assertThat(subject).isEqualTo(deserialized);
       }
       assertThat(subject.getOrder()).isEqualTo(deserialized.getOrder());
       assertThat(subject.toSet()).isEqualTo(deserialized.toSet());
@@ -115,7 +115,7 @@ public class NestedSetCodecTestUtils {
 
   private static void verifyStructure(Object lhs, Object rhs) {
     if (lhs == NestedSet.EMPTY_CHILDREN) {
-      assertThat(rhs).isSameAs(NestedSet.EMPTY_CHILDREN);
+      assertThat(rhs).isSameInstanceAs(NestedSet.EMPTY_CHILDREN);
     } else if (lhs instanceof Object[]) {
       assertThat(rhs).isInstanceOf(Object[].class);
       Object[] lhsArray = (Object[]) lhs;

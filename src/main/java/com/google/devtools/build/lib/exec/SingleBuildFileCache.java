@@ -16,12 +16,13 @@ package com.google.devtools.build.lib.exec;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.DigestOfDirectoryException;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.MetadataProvider;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.Symlinks;
 import java.io.IOException;
 import java.util.concurrent.ExecutionException;
 import javax.annotation.Nullable;
@@ -60,12 +61,10 @@ public class SingleBuildFileCache implements MetadataProvider {
           .get(
               input.getExecPathString(),
               () -> {
-                Path path =
-                    (input instanceof Artifact)
-                        ? ((Artifact) input).getPath()
-                        : execRoot.getRelative(input.getExecPath());
+                Path path = ActionInputHelper.toInputPath(input, execRoot);
                 try {
-                  FileArtifactValue metadata = FileArtifactValue.create(path);
+                  FileArtifactValue metadata =
+                      FileArtifactValue.createFromStat(path, path.stat(Symlinks.FOLLOW), true);
                   if (metadata.getType().isDirectory()) {
                     throw new DigestOfDirectoryException(
                         "Input is a directory: " + input.getExecPathString());

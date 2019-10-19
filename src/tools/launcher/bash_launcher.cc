@@ -30,6 +30,14 @@ static constexpr const char* BASH_BIN_PATH = "bash_bin_path";
 
 ExitCode BashBinaryLauncher::Launch() {
   wstring bash_binary = this->GetLaunchInfoByKey(BASH_BIN_PATH);
+
+  // If bash_binary is already "bash" or "bash.exe", that means we want to
+  // rely on the shell binary in PATH, no need to do Rlocation.
+  if (GetBinaryPathWithoutExtension(bash_binary) != L"bash") {
+    // Rlocation returns the original path if bash_binary is an absolute path.
+    bash_binary = this->Rlocation(bash_binary, true);
+  }
+
   if (DoesFilePathExist(bash_binary.c_str())) {
     wstring bash_bin_dir = GetParentDirFromPath(bash_binary);
     wstring path_env;
@@ -45,18 +53,15 @@ ExitCode BashBinaryLauncher::Launch() {
   vector<wstring> origin_args = this->GetCommandlineArguments();
   wostringstream bash_command;
   wstring bash_main_file = GetBinaryPathWithoutExtension(origin_args[0]);
-  bash_command << GetEscapedArgument(bash_main_file,
-                                     /*escape_backslash = */ true);
+  bash_command << BashEscapeArg(bash_main_file);
   for (int i = 1; i < origin_args.size(); i++) {
     bash_command << L' ';
-    bash_command << GetEscapedArgument(origin_args[i],
-                                       /*escape_backslash = */ true);
+    bash_command << BashEscapeArg(origin_args[i]);
   }
 
   vector<wstring> args;
   args.push_back(L"-c");
-  args.push_back(
-      GetEscapedArgument(bash_command.str(), /*escape_backslash = */ true));
+  args.push_back(BashEscapeArg(bash_command.str()));
   return this->LaunchProcess(bash_binary, args);
 }
 

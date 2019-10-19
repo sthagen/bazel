@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.rules.platform;
 
-import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
@@ -27,6 +26,7 @@ import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTa
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.platform.DeclaredToolchainInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
+import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType;
 
@@ -37,8 +37,9 @@ public class Toolchain implements RuleConfiguredTargetFactory {
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
 
-    Label toolchainType =
-        ruleContext.attributes().get(ToolchainRule.TOOLCHAIN_TYPE_ATTR, BuildType.NODEP_LABEL);
+    ToolchainTypeInfo toolchainType =
+        PlatformProviderUtils.toolchainType(
+            ruleContext.getPrerequisite(ToolchainRule.TOOLCHAIN_TYPE_ATTR, Mode.DONT_CHECK));
     Iterable<ConstraintValueInfo> execConstraints =
         PlatformProviderUtils.constraintValues(
             ruleContext.getPrerequisites(ToolchainRule.EXEC_COMPATIBLE_WITH_ATTR, Mode.DONT_CHECK));
@@ -46,16 +47,30 @@ public class Toolchain implements RuleConfiguredTargetFactory {
         PlatformProviderUtils.constraintValues(
             ruleContext.getPrerequisites(
                 ToolchainRule.TARGET_COMPATIBLE_WITH_ATTR, Mode.DONT_CHECK));
-    // TODO(katre): warn if null.
     Label toolchainLabel =
         ruleContext.attributes().get(ToolchainRule.TOOLCHAIN_ATTR, BuildType.NODEP_LABEL);
 
-    DeclaredToolchainInfo registeredToolchain =
-        DeclaredToolchainInfo.create(
-            toolchainType,
-            ImmutableList.copyOf(execConstraints),
-            ImmutableList.copyOf(targetConstraints),
-            toolchainLabel);
+    DeclaredToolchainInfo registeredToolchain;
+    try {
+      registeredToolchain =
+          DeclaredToolchainInfo.builder()
+              .toolchainType(toolchainType)
+              .addExecConstraints(execConstraints)
+              .addTargetConstraints(targetConstraints)
+              .toolchainLabel(toolchainLabel)
+              .build();
+    } catch (DeclaredToolchainInfo.DuplicateConstraintException e) {
+      if (e.execConstraintsException() != null) {
+        ruleContext.attributeError(
+            ToolchainRule.EXEC_COMPATIBLE_WITH_ATTR, e.execConstraintsException().getMessage());
+      }
+      if (e.targetConstraintsException() != null) {
+        ruleContext.attributeError(
+            ToolchainRule.TARGET_COMPATIBLE_WITH_ATTR, e.targetConstraintsException().getMessage());
+      }
+      // One of the above must have been non-null, so we just return early.
+      return null;
+    }
 
     return new RuleConfiguredTargetBuilder(ruleContext)
         .addProvider(RunfilesProvider.class, RunfilesProvider.EMPTY)

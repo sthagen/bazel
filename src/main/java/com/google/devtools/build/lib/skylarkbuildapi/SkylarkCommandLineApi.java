@@ -18,33 +18,29 @@ import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 
-/**
- * Interface for a module associated with creating efficient command lines.
- */
+/** Interface for a module associated with creating efficient command lines. */
 @SkylarkModule(
     name = "cmd_helper",
     namespace = true,
-    category = SkylarkModuleCategory.BUILTIN,
-    doc = "Deprecated. Module for creating memory efficient command lines."
-)
+    category = SkylarkModuleCategory.TOP_LEVEL_TYPE,
+    doc = "Deprecated. Module for creating memory efficient command lines.")
 public interface SkylarkCommandLineApi {
 
   @SkylarkCallable(
-    name = "join_paths",
-    doc =
-        "Deprecated. Creates a single command line argument joining the paths of a set "
-            + "of files on the separator string.",
-    parameters = {
-      @Param(name = "separator", type = String.class, doc = "the separator string to join on."),
-      @Param(
-        name = "files",
-        type = SkylarkNestedSet.class,
-        generic1 = FileApi.class,
-        doc = "the files to concatenate."
-      )
-    }
-  )
-  public String joinPaths(String separator, SkylarkNestedSet files);
+      name = "join_paths",
+      doc =
+          "Deprecated. Creates a single command line argument joining the paths of a set "
+              + "of files on the separator string.",
+      parameters = {
+        @Param(name = "separator", type = String.class, doc = "the separator string to join on."),
+        @Param(
+            name = "files",
+            type = SkylarkNestedSet.class,
+            generic1 = FileApi.class,
+            doc = "the files to concatenate.")
+      })
+  public String joinPaths(String separator, SkylarkNestedSet files) throws EvalException;
 }

@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.Mockito.times;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.testing.GcFinalization;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -32,6 +33,7 @@ import com.google.devtools.build.lib.skyframe.serialization.SerializationExcepti
 import com.google.devtools.build.lib.skyframe.serialization.SerializationResult;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.nio.charset.Charset;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
@@ -39,6 +41,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 
 /** Tests for {@link NestedSet} serialization. */
@@ -74,7 +77,7 @@ public class NestedSetCodecTest {
     NestedSetStorageEndpoint mockStorage = Mockito.mock(NestedSetStorageEndpoint.class);
     SettableFuture<Void> innerWrite = SettableFuture.create();
     SettableFuture<Void> outerWrite = SettableFuture.create();
-    Mockito.when(mockStorage.put(Mockito.any(), Mockito.any()))
+    Mockito.when(mockStorage.put(ArgumentMatchers.any(), ArgumentMatchers.any()))
         // The write of the inner NestedSet {"a", "b"}
         .thenReturn(innerWrite)
         // The write of the inner NestedSet {"c", "d"}
@@ -110,7 +113,7 @@ public class NestedSetCodecTest {
     NestedSetStorageEndpoint mockStorage = Mockito.mock(NestedSetStorageEndpoint.class);
     SettableFuture<Void> sharedInnerWrite = SettableFuture.create();
     SettableFuture<Void> outerWrite = SettableFuture.create();
-    Mockito.when(mockStorage.put(Mockito.any(), Mockito.any()))
+    Mockito.when(mockStorage.put(ArgumentMatchers.any(), ArgumentMatchers.any()))
         // The write of the shared inner NestedSet {"a", "b"}
         .thenReturn(sharedInnerWrite)
         // The write of the inner NestedSet {"c", "d"}
@@ -156,7 +159,9 @@ public class NestedSetCodecTest {
   @Test
   public void testSingletonNestedSetSerializedWithoutStore() throws Exception {
     NestedSetStore mockNestedSetStore = Mockito.mock(NestedSetStore.class);
-    Mockito.when(mockNestedSetStore.computeFingerprintAndStore(Mockito.any(), Mockito.any()))
+    Mockito.when(
+            mockNestedSetStore.computeFingerprintAndStore(
+                ArgumentMatchers.any(), ArgumentMatchers.any()))
         .thenThrow(new AssertionError("NestedSetStore should not have been used"));
 
     ObjectCodecs objectCodecs =
@@ -169,6 +174,23 @@ public class NestedSetCodecTest {
     NestedSet<String> singletonNestedSet =
         new NestedSetBuilder<String>(Order.STABLE_ORDER).add("a").build();
     objectCodecs.serialize(singletonNestedSet);
+  }
+
+  @Test
+  public void cacheEntryHasLifetimeOfContents() {
+    NestedSetCache cache = new NestedSetCache();
+    Object[] contents = new Object[0];
+    ByteString fingerprint = ByteString.copyFrom(new byte[2]);
+    cache.put(
+        NestedSetStore.FingerprintComputationResult.create(
+            fingerprint, Futures.immediateFuture(null)),
+        contents);
+    GcFinalization.awaitFullGc();
+    assertThat(cache.putIfAbsent(fingerprint, Futures.immediateFuture(null))).isEqualTo(contents);
+    WeakReference<Object[]> weakRef = new WeakReference<>(contents);
+    contents = null;
+    fingerprint = null;
+    GcFinalization.awaitClear(weakRef);
   }
 
   @Test
@@ -209,23 +231,25 @@ public class NestedSetCodecTest {
                 (Object[]) set.getChildren(), objectCodecs.getSerializationContext())
             .fingerprint();
     Mockito.verify(nestedSetStorageEndpoint, Mockito.times(3))
-        .put(fingerprintCaptor.capture(), Mockito.any());
+        .put(fingerprintCaptor.capture(), ArgumentMatchers.any());
     Mockito.doReturn(subset1Future)
         .when(nestedSetStorageEndpoint)
         .get(fingerprintCaptor.getAllValues().get(0));
     Mockito.doReturn(subset2Future)
         .when(nestedSetStorageEndpoint)
         .get(fingerprintCaptor.getAllValues().get(1));
-    Mockito.when(emptyNestedSetCache.putIfAbsent(Mockito.any(), Mockito.any()))
+    Mockito.when(emptyNestedSetCache.putIfAbsent(ArgumentMatchers.any(), ArgumentMatchers.any()))
         .thenAnswer(invocation -> null);
 
+    @SuppressWarnings("unchecked")
     ListenableFuture<Object[]> deserializationFuture =
-        nestedSetStore.getContentsAndDeserialize(
-            fingerprint, objectCodecs.getDeserializationContext());
+        (ListenableFuture<Object[]>)
+            nestedSetStore.getContentsAndDeserialize(
+                fingerprint, objectCodecs.getDeserializationContext());
     // At this point, we expect deserializationFuture to be waiting on both of the underlying
     // fetches, which should have both been started.
     assertThat(deserializationFuture.isDone()).isFalse();
-    Mockito.verify(nestedSetStorageEndpoint, Mockito.times(3)).get(Mockito.any());
+    Mockito.verify(nestedSetStorageEndpoint, Mockito.times(3)).get(ArgumentMatchers.any());
 
     // Once the underlying fetches complete, we expect deserialization to complete.
     subset1Future.set(ByteString.copyFrom("mock bytes", Charset.defaultCharset()).toByteArray());
@@ -257,24 +281,30 @@ public class NestedSetCodecTest {
               return result;
             })
         .when(nestedSetCache)
-        .putIfAbsent(Mockito.eq(fingerprint), Mockito.any());
+        .putIfAbsent(Mockito.eq(fingerprint), ArgumentMatchers.any());
     AtomicReference<ListenableFuture<Object[]>> asyncResult = new AtomicReference<>();
     Thread asyncThread =
         new Thread(
             () -> {
               try {
-                asyncResult.set(
-                    nestedSetStore.getContentsAndDeserialize(fingerprint, deserializationContext));
+                @SuppressWarnings("unchecked")
+                ListenableFuture<Object[]> asyncContents =
+                    (ListenableFuture<Object[]>)
+                        nestedSetStore.getContentsAndDeserialize(
+                            fingerprint, deserializationContext);
+                asyncResult.set(asyncContents);
               } catch (IOException e) {
                 throw new IllegalStateException(e);
               }
             });
     asyncThread.start();
+    @SuppressWarnings("unchecked")
     ListenableFuture<Object[]> result =
-        nestedSetStore.getContentsAndDeserialize(fingerprint, deserializationContext);
+        (ListenableFuture<Object[]>)
+            nestedSetStore.getContentsAndDeserialize(fingerprint, deserializationContext);
     asyncThread.join();
     Mockito.verify(nestedSetStorageEndpoint, times(1)).get(Mockito.eq(fingerprint));
-    assertThat(result).isSameAs(asyncResult.get());
+    assertThat(result).isSameInstanceAs(asyncResult.get());
     assertThat(result.isDone()).isFalse();
   }
 
@@ -289,7 +319,7 @@ public class NestedSetCodecTest {
     SerializationContext serializationContext = Mockito.mock(SerializationContext.class);
     Object[] contents = {new Object()};
     Mockito.when(serializationContext.getNewMemoizingContext()).thenReturn(serializationContext);
-    Mockito.when(nestedSetStorageEndpoint.put(Mockito.any(), Mockito.any()))
+    Mockito.when(nestedSetStorageEndpoint.put(ArgumentMatchers.any(), ArgumentMatchers.any()))
         .thenAnswer(invocation -> SettableFuture.create());
     CountDownLatch fingerprintRequested = new CountDownLatch(2);
     Mockito.doAnswer(
@@ -320,7 +350,8 @@ public class NestedSetCodecTest {
         nestedSetStore.computeFingerprintAndStore(contents, serializationContext);
     asyncThread.join();
     // TODO(janakr): This should be one fetch, but we currently do two.
-    Mockito.verify(nestedSetStorageEndpoint, times(2)).put(Mockito.any(), Mockito.any());
+    Mockito.verify(nestedSetStorageEndpoint, times(2))
+        .put(ArgumentMatchers.any(), ArgumentMatchers.any());
     // TODO(janakr): These should be the same element.
     assertThat(result).isNotEqualTo(asyncResult.get());
   }

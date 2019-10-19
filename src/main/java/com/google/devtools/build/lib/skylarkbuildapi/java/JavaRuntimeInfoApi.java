@@ -14,40 +14,59 @@
 
 package com.google.devtools.build.lib.skylarkbuildapi.java;
 
-import com.google.devtools.build.lib.skylarkbuildapi.StructApi;
+import com.google.devtools.build.lib.skylarkbuildapi.platform.ToolchainInfoApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
-/**
- * Information about the Java runtime being used.
- */
-@SkylarkModule(name = "JavaRuntimeInfo", doc = "Information about the Java runtime being used.")
-public interface JavaRuntimeInfoApi extends StructApi {
+/** Information about the Java runtime being used. */
+@SkylarkModule(
+    name = "JavaRuntimeInfo",
+    category = SkylarkModuleCategory.PROVIDER,
+    doc = "Information about the Java runtime being used.")
+public interface JavaRuntimeInfoApi extends ToolchainInfoApi {
 
   @SkylarkCallable(
       name = "java_home",
       doc = "Returns the execpath of the root of the Java installation.",
-      structField = true
-  )
-  public PathFragment javaHome();
+      structField = true)
+  PathFragment javaHome();
 
+  /** The execpath of the Java binary. */
   @SkylarkCallable(
       name = "java_executable_exec_path",
       doc = "Returns the execpath of the Java executable.",
-      structField = true
-  )
-  /** The execpath of the Java binary. */
-  public PathFragment javaBinaryExecPath();
+      structField = true)
+  PathFragment javaBinaryExecPath();
 
+  /** The runfiles path of the JDK. */
+  @SkylarkCallable(
+      name = "java_home_runfiles_path",
+      doc =
+          "Returns the path of the Java installation in runfiles trees. This should only be used "
+              + "when one needs to access the JDK during the execution of a binary or a test built "
+              + "by Bazel. In particular, when one needs the JDK during an action, "
+              + "java_home should be used instead.",
+      structField = true)
+  PathFragment javaHomeRunfilesPath();
+
+  /** The runfiles path of the Java binary. */
   @SkylarkCallable(
       name = "java_executable_runfiles_path",
-      doc = "Returns the path of the Java executable in runfiles trees. This should only be used "
-          + "when one needs to access the JVM during the execution of a binary or a test built "
-          + "by Bazel. In particular, when one needs to invoke the JVM during an action, "
-          + "java_executable_exec_path should be used instead.",
-      structField = true
-  )
-  /** The runfiles path of the Java binary. */
-  public PathFragment javaBinaryRunfilesPath();
+      doc =
+          "Returns the path of the Java executable in runfiles trees. This should only be used "
+              + "when one needs to access the JVM during the execution of a binary or a test built "
+              + "by Bazel. In particular, when one needs to invoke the JVM during an action, "
+              + "java_executable_exec_path should be used instead.",
+      structField = true)
+  PathFragment javaBinaryRunfilesPath();
+
+  /** The files in the Java runtime. */
+  @SkylarkCallable(
+      name = "files",
+      doc = "Returns the files in the Java runtime.",
+      structField = true)
+  SkylarkNestedSet skylarkJavaBaseInputs();
 }

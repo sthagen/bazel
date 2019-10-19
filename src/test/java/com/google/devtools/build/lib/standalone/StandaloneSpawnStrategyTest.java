@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.standalone;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -39,12 +39,12 @@ import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.events.PrintingEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
-import com.google.devtools.build.lib.exec.ActionContextProvider;
+import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.BlazeExecutor;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
+import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.exec.SingleBuildFileCache;
 import com.google.devtools.build.lib.exec.SpawnActionContextMaps;
-import com.google.devtools.build.lib.exec.local.LocalEnvProvider;
 import com.google.devtools.build.lib.exec.local.LocalExecutionOptions;
 import com.google.devtools.build.lib.exec.local.LocalSpawnRunner;
 import com.google.devtools.build.lib.integration.util.IntegrationMock;
@@ -53,7 +53,6 @@ import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileSystem;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.util.FileSystems;
 import com.google.devtools.common.options.Options;
@@ -65,6 +64,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.Mockito;
 
 /**
  * Test StandaloneSpawnStrategy.
@@ -89,7 +89,7 @@ public class StandaloneSpawnStrategyTest {
     fileSystem = FileSystems.getNativeFileSystem();
     Path testRoot = fileSystem.getPath(TestUtils.tmpDir());
     try {
-      FileSystemUtils.deleteTreesBelow(testRoot);
+      testRoot.deleteTreesBelow();
     } catch (IOException e) {
       System.err.println("Failed to remove directory " + testRoot + ": " + e.getMessage());
       throw e;
@@ -115,38 +115,38 @@ public class StandaloneSpawnStrategyTest {
             /* defaultSystemJavabase= */ null,
             "mock-product-name");
     // This call implicitly symlinks the integration bin tools into the exec root.
-    IntegrationMock.get()
-        .getIntegrationBinTools(fileSystem, directories, TestConstants.WORKSPACE_NAME);
-    OptionsParser optionsParser = OptionsParser.newOptionsParser(ExecutionOptions.class);
+    IntegrationMock.get().getIntegrationBinTools(fileSystem, directories);
+    OptionsParser optionsParser =
+        OptionsParser.builder().optionsClasses(ExecutionOptions.class).build();
     optionsParser.parse("--verbose_failures");
     LocalExecutionOptions localExecutionOptions = Options.getDefaults(LocalExecutionOptions.class);
 
-    EventBus bus = new EventBus();
-
     ResourceManager resourceManager = ResourceManager.instanceForTestingOnly();
     resourceManager.setAvailableResources(
-        ResourceSet.create(/*memoryMb=*/1, /*cpuUsage=*/1, /*ioUsage=*/1, /*localTestCount=*/1));
+        ResourceSet.create(/*memoryMb=*/1, /*cpuUsage=*/1, /*localTestCount=*/1));
     Path execRoot = directories.getExecRoot(TestConstants.WORKSPACE_NAME);
     this.executor =
         new BlazeExecutor(
             fileSystem,
             execRoot,
             reporter,
-            bus,
             BlazeClock.instance(),
             optionsParser,
             SpawnActionContextMaps.createStub(
                 ImmutableList.of(),
-                ImmutableMap.<String, SpawnActionContext>of(
+                ImmutableMap.of(
                     "",
-                    new StandaloneSpawnStrategy(
-                        execRoot,
-                        new LocalSpawnRunner(
+                    ImmutableList.of(
+                        new StandaloneSpawnStrategy(
                             execRoot,
-                            localExecutionOptions,
-                            resourceManager,
-                            LocalEnvProvider.UNMODIFIED)))),
-            ImmutableList.<ActionContextProvider>of());
+                            new LocalSpawnRunner(
+                                execRoot,
+                                localExecutionOptions,
+                                resourceManager,
+                                (env, unusedBinTools, unusedFallbackTempDir) -> env,
+                                BinTools.forIntegrationTesting(directories, ImmutableList.of()),
+                                Mockito.mock(RunfilesTreeUpdater.class)))))),
+            ImmutableList.of());
 
     executor.getExecRoot().createDirectoryAndParents();
   }
@@ -189,10 +189,11 @@ public class StandaloneSpawnStrategyTest {
         new SingleBuildFileCache(execRoot.getPathString(), execRoot.getFileSystem()),
         ActionInputPrefetcher.NONE,
         new ActionKeyContext(),
-        null,
+        /*metadataHandler=*/ null,
         outErr,
-        ImmutableMap.<String, String>of(),
-        ImmutableMap.of(),
+        reporter,
+        /*clientEnv=*/ ImmutableMap.of(),
+        /*topLevelFilesets=*/ ImmutableMap.of(),
         SIMPLE_ARTIFACT_EXPANDER,
         /*actionFileSystem=*/ null,
         /*skyframeDepsResult=*/ null);
@@ -200,14 +201,10 @@ public class StandaloneSpawnStrategyTest {
 
   @Test
   public void testBinFalseYieldsException() throws Exception {
-    try {
-      run(createSpawn(getFalseCommand()));
-      fail();
-    } catch (ExecException e) {
-      assertWithMessage("got: " + e.getMessage())
-          .that(e.getMessage().startsWith("false failed: error executing command"))
-          .isTrue();
-    }
+    ExecException e = assertThrows(ExecException.class, () -> run(createSpawn(getFalseCommand())));
+    assertWithMessage("got: " + e.getMessage())
+        .that(e.getMessage().startsWith("false failed: error executing command"))
+        .isTrue();
   }
 
   private static String getFalseCommand() {

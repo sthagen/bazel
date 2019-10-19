@@ -27,7 +27,6 @@ import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.Executor;
@@ -35,6 +34,7 @@ import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.util.ActionTester;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
 import com.google.devtools.build.lib.util.io.FileOutErr;
@@ -131,15 +131,16 @@ public class ParamFileWriteActionTest extends BuildViewTestCase {
     return new SpecialArtifact(
         rootDir,
         rootDir.getExecPath().getRelative(relpath),
-        ArtifactOwner.NullArtifactOwner.INSTANCE,
+        ActionsTestUtil.NULL_ARTIFACT_OWNER,
         SpecialArtifactType.TREE);
   }
 
   private TreeFileArtifact createTreeFileArtifact(
       SpecialArtifact inputTreeArtifact, String parentRelativePath) {
-    return ActionInputHelper.treeFileArtifact(
+    return ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
         inputTreeArtifact,
-        PathFragment.create(parentRelativePath));
+        PathFragment.create(parentRelativePath),
+        inputTreeArtifact.getArtifactOwner());
   }
 
   private ParameterFileWriteAction createParameterFileWriteAction(
@@ -200,6 +201,7 @@ public class ParamFileWriteActionTest extends BuildViewTestCase {
         actionKeyContext,
         null,
         new FileOutErr(),
+        new StoredEventHandler(),
         ImmutableMap.<String, String>of(),
         ImmutableMap.of(),
         artifactExpander,

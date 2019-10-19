@@ -18,7 +18,7 @@
 # line, in several different evaluation contexts.
 #
 # The --internal_skylark_flag_test_canary flag is built into
-# SkylarkSemanticsOptions specifically for this test suite.
+# StarlarkSemanticsOptions specifically for this test suite.
 
 # --- begin runfiles.bash initialization ---
 # Copy-pasted from Bazel's Bash runfiles library (tools/bash/runfiles/runfiles.bash).
@@ -98,7 +98,7 @@ EOF
       --internal_skylark_flag_test_canary \
       &>"$TEST_log" || fail "bazel build failed";
   expect_log "In BUILD: $MARKER" \
-      "Skylark flags are not propagating to BUILD file evaluation"
+      "Starlark flags are not propagating to BUILD file evaluation"
 }
 
 function test_bzl_file_and_macro() {
@@ -132,9 +132,9 @@ EOF
       --internal_skylark_flag_test_canary \
       &>"$TEST_log" || fail "bazel build failed";
   expect_log "In bzl: $MARKER" \
-      "Skylark flags are not propagating to .bzl file evaluation"
+      "Starlark flags are not propagating to .bzl file evaluation"
   expect_log "In macro: $MARKER" \
-      "Skylark flags are not propagating to macro evaluation"
+      "Starlark flags are not propagating to macro evaluation"
 }
 
 function test_rule() {
@@ -166,7 +166,7 @@ EOF
       --internal_skylark_flag_test_canary \
       &>"$TEST_log" || fail "bazel build failed";
   expect_log "In rule: $MARKER" \
-      "Skylark flags are not propagating to rule implementation function evaluation"
+      "Starlark flags are not propagating to rule implementation function evaluation"
 }
 
 # TODO(brandjon): Once we're no long dropping print() output in computed default
@@ -211,7 +211,50 @@ EOF
       --internal_skylark_flag_test_canary \
       &>"$TEST_log" || fail "bazel build failed";
   expect_log "In aspect: $MARKER" \
-      "Skylark flags are not propagating to aspect implementation function evaluation"
+      "Starlark flags are not propagating to aspect implementation function evaluation"
+}
+
+
+# Test a skylark rule's interaction with the --nested_set_depth_limit flag.
+function test_nested_set_depth() {
+  mkdir -p test
+  cat << EOF >> test/BUILD
+load(":skylark.bzl", "test_rule")
+
+test_rule(
+    name = "test",
+)
+EOF
+
+  cat << 'EOF' >> test/skylark.bzl
+def _test_impl(ctx):
+  x = depset([0])
+  for i in range(1, 1000):
+    x = depset([i], transitive = [x])
+  x_list = x.to_list()
+  return []
+
+test_rule = rule(
+    implementation=_test_impl,
+)
+EOF
+
+  bazel build //test:test --nested_set_depth_limit=2000 &> $TEST_log \
+      || fail "Build should have succeeded at depth limit 2000"
+
+  bazel build //test:test --nested_set_depth_limit=500 &> $TEST_log \
+      && fail "Build should have failed at depth limit 500"
+  expect_log "depset exceeded maximum depth 500"
+
+  bazel build //test:test --nested_set_depth_limit=100 &> $TEST_log \
+      && fail "Build should have failed at depth limit 100"
+  expect_log "depset exceeded maximum depth 100"
+
+  bazel build //test:test --nested_set_depth_limit=3000 &> $TEST_log \
+      || fail "Build should have succeeded at depth limit 3000"
+
+  bazel build //test:test --nested_set_depth_limit=4000 &> $TEST_log \
+      || fail "Build should have succeeded at depth limit 4000"
 }
 
 

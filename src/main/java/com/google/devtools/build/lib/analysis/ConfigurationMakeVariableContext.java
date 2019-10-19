@@ -26,7 +26,9 @@ import com.google.devtools.build.lib.analysis.stringtemplate.TemplateContext;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Implements make variable expansion for make variables that depend on the configuration and the
@@ -38,16 +40,28 @@ public class ConfigurationMakeVariableContext implements TemplateContext {
   private static ImmutableList<TemplateVariableInfo> getRuleTemplateVariableProviders(
       RuleContext ruleContext, Iterable<String> attributeNames) {
 
-    return Streams.stream(attributeNames)
-        // Only process this attribute it if is present in the rule.
-        .filter(attrName -> ruleContext.attributes().has(attrName))
-        // Get the TemplateVariableInfo providers from this attribute.
-        .flatMap(
-            attrName ->
-                Streams.stream(
-                    ruleContext.getPrerequisites(
-                        attrName, Mode.DONT_CHECK, TemplateVariableInfo.PROVIDER)))
-        .collect(ImmutableList.toImmutableList());
+    ImmutableList.Builder<TemplateVariableInfo> providers = new ImmutableList.Builder<>();
+
+    // Get template variable providers from the attributes.
+    List<TemplateVariableInfo> fromAttributes =
+        Streams.stream(attributeNames)
+            // Only process this attribute it if is present in the rule.
+            .filter(attrName -> ruleContext.attributes().has(attrName))
+            // Get the TemplateVariableInfo providers from this attribute.
+            .flatMap(
+                attrName ->
+                    Streams.stream(
+                        ruleContext.getPrerequisites(
+                            attrName, Mode.DONT_CHECK, TemplateVariableInfo.PROVIDER)))
+            .collect(Collectors.toList());
+    providers.addAll(fromAttributes);
+
+    // Also collect template variable providers from any resolved toolchains.
+    if (ruleContext.getToolchainContext() != null) {
+      providers.addAll(ruleContext.getToolchainContext().templateVariableProviders());
+    }
+
+    return providers.build();
   }
 
   private final ImmutableList<? extends MakeVariableSupplier> allMakeVariableSuppliers;
@@ -56,7 +70,7 @@ public class ConfigurationMakeVariableContext implements TemplateContext {
   // CcToolchainProvider. We should use CcCommon.CC_TOOLCHAIN_ATTRIBUTE_NAME, but we didn't want to
   // pollute core with C++ specific constant.
   protected static final ImmutableList<String> DEFAULT_MAKE_VARIABLE_ATTRIBUTES =
-      ImmutableList.of(":cc_toolchain", "toolchains", "$toolchains");
+      ImmutableList.of("toolchains", ":cc_toolchain", "$toolchains");
 
   public ConfigurationMakeVariableContext(
       RuleContext ruleContext, Package pkg, BuildConfiguration configuration) {
@@ -86,7 +100,7 @@ public class ConfigurationMakeVariableContext implements TemplateContext {
             // 1) extra suppliers passed in (assume the caller knows what they are doing)
             // 2) variables from the command-line
             // 3) package-level overrides (ie, vardef)
-            // 4) variables from the rule (and thus the toolchains)
+            // 4) variables from the rule (including from resolved toolchains)
             // 5) variables from the global configuration
             .addAll(Preconditions.checkNotNull(extraMakeVariableSuppliers))
             .add(new MapBackedMakeVariableSupplier(configuration.getCommandLineBuildVariables()))
@@ -107,7 +121,7 @@ public class ConfigurationMakeVariableContext implements TemplateContext {
     throw new ExpansionException(String.format("$(%s) not defined", name));
   }
 
-  public SkylarkDict<String, String> collectMakeVariables() {
+  public SkylarkDict<String, String> collectMakeVariables() throws ExpansionException {
     Map<String, String> map = new LinkedHashMap<>();
     // Collect variables in the reverse order as in lookupMakeVariable
     // because each update is overwriting.

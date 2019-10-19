@@ -16,11 +16,14 @@ package com.google.devtools.build.lib.runtime;
 import static com.google.common.base.Strings.isNullOrEmpty;
 
 import com.google.devtools.build.lib.profiler.MemoryProfiler.MemoryProfileStableHeapParameters;
+import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.runtime.CommandLineEvent.ToolCommandLineEvent;
 import com.google.devtools.build.lib.util.OptionsUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Converters;
+import com.google.devtools.common.options.Converters.AssignmentConverter;
+import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
@@ -28,6 +31,7 @@ import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParsingException;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Level;
 
@@ -36,19 +40,34 @@ import java.util.logging.Level;
  */
 public class CommonCommandOptions extends OptionsBase {
 
-  // To create a new incompatible change, see the javadoc for AllIncompatibleChangesExpansion.
+  /**
+   * To create a new incompatible change, see the javadoc for {@link
+   * AllIncompatibleChangesExpansion}.
+   */
   @Option(
-    name = "all_incompatible_changes",
-    defaultValue = "null",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    expansionFunction = AllIncompatibleChangesExpansion.class,
-    help =
-        "Enables all options of the form --incompatible_*. Use this option to find places where "
-            + "your build may break in the future due to deprecations or other changes."
-  )
+      name = "all_incompatible_changes",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+      expansionFunction = AllIncompatibleChangesExpansion.class,
+      help =
+          "Enables all options of the form --incompatible_*. Use this option to find places where "
+              + "your build may break in the future due to deprecations or other changes.")
   public Void allIncompatibleChanges;
+
+  @Option(
+      name = "enable_platform_specific_config",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "If true, Bazel picks up host-OS-specific config lines from bazelrc files. For example, "
+              + "if the host OS is Linux and you run bazel build, Bazel picks up lines starting "
+              + "with build:linux. Supported OS identifiers are linux, macos, windows, and "
+              + "freebsd. Enabling this flag is equivalent to using --config=linux on Linux, "
+              + "--config=windows on Windows, etc.")
+  public boolean enablePlatformSpecificConfig;
 
   @Option(
     name = "config",
@@ -59,10 +78,9 @@ public class CommonCommandOptions extends OptionsBase {
     help =
         "Selects additional config sections from the rc files; for every <command>, it "
             + "also pulls in the options from <command>:<config> if such a section exists; "
-            + "if the section does not exist, this flag is ignored. "
-            + "Note that it is currently only possible to provide these options on the "
-            + "command line, not in the rc files. The config sections and flag combinations "
-            + "they are equivalent to are located in the tools/*.blazerc config files."
+            + "if this section doesn't exist in any .rc file, Blaze fails with an error. "
+            + "The config sections and flag combinations they are equivalent to are "
+            + "located in the tools/*.blazerc config files."
   )
   public List<String> configs;
 
@@ -146,7 +164,7 @@ public class CommonCommandOptions extends OptionsBase {
         UUID.fromString(input.substring(uuidStartIndex));
       } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
         throw new OptionsParsingException(
-            String.format("Value '%s' does end in a valid UUID.", input), e);
+            String.format("Value '%s' does not end in a valid UUID.", input), e);
       }
       return input;
     }
@@ -163,36 +181,78 @@ public class CommonCommandOptions extends OptionsBase {
   // TODO(b/67895628) Stop reading ids from the environment after the compatibility window has
   // passed.
   @Option(
-    name = "invocation_id",
-    defaultValue = "",
-    converter = UUIDConverter.class,
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.BAZEL_MONITORING, OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-    metadataTags = {OptionMetadataTag.HIDDEN},
-    help = "Unique identifier for the command being run."
-  )
+      name = "invocation_id",
+      defaultValue = "",
+      converter = UUIDConverter.class,
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING, OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      help =
+          "Unique identifier, in UUID format, for the command being run. If explicitly specified"
+              + " uniqueness must be ensured by the caller. The UUID is printed to stderr, the BEP"
+              + " and remote execution protocol.")
   public UUID invocationId;
 
   @Option(
-    name = "build_request_id",
-    defaultValue = "",
-    converter = PrefixedUUIDConverter.class,
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.BAZEL_MONITORING, OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-    metadataTags = {OptionMetadataTag.HIDDEN},
-    help = "Unique identifier for the build being run."
-  )
+      name = "build_request_id",
+      defaultValue = "",
+      converter = PrefixedUUIDConverter.class,
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING, OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      metadataTags = {OptionMetadataTag.HIDDEN},
+      help = "Unique string identifier for the build being run.")
   public String buildRequestId;
 
   @Option(
-    name = "experimental_generate_json_trace_profile",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
-    help =
-        "If enabled, Bazel profiles the build and writes a JSON-format profile into a file in the "
-            + "output base."
-  )
+      name = "build_metadata",
+      converter = AssignmentConverter.class,
+      defaultValue = "",
+      allowMultiple = true,
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
+      help = "Custom key-value string pairs to supply in a build event.")
+  public List<Map.Entry<String, String>> buildMetadata;
+
+  @Option(
+      name = "oom_message",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING, OptionEffectTag.TERMINAL_OUTPUT},
+      metadataTags = {OptionMetadataTag.HIDDEN},
+      help = "Custom message to be emitted on an out of memory failure.")
+  public String oomMessage;
+
+  @Option(
+      name = "incompatible_remove_binary_profile",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If enabled, Bazel will write JSON-format profiles instead of binary profiles.")
+  public boolean removeBinaryProfile;
+
+  @Option(
+      name = "incompatible_enable_profile_by_default",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If enabled, Bazel will generate a JSON profile by default.")
+  public boolean enableProfileByDefault;
+
+  @Option(
+      name = "experimental_generate_json_trace_profile",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+      help =
+          "If enabled, Bazel profiles the build and writes a JSON-format profile into a file in"
+              + " the output base. View profile by loading into chrome://tracing.")
   public boolean enableTracer;
 
   @Option(
@@ -218,6 +278,34 @@ public class CommonCommandOptions extends OptionsBase {
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
       help = "If set, Bazel will measure cpu usage and add it to the JSON profile.")
   public boolean enableCpuUsageProfiling;
+
+  @Option(
+      name = "experimental_profile_action_counts",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+      help = "If set, Bazel will add action counts at the top of the JSON profile.")
+  public boolean enableActionCountProfile;
+
+  @Option(
+      name = "experimental_profile_additional_tasks",
+      converter = ProfilerTaskConverter.class,
+      defaultValue = "none",
+      allowMultiple = true,
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+      help = "Specifies additional profile tasks to be included in the profile.")
+  public List<ProfilerTask> additionalProfileTasks;
+
+  @Option(
+      name = "experimental_slim_json_profile",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+      help =
+          "Slims down the size of the JSON profile by merging events if the profile gets "
+              + " too large.")
+  public boolean enableJsonProfileDiet;
 
   @Option(
       name = "profile",
@@ -415,4 +503,11 @@ public class CommonCommandOptions extends OptionsBase {
               + "one."
   )
   public boolean keepStateAfterBuild;
+
+  /** The option converter to check that the user can only specify legal profiler tasks. */
+  public static class ProfilerTaskConverter extends EnumConverter<ProfilerTask> {
+    public ProfilerTaskConverter() {
+      super(ProfilerTask.class, "profiler task");
+    }
+  }
 }

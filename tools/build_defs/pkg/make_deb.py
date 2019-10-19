@@ -16,6 +16,7 @@
 import gzip
 import hashlib
 from io import BytesIO
+import os
 import os.path
 import sys
 import tarfile
@@ -42,7 +43,7 @@ DEBIAN_FIELDS = [
     ('Maintainer', True, False),
     ('Description', True, True),
     ('Homepage', False, False),
-    ('Built-Using', False, False, 'Bazel'),
+    ('Built-Using', False, False, None),
     ('Distribution', False, False, 'unstable'),
     ('Urgency', False, False, 'medium'),
 ]
@@ -65,7 +66,15 @@ gflags.DEFINE_string('prerm', None,
                      'The prerm script (prefix with @ to provide a path).')
 gflags.DEFINE_string('postrm', None,
                      'The postrm script (prefix with @ to provide a path).')
+gflags.DEFINE_string('config', None,
+                     'The config script (prefix with @ to provide a path).')
+gflags.DEFINE_string('templates', None,
+                     'The templates file (prefix with @ to provide a path).')
 
+# size of chunks for copying package content to final .deb file
+# This is a wild guess, but I am not convinced of the value of doing much work
+# to tune it.
+_COPY_CHUNK_SIZE = 1024 * 32
 
 # see
 # https://www.debian.org/doc/manuals/debian-faq/ch-pkg_basics.en.html#s-conffile
@@ -75,11 +84,12 @@ gflags.DEFINE_multistring(
 
 
 def MakeGflags():
+  """Creates a flag for each of the control file fields."""
   for field in DEBIAN_FIELDS:
     fieldname = field[0].replace('-', '_').lower()
     msg = 'The value for the %s content header entry.' % field[0]
     if len(field) > 3:
-      if type(field[3]) is list:
+      if isinstance(field[3], list):
         gflags.DEFINE_multistring(fieldname, field[3], msg)
       else:
         gflags.DEFINE_string(fieldname, field[3], msg)
@@ -89,39 +99,57 @@ def MakeGflags():
       gflags.MarkFlagAsRequired(fieldname)
 
 
+def ConvertToFileLike(content, content_len, converter):
+  if content_len < 0:
+    content_len = len(content)
+  content = converter(content)
+  return content_len, content
+
+
 def AddArFileEntry(fileobj, filename,
-                   content='', timestamp=0,
+                   content='', content_len=-1, timestamp=0,
                    owner_id=0, group_id=0, mode=0o644):
   """Add a AR file entry to fileobj."""
+  # If we got the content as a string, turn it into a file like thing.
+  if isinstance(content, (str, bytes)):
+    content_len, content = ConvertToFileLike(content, content_len, BytesIO)
   inputs = [
       (filename + '/').ljust(16),  # filename (SysV)
       str(timestamp).ljust(12),  # timestamp
       str(owner_id).ljust(6),  # owner id
       str(group_id).ljust(6),  # group id
-      oct(mode).ljust(8),  # mode
-      str(len(content)).ljust(10),  # size
+      str(oct(mode)).replace('0o', '0').ljust(8),  # mode
+      str(content_len).ljust(10),  # size
       '\x60\x0a',  # end of file entry
   ]
   for i in inputs:
     fileobj.write(i.encode('ascii'))
-  fileobj.write(content)
-  if len(content) % 2 != 0:
+  size = 0
+  while True:
+    data = content.read(_COPY_CHUNK_SIZE)
+    if not data:
+      break
+    size += len(data)
+    fileobj.write(data)
+  if size % 2 != 0:
     fileobj.write(b'\n')  # 2-byte alignment padding
 
 
 def MakeDebianControlField(name, value, wrap=False):
   """Add a field to a debian control file."""
   result = name + ': '
-  if type(value) is list:
-    value = ', '.join(value)
+  if isinstance(value, str):
+    value = value.decode('utf-8')
+  if isinstance(value, list):
+    value = u', '.join(value)
   if wrap:
-    result += ' '.join(value.split('\n'))
+    result += u' '.join(value.split('\n'))
     result = textwrap.fill(result,
                            break_on_hyphens=False,
                            break_long_words=False)
   else:
     result += value
-  return result.replace('\n', '\n ') + '\n'
+  return result.replace(u'\n', u'\n ') + u'\n'
 
 
 def CreateDebControl(extrafiles=None, **kwargs):
@@ -138,7 +166,8 @@ def CreateDebControl(extrafiles=None, **kwargs):
   with gzip.GzipFile('control.tar.gz', mode='w', fileobj=tar, mtime=0) as gz:
     with tarfile.open('control.tar.gz', mode='w', fileobj=gz) as f:
       tarinfo = tarfile.TarInfo('control')
-      tarinfo.size = len(controlfile)
+      # Don't discard unicode characters when computing the size
+      tarinfo.size = len(controlfile.encode('utf-8'))
       f.addfile(tarinfo, fileobj=BytesIO(controlfile.encode('utf-8')))
       if extrafiles:
         for name, (data, mode) in extrafiles.items():
@@ -157,6 +186,8 @@ def CreateDeb(output,
               postinst=None,
               prerm=None,
               postrm=None,
+              config=None,
+              templates=None,
               conffiles=None,
               **kwargs):
   """Create a full debian package."""
@@ -169,6 +200,10 @@ def CreateDeb(output,
     extrafiles['prerm'] = (prerm, 0o755)
   if postrm:
     extrafiles['postrm'] = (postrm, 0o755)
+  if config:
+    extrafiles['config'] = (config, 0o755)
+  if templates:
+    extrafiles['templates'] = (templates, 0o755)
   if conffiles:
     extrafiles['conffiles'] = ('\n'.join(conffiles) + '\n', 0o644)
   control = CreateDebControl(extrafiles=extrafiles, **kwargs)
@@ -190,9 +225,9 @@ def CreateDeb(output,
       ext = '.'.join(ext)
       if ext not in ['tar.bz2', 'tar.gz', 'tar.xz', 'tar.lzma']:
         ext = 'tar'
+    data_size = os.stat(data).st_size
     with open(data, 'rb') as datafile:
-      data = datafile.read()
-    AddArFileEntry(f, 'data.' + ext, data)
+      AddArFileEntry(f, 'data.' + ext, datafile, content_len=data_size)
 
 
 def GetChecksumsFromFile(filename, hash_fns=None):
@@ -240,34 +275,43 @@ def CreateChanges(output,
   debsize = str(os.path.getsize(deb_file))
   deb_basename = os.path.basename(deb_file)
 
-  changesdata = ''.join(
-      MakeDebianControlField(*x)
-      for x in [('Format', '1.8'), ('Date', time.ctime(timestamp)), (
-          'Source', package
-      ), ('Binary', package
-         ), ('Architecture', architecture), ('Version', version), (
-             'Distribution', distribution
-         ), ('Urgency', urgency), ('Maintainer', maintainer), (
-             'Changed-By', maintainer
-         ), ('Description', '\n%s - %s' % (package, short_description)
-            ), ('Changes', ('\n%s (%s) %s; urgency=%s'
-                            '\nChanges are tracked in revision control.'
-                           ) % (package, version, distribution, urgency)
-               ), ('Files', '\n' + ' '.join(
-                   [checksums['md5'], debsize, section, priority, deb_basename])
-                  ), ('Checksums-Sha1', '\n' + ' '.join(
-                      [checksums['sha1'], debsize, deb_basename])
-                     ), ('Checksums-Sha256', '\n' + ' '.join(
-                         [checksums['sha256'], debsize, deb_basename]))])
+  changesdata = ''.join([
+      MakeDebianControlField('Format', '1.8'),
+      MakeDebianControlField('Date', time.ctime(timestamp)),
+      MakeDebianControlField('Source', package),
+      MakeDebianControlField('Binary', package),
+      MakeDebianControlField('Architecture', architecture),
+      MakeDebianControlField('Version', version),
+      MakeDebianControlField('Distribution', distribution),
+      MakeDebianControlField('Urgency', urgency),
+      MakeDebianControlField('Maintainer', maintainer),
+      MakeDebianControlField('Changed-By', maintainer),
+      MakeDebianControlField('Description',
+                             '\n%s - %s' % (package, short_description)),
+      MakeDebianControlField('Changes',
+                             ('\n%s (%s) %s; urgency=%s'
+                              '\nChanges are tracked in revision control.') %
+                             (package, version, distribution, urgency)),
+      MakeDebianControlField(
+          'Files', '\n' + ' '.join(
+              [checksums['md5'], debsize, section, priority, deb_basename])),
+      MakeDebianControlField(
+          'Checksums-Sha1',
+          '\n' + ' '.join([checksums['sha1'], debsize, deb_basename])),
+      MakeDebianControlField(
+          'Checksums-Sha256',
+          '\n' + ' '.join([checksums['sha256'], debsize, deb_basename]))
+  ])
   with open(output, 'w') as changes_fh:
-    changes_fh.write(changesdata)
+    changes_fh.write(changesdata.encode('utf-8'))
 
 
 def GetFlagValue(flagvalue, strip=True):
   if flagvalue:
+    flagvalue = flagvalue.decode('utf-8')
     if flagvalue[0] == '@':
       with open(flagvalue[1:], 'r') as f:
-        flagvalue = f.read()
+        flagvalue = f.read().decode('utf-8')
     if strip:
       return flagvalue.strip()
   return flagvalue
@@ -288,6 +332,8 @@ def main(unused_argv):
       postinst=GetFlagValue(FLAGS.postinst, False),
       prerm=GetFlagValue(FLAGS.prerm, False),
       postrm=GetFlagValue(FLAGS.postrm, False),
+      config=GetFlagValue(FLAGS.config, False),
+      templates=GetFlagValue(FLAGS.templates, False),
       conffiles=GetFlagValues(FLAGS.conffile),
       package=FLAGS.package,
       version=GetFlagValue(FLAGS.version),
@@ -295,7 +341,7 @@ def main(unused_argv):
       maintainer=FLAGS.maintainer,
       section=FLAGS.section,
       architecture=FLAGS.architecture,
-      depends=FLAGS.depends,
+      depends=GetFlagValues(FLAGS.depends),
       suggests=FLAGS.suggests,
       enhances=FLAGS.enhances,
       preDepends=FLAGS.pre_depends,

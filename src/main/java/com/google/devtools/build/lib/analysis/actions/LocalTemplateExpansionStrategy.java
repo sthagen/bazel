@@ -14,18 +14,16 @@
 
 package com.google.devtools.build.lib.analysis.actions;
 
-import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
-import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
-import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction.DeterministicWriter;
 import com.google.devtools.build.lib.util.StringUtilities;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /** Strategy to perform tempate expansion locally */
 @ExecutionStrategy(
@@ -38,11 +36,10 @@ public class LocalTemplateExpansionStrategy implements TemplateExpansionContext 
   public static LocalTemplateExpansionStrategy INSTANCE = new LocalTemplateExpansionStrategy();
 
   @Override
-  public List<SpawnResult> expandTemplate(
-      TemplateExpansionAction action, ActionExecutionContext ctx)
-      throws ExecException, InterruptedException {
+  public SpawnContinuation expandTemplate(
+      TemplateExpansionAction action, ActionExecutionContext ctx) throws InterruptedException {
     try {
-      final String expandedTemplate = getExpandedTemplateUnsafe(action);
+      final String expandedTemplate = getExpandedTemplateUnsafe(action, ctx.getPathResolver());
       DeterministicWriter deterministicWriter =
           new DeterministicWriter() {
             @Override
@@ -50,13 +47,12 @@ public class LocalTemplateExpansionStrategy implements TemplateExpansionContext 
               out.write(expandedTemplate.getBytes(StandardCharsets.UTF_8));
             }
           };
-      ctx.getContext(FileWriteActionContext.class)
-          .writeOutputToFile(
+      return ctx.getContext(FileWriteActionContext.class)
+          .beginWriteOutputToFile(
               action, ctx, deterministicWriter, action.makeExecutable(), /*isRemotable=*/ true);
     } catch (IOException e) {
-      throw new EnvironmentalExecException("IOException during template expansion", e);
+      return SpawnContinuation.failedWithExecException(new EnvironmentalExecException(e));
     }
-    return ImmutableList.of();
   }
 
   /**
@@ -64,9 +60,10 @@ public class LocalTemplateExpansionStrategy implements TemplateExpansionContext 
    * TODO(b/110418949): Stop public access to this method as it's unhealthy to evaluate the
    * action result without the action being executed.
    */
-  public String getExpandedTemplateUnsafe(TemplateExpansionAction action) throws IOException {
+  public String getExpandedTemplateUnsafe(TemplateExpansionAction action,
+      ArtifactPathResolver resolver) throws IOException {
     String templateString;
-    templateString = action.getTemplate().getContent();
+    templateString = action.getTemplate().getContent(resolver);
     for (Substitution entry : action.getSubstitutions()) {
       templateString =
           StringUtilities.replaceAllLiteral(templateString, entry.getKey(), entry.getValue());

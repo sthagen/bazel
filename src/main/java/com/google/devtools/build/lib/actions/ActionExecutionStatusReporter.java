@@ -17,8 +17,10 @@ import static java.util.Comparator.comparing;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
+import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
@@ -48,8 +50,9 @@ public final class ActionExecutionStatusReporter {
   // Maximum number of lines to output per each status category before truncation.
   private static final int MAX_LINES = 10;
 
+  private static final String PREPARING_MESSAGE = "Preparing";
+
   private final EventHandler eventHandler;
-  private final Executor executor;
   private final EventBus eventBus;
   private final Clock clock;
 
@@ -65,29 +68,29 @@ public final class ActionExecutionStatusReporter {
   }
 
   @VisibleForTesting
-  static ActionExecutionStatusReporter create(EventHandler eventHandler, Clock clock) {
-    return create(eventHandler, null, null, clock);
+  static ActionExecutionStatusReporter create(EventHandler eventHandler, @Nullable Clock clock) {
+    return create(eventHandler, null, clock);
   }
 
-  public static ActionExecutionStatusReporter create(EventHandler eventHandler,
-      @Nullable Executor executor, @Nullable EventBus eventBus) {
-    return create(eventHandler, executor, eventBus, null);
+  public static ActionExecutionStatusReporter create(
+      EventHandler eventHandler, @Nullable EventBus eventBus) {
+    return create(eventHandler, eventBus, null);
   }
 
-  private static ActionExecutionStatusReporter create(EventHandler eventHandler,
-      @Nullable Executor executor, @Nullable EventBus eventBus, @Nullable Clock clock) {
-    ActionExecutionStatusReporter result = new ActionExecutionStatusReporter(eventHandler, executor,
-        eventBus, clock == null ? BlazeClock.instance() : clock);
+  private static ActionExecutionStatusReporter create(
+      EventHandler eventHandler, @Nullable EventBus eventBus, @Nullable Clock clock) {
+    ActionExecutionStatusReporter result =
+        new ActionExecutionStatusReporter(
+            eventHandler, eventBus, clock == null ? BlazeClock.instance() : clock);
     if (eventBus != null) {
       eventBus.register(result);
     }
     return result;
   }
 
-  private ActionExecutionStatusReporter(EventHandler eventHandler, @Nullable Executor executor,
-      @Nullable EventBus eventBus, Clock clock) {
+  private ActionExecutionStatusReporter(
+      EventHandler eventHandler, @Nullable EventBus eventBus, Clock clock) {
     this.eventHandler = Preconditions.checkNotNull(eventHandler);
-    this.executor = executor;
     this.eventBus = eventBus;
     this.clock = Preconditions.checkNotNull(clock);
   }
@@ -102,25 +105,47 @@ public final class ActionExecutionStatusReporter {
     actionStatus.put(action, Pair.of(message, clock.nanoTime()));
   }
 
-  /**
-   * Remove action from the list of active actions.
-   */
+  /** Remove action from the list of active actions. Action must be present. */
   public void remove(Action action) {
-    Preconditions.checkNotNull(actionStatus.remove(action), action);
-  }
-
-  /**
-   * Set "Preparing" status.
-   */
-  public void setPreparing(Action action) {
-    updateStatus(ActionStatusMessage.preparingStrategy(action));
+    Pair<String, Long> status = actionStatus.remove(action);
+    if (status == null) {
+      BugReport.sendBugReport(
+          new IllegalStateException("Action not present: " + action.prettyPrint()));
+    }
   }
 
   @Subscribe
-  public void updateStatus(ActionStatusMessage statusMsg) {
-    String message = statusMsg.getMessage();
-    ActionExecutionMetadata action = statusMsg.getActionMetadata();
-    setStatus(action, message);
+  @AllowConcurrentEvents
+  public void updateStatus(ActionStartedEvent event) {
+    ActionExecutionMetadata action = event.getAction();
+    setStatus(action, PREPARING_MESSAGE);
+  }
+
+  @Subscribe
+  @AllowConcurrentEvents
+  public void updateStatus(ScanningActionEvent event) {
+    ActionExecutionMetadata action = event.getActionMetadata();
+    setStatus(action, "Scanning");
+  }
+
+  @Subscribe
+  @AllowConcurrentEvents
+  public void updateStatus(SchedulingActionEvent event) {
+    ActionExecutionMetadata action = event.getActionMetadata();
+    setStatus(action, "Scheduling");
+  }
+
+  @Subscribe
+  @AllowConcurrentEvents
+  public void updateStatus(RunningActionEvent event) {
+    ActionExecutionMetadata action = event.getActionMetadata();
+    setStatus(action, String.format("Running (%s)", event.getStrategy()));
+  }
+
+  @Subscribe
+  @AllowConcurrentEvents
+  public void updateStatus(StoppedScanningActionEvent event) {
+    remove(event.getAction());
   }
 
   public int getCount() {
@@ -212,7 +237,7 @@ public final class ActionExecutionStatusReporter {
     Iterator<ActionExecutionMetadata> iterator = statusMap.keySet().iterator();
     while (iterator.hasNext()) {
       // Filter out actions that are not executed yet.
-      if (statusMap.get(iterator.next()).first.equals(ActionStatusMessage.PREPARING)) {
+      if (PREPARING_MESSAGE.equals(statusMap.get(iterator.next()).first)) {
         iterator.remove();
       }
     }

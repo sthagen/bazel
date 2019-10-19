@@ -20,6 +20,8 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.platform.ConstraintSettingInfo;
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.platform.DeclaredToolchainInfo;
+import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
+import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import org.junit.Before;
 import org.junit.Test;
@@ -72,21 +74,57 @@ public class ToolchainTest extends BuildViewTestCase {
     ConfiguredTarget target = getConfiguredTarget("//toolchain:toolchain1");
     assertThat(target).isNotNull();
 
-    DeclaredToolchainInfo provider = target.getProvider(DeclaredToolchainInfo.class);
+    DeclaredToolchainInfo provider = PlatformProviderUtils.declaredToolchainInfo(target);
     assertThat(provider).isNotNull();
-    assertThat(provider.toolchainType()).isEqualTo(makeLabel("//toolchain:demo_toolchain"));
+    assertThat(provider.toolchainType())
+        .isEqualTo(ToolchainTypeInfo.create(makeLabel("//toolchain:demo_toolchain")));
 
-    assertThat(provider.execConstraints())
-        .containsExactly(
-            ConstraintValueInfo.create(
-                ConstraintSettingInfo.create(makeLabel("//constraint:basic")),
-                makeLabel("//constraint:foo")));
-    assertThat(provider.targetConstraints())
-        .containsExactly(
-            ConstraintValueInfo.create(
-                ConstraintSettingInfo.create(makeLabel("//constraint:basic")),
-                makeLabel("//constraint:bar")));
+    ConstraintSettingInfo basicConstraintSetting =
+        ConstraintSettingInfo.create(makeLabel("//constraint:basic"));
+    assertThat(provider.execConstraints().get(basicConstraintSetting))
+        .isEqualTo(
+            ConstraintValueInfo.create(basicConstraintSetting, makeLabel("//constraint:foo")));
+    assertThat(provider.targetConstraints().get(basicConstraintSetting))
+        .isEqualTo(
+            ConstraintValueInfo.create(basicConstraintSetting, makeLabel("//constraint:bar")));
 
     assertThat(provider.toolchainLabel()).isEqualTo(makeLabel("//toolchain:toolchain_def1"));
+  }
+
+  @Test
+  public void ruleDefinitionIncorrectlyDependsOnToolchainInstance() throws Exception {
+    scratch.file(
+        "toolchain/toolchain_def.bzl",
+        "def _impl(ctx):",
+        "  return [platform_common.ToolchainInfo()]",
+        "toolchain_def = rule(",
+        "    implementation = _impl,",
+        "    attrs = {})");
+    scratch.file(
+        "toolchain/BUILD",
+        "load(':toolchain_def.bzl', 'toolchain_def')",
+        "toolchain_type(name = 'demo_toolchain')",
+        "toolchain(",
+        "  name = 'toolchain1',",
+        "  toolchain_type = ':demo_toolchain',",
+        "  exec_compatible_with = ['//constraint:foo'],",
+        "  target_compatible_with = ['//constraint:bar'],",
+        "  toolchain = ':toolchain_def1')",
+        "toolchain_def(name = 'toolchain_def1')");
+    scratch.file(
+        "rule/rule_def.bzl",
+        "def _impl(ctx):",
+        "    pass",
+        "my_rule = rule(",
+        "    implementation = _impl,",
+        "    toolchains = ['//toolchain:toolchain1'])");
+    scratch.file("rule/BUILD", "load('//rule:rule_def.bzl', 'my_rule')", "my_rule(name = 'me')");
+    reporter.removeHandler(failFastHandler); // expect errors
+    ConfiguredTarget target = getConfiguredTarget("//rule:me");
+    assertThat(target).isNull();
+    assertContainsEvent(
+        "Target //toolchain:toolchain1 was referenced as a toolchain type, but is a toolchain "
+            + "instance. Is the rule definition for the target you're building setting "
+            + "\"toolchains =\" to a toolchain() instead of the expected toolchain_type()?");
   }
 }

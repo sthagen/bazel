@@ -21,7 +21,7 @@ import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.rules.LateBoundAlias.CommonAliasRule;
 
 /** Implementation of the {@code cc_toolchain_alias} rule. */
-public class CcHostToolchainAliasRule extends CommonAliasRule {
+public class CcHostToolchainAliasRule extends CommonAliasRule<CppConfiguration> {
 
   public CcHostToolchainAliasRule() {
     super(
@@ -33,6 +33,6 @@ public class CcHostToolchainAliasRule extends CommonAliasRule {
   @Override
   protected Attribute.Builder<Label> makeAttribute(RuleDefinitionEnvironment environment) {
     Attribute.Builder<Label> builder = super.makeAttribute(environment);
-    return builder.cfg(HostTransition.INSTANCE);
+    return builder.cfg(HostTransition.createFactory());
   }
 }

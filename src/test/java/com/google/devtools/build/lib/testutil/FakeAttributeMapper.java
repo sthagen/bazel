@@ -18,7 +18,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.packages.AbstractAttributeMapper;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -94,7 +94,7 @@ public class FakeAttributeMapper extends AbstractAttributeMapper {
     }
 
     private <U> U validateAndGet(Type<U> otherType) {
-      assertThat(type).isSameAs(otherType);
+      assertThat(type).isSameInstanceAs(otherType);
       return otherType.cast(value);
     }
   }

@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.blackbox.junit;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.blackbox.bazel.BlackBoxTestEnvironmentImpl;
 import com.google.devtools.build.lib.blackbox.bazel.CrossToolsSetup;
 import com.google.devtools.build.lib.blackbox.bazel.CxxToolsSetup;
@@ -25,6 +24,7 @@ import com.google.devtools.build.lib.blackbox.framework.BlackBoxTestContext;
 import com.google.devtools.build.lib.blackbox.framework.BlackBoxTestEnvironment;
 import com.google.devtools.build.lib.blackbox.framework.PathUtils;
 import com.google.devtools.build.lib.blackbox.framework.ToolsSetup;
+import com.google.devtools.build.lib.util.OS;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.After;
@@ -47,11 +47,12 @@ import org.junit.rules.TestName;
  */
 public abstract class AbstractBlackBoxTest {
   public static final List<ToolsSetup> DEFAULT_TOOLS =
-      Lists.newArrayList(
+      ImmutableList.of(
           new DefaultToolsSetup(),
           new JavaToolsSetup(),
           new CxxToolsSetup(),
           new CrossToolsSetup());
+  protected static final String WORKSPACE = "WORKSPACE";
 
   @Rule public TestName testName = new TestName();
 
@@ -93,7 +94,7 @@ public abstract class AbstractBlackBoxTest {
   }
 
   /**
-   * Prepare the test environment for the test method and set the test context .
+   * Prepares the test environment for the test method and set the test context.
    *
    * @param tools all {@link ToolsSetup} to be called during environment initialization
    * @throws Exception if any {@link ToolsSetup} call fails
@@ -121,5 +122,15 @@ public abstract class AbstractBlackBoxTest {
    */
   protected ImmutableList<ToolsSetup> getAdditionalTools() {
     return ImmutableList.of();
+  }
+
+  /**
+   * Check if we are running tests on Windows
+   *
+   * @return True, if we are running tests on Windows; False, if we are running tests on other
+   *     platforms.
+   */
+  protected static boolean isWindows() {
+    return OS.WINDOWS.equals(OS.getCurrent());
   }
 }

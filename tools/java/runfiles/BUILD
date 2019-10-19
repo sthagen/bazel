@@ -1,11 +1,16 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//visibility:private"])
 
 filegroup(
     name = "srcs",
     srcs = glob(
         ["**"],
-        exclude = [".*"],  # .swp files and such
-    ),
+        exclude = [
+            ".*",
+            "*~",
+        ],  # .swp files and such
+    ) + ["//tools/java/runfiles/testing:srcs"],
     visibility = ["//tools/java:__pkg__"],
 )
 
@@ -29,41 +34,7 @@ filegroup(
 java_library(
     name = "runfiles",
     srcs = [":java-srcs"],
-)
-
-java_test(
-    name = "RunfilesTest",
-    srcs = ["RunfilesTest.java"],
-    test_class = "com.google.devtools.build.runfiles.RunfilesTest",
-    deps = [":test_deps"],
-)
-
-java_test(
-    name = "UtilTest",
-    srcs = ["UtilTest.java"],
-    test_class = "com.google.devtools.build.runfiles.UtilTest",
-    deps = [":test_deps"],
-)
-
-java_library(
-    name = "test_deps",
-    testonly = 1,
-    exports = [
-        ":mock-file",
-        ":runfiles",
-        "//third_party:guava",
-        "//third_party:guava-testlib",
-        "//third_party:junit4",
-        "//third_party:truth",
-    ],
-)
-
-java_library(
-    name = "mock-file",
-    testonly = 1,
-    srcs = ["MockFile.java"],
-    exports = ["//third_party:guava"],
-    deps = ["//third_party:guava"],
+    visibility = ["//tools/java/runfiles/testing:__pkg__"],
 )
 
 test_suite(
@@ -78,6 +49,7 @@ test_suite(
     name = "all_windows_tests",
     tests = [
         ":windows_tests",
+        "//tools/java/runfiles/testing:all_windows_tests",
     ],
     visibility = ["//tools/java:__pkg__"],
 )

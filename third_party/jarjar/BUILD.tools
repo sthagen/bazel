@@ -2,9 +2,14 @@ package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])  # Apache 2.0
 
-java_import(
+load(
+    "//tools/jdk:remote_java_tools_aliases.bzl",
+    "remote_java_tools_java_import",
+)
+
+remote_java_tools_java_import(
     name = "jarjar_import",
-    jars = [":jarjar_command_deploy.jar"],
+    target = ":JarJar",
 )
 
 java_binary(

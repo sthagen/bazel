@@ -20,17 +20,19 @@ import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Sets.SetView;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.syntax.Concatable;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.SkylarkType;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -94,6 +96,13 @@ public abstract class SkylarkInfo extends StructImpl implements Concatable, Skyl
   /** Returns true if this provider is schemaful (array-based), false otherwise. */
   public boolean isCompact() {
     return getLayout() != null;
+  }
+
+  @Override
+  public Object getValue(Location loc, StarlarkSemantics starlarkSemantics, String name)
+      throws EvalException {
+    // By default, a SkylarkInfo's field values are not affected by the Starlark semantics.
+    return getValue(name);
   }
 
   /**
@@ -250,8 +259,7 @@ public abstract class SkylarkInfo extends StructImpl implements Concatable, Skyl
   /** A {@link SkylarkInfo} implementation that stores its values in a map. */
   // TODO(b/72448383): Make private.
   public static final class MapBackedSkylarkInfo extends SkylarkInfo {
-
-    private final ImmutableMap<String, Object> values;
+    private final ImmutableSortedMap<String, Object> values;
 
     /**
      * Formattable string with one {@code '%s'} placeholder for the missing field name.
@@ -329,7 +337,7 @@ public abstract class SkylarkInfo extends StructImpl implements Concatable, Skyl
       this.values = new Object[values.length];
       for (int i = 0; i < values.length; i++) {
         // TODO(b/74396075): Phase out this unnecessary conversion.
-        this.values[i] = SkylarkType.convertToSkylark(values[i], (Environment) null);
+        this.values[i] = SkylarkType.convertToSkylark(values[i], (StarlarkThread) null);
       }
     }
 

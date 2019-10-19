@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.skylarkbuildapi.java.GeneratedExtensionRegistryProviderApi;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 
 /**
@@ -36,7 +37,6 @@ import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 public final class GeneratedExtensionRegistryProvider extends NativeInfo
     implements GeneratedExtensionRegistryProviderApi<Artifact> {
 
-  public static final String PROVIDER_NAME = "GeneratedExtensionRegistryProvider";
   public static final Provider PROVIDER = new Provider();
 
   private final Label generatingRuleLabel;
@@ -142,11 +142,11 @@ public final class GeneratedExtensionRegistryProvider extends NativeInfo
   public static class Provider extends BuiltinProvider<GeneratedExtensionRegistryProvider>
       implements GeneratedExtensionRegistryProviderApi.Provider<Artifact> {
     private Provider() {
-      super(PROVIDER_NAME, GeneratedExtensionRegistryProvider.class);
+      super(NAME, GeneratedExtensionRegistryProvider.class);
     }
 
     public String getName() {
-      return PROVIDER_NAME;
+      return NAME;
     }
 
     @Override
@@ -155,14 +155,15 @@ public final class GeneratedExtensionRegistryProvider extends NativeInfo
         boolean isLite,
         Artifact classJar,
         Artifact srcJar,
-        SkylarkNestedSet inputs) {
+        SkylarkNestedSet inputs)
+        throws EvalException {
       return new GeneratedExtensionRegistryProvider(
           generatingRuleLabel,
           isLite,
           classJar,
           srcJar,
           NestedSetBuilder.<Artifact>stableOrder()
-              .addTransitive(inputs.getSet(Artifact.class))
+              .addTransitive(inputs.getSetFromParam(Artifact.class, "inputs"))
               .build());
     }
   }

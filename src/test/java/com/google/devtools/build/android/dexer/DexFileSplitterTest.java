@@ -14,6 +14,7 @@
 package com.google.devtools.build.android.dexer;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.fail;
 
@@ -24,6 +25,7 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.runfiles.Runfiles;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
@@ -43,12 +45,24 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class DexFileSplitterTest {
 
-  private static final Path WORKING_DIR = Paths.get(System.getProperty("user.dir"));
-  private static final Path INPUT_JAR = WORKING_DIR.resolve(System.getProperty("testinputjar"));
-  private static final Path INPUT_JAR2 = WORKING_DIR.resolve(System.getProperty("testinputjar2"));
-  private static final Path MAIN_DEX_LIST_FILE =
-      WORKING_DIR.resolve(System.getProperty("testmaindexlist"));
+  private static final Path INPUT_JAR;
+  private static final Path INPUT_JAR2;
+  private static final Path MIXED_JAR;
+  private static final Path MAIN_DEX_LIST_FILE;
   static final String DEX_PREFIX = "classes";
+
+  static {
+    try {
+      Runfiles runfiles = Runfiles.create();
+
+      INPUT_JAR = Paths.get(runfiles.rlocation(System.getProperty("testinputjar")));
+      INPUT_JAR2 = Paths.get(runfiles.rlocation(System.getProperty("testinputjar2")));
+      MIXED_JAR = Paths.get(runfiles.rlocation(System.getProperty("mixedinputjar")));
+      MAIN_DEX_LIST_FILE = Paths.get(runfiles.rlocation(System.getProperty("testmaindexlist")));
+    } catch (Exception e) {
+      throw new ExceptionInInitializerError(e);
+    }
+  }
 
   @Test
   public void testSingleInputSingleOutput() throws Exception {
@@ -111,20 +125,20 @@ public class DexFileSplitterTest {
     for (Path outputArchive : outputArchives) {
       ImmutableList<ZipEntry> expectedEntries;
       try (ZipFile zip = new ZipFile(outputArchive.toFile())) {
-        expectedEntries = zip.stream().collect(ImmutableList.toImmutableList());
+        expectedEntries = zip.stream().collect(ImmutableList.<ZipEntry>toImmutableList());
       }
       ImmutableList<ZipEntry> actualEntries;
       try (ZipFile zip2 = new ZipFile(outputRoot2.resolve(outputArchive.getFileName()).toFile())) {
-        actualEntries = zip2.stream().collect(ImmutableList.toImmutableList());
+        actualEntries = zip2.stream().collect(ImmutableList.<ZipEntry>toImmutableList());
       }
       int len = expectedEntries.size();
       assertThat(actualEntries).hasSize(len);
       for (int i = 0; i < len; ++i) {
         ZipEntry expected = expectedEntries.get(i);
         ZipEntry actual = actualEntries.get(i);
-        assertThat(actual.getName()).named(actual.getName()).isEqualTo(expected.getName());
-        assertThat(actual.getSize()).named(actual.getName()).isEqualTo(expected.getSize());
-        assertThat(actual.getCrc()).named(actual.getName()).isEqualTo(expected.getCrc());
+        assertWithMessage(actual.getName()).that(actual.getName()).isEqualTo(expected.getName());
+        assertWithMessage(actual.getName()).that(actual.getSize()).isEqualTo(expected.getSize());
+        assertWithMessage(actual.getName()).that(actual.getCrc()).isEqualTo(expected.getCrc());
       }
     }
   }
@@ -144,7 +158,7 @@ public class DexFileSplitterTest {
     ImmutableSet<String> expectedEntries = dexEntries(dexArchive);
     assertThat(outputArchives.size()).isGreaterThan(1); // test sanity
     assertThat(dexEntries(outputArchives.get(0)))
-        .containsAllIn(expectedMainDexEntries());
+        .containsAtLeastElementsIn(expectedMainDexEntries());
     assertExpectedEntries(outputArchives, expectedEntries);
   }
 
@@ -204,6 +218,18 @@ public class DexFileSplitterTest {
     assertExpectedEntries(outputArchives, dexEntries(dexArchive2));
   }
 
+  @Test
+  public void testMixedInput_keptSeparate() throws Exception {
+    Path dexArchive = buildDexArchive();
+    Path mixedArchive = buildDexArchive(MIXED_JAR, "mixed.jar.dex.zip");
+    ImmutableList<Path> outputArchives =
+        runDexSplitter(256 * 256, "mixed_input", dexArchive, mixedArchive);
+    assertThat(outputArchives).hasSize(3);
+    assertThat(dexEntries(outputArchives.get(0))).contains("aaa/Baz.class.dex");
+    assertThat(dexEntries(outputArchives.get(1))).containsExactly("j$/test/Foo.class.dex");
+    assertThat(dexEntries(outputArchives.get(2))).containsExactly("zzz/Bar.class.dex");
+  }
+
   private static Iterable<String> expectedMainDexEntries() throws IOException {
     return Iterables.transform(
         Files.readAllLines(MAIN_DEX_LIST_FILE),
@@ -248,11 +274,10 @@ public class DexFileSplitterTest {
   private ImmutableSet<String> dexEntries(Path dexArchive) throws IOException {
     try (ZipFile input = new ZipFile(dexArchive.toFile())) {
       ImmutableSet<String> result =
-          input
-              .stream()
+          input.stream()
               .map(ZipEntryName.INSTANCE)
               .filter(Predicates.containsPattern(".*\\.class.dex$"))
-              .collect(ImmutableSet.toImmutableSet());
+              .collect(ImmutableSet.<String>toImmutableSet());
       assertThat(result).isNotEmpty(); // test sanity
       return result;
     }

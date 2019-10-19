@@ -136,7 +136,7 @@ abstract public class SkyframeLabelVisitorTestCase extends PackageLoadingTestCas
     // Spawn a lot of threads to help uncover concurrency issues
     boolean result = visitor.sync(reporter, startingLabels, keepGoing, /*parallelThreads=*/ 200);
 
-    assertThat(result).isNotSameAs(expectError);
+    assertThat(result).isNotEqualTo(expectError);
     assertExpectedTargets(expectedLabels, startingLabels);
   }
 
@@ -210,9 +210,9 @@ abstract public class SkyframeLabelVisitorTestCase extends PackageLoadingTestCas
 
     // Spawn a lot of threads to help uncover concurrency issues
     boolean result = visitor.sync(reporter, labels, keepGoing, 200);
-    assertThat(result).isNotSameAs(expectError);
+    assertThat(result).isNotEqualTo(expectError);
     assertThat(getVisitedLabels(asLabelSet(startingLabels), skyframeExecutor))
-        .containsAllIn(asLabelSet(expectedLabels));
+        .containsAtLeastElementsIn(asLabelSet(expectedLabels));
   }
 
   protected void syncPackages() throws InterruptedException {
@@ -237,7 +237,7 @@ abstract public class SkyframeLabelVisitorTestCase extends PackageLoadingTestCas
 
   @Before
   public final void initializeVisitor() throws Exception {
-    setUpSkyframe(ConstantRuleVisibility.PRIVATE, loadingMock.getDefaultsPackageContent());
+    setUpSkyframe(ConstantRuleVisibility.PRIVATE);
     this.visitor = skyframeExecutor.pkgLoader();
   }
 
@@ -254,11 +254,11 @@ abstract public class SkyframeLabelVisitorTestCase extends PackageLoadingTestCas
     }
 
     @Override
-    public FileStatus stat(Path path, boolean followSymlinks) throws IOException {
+    public FileStatus statIfFound(Path path, boolean followSymlinks) throws IOException {
       if (stubbedStats.containsKey(path)) {
         return stubbedStats.get(path);
       }
-      return super.stat(path, followSymlinks);
+      return super.statIfFound(path, followSymlinks);
     }
   }
 }

@@ -15,10 +15,11 @@ package com.google.devtools.build.lib.concurrent;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.concurrent.ErrorClassifier.ErrorClassification;
 import com.google.devtools.build.lib.testutil.TestThread;
@@ -49,19 +50,62 @@ public class AbstractQueueVisitorTest {
     CountingQueueVisitor counter = new CountingQueueVisitor();
     counter.enqueue();
     counter.awaitQuiescence(/*interruptWorkers=*/ false);
-    assertThat(counter.getCount()).isSameAs(10);
+    assertThat(counter.getCount()).isSameInstanceAs(10);
+  }
+
+  @Test
+  public void externalDep() throws Exception {
+    SettableFuture<Object> future = SettableFuture.create();
+    AbstractQueueVisitor counter =
+        new AbstractQueueVisitor(
+            /*parallelism=*/ 2,
+            /* keepAliveTime= */ 3L,
+            TimeUnit.SECONDS,
+            /* failFastOnException= */ true,
+            "FOO-BAR",
+            ErrorClassifier.DEFAULT);
+    counter.dependOnFuture(future);
+    new Thread(
+            () -> {
+              try {
+                Thread.sleep(5);
+                future.set(new Object());
+              } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+              }
+            })
+        .start();
+    counter.awaitQuiescence(/*interruptWorkers=*/ false);
+  }
+
+  @Test
+  public void externalDepWithInterrupt() throws Exception {
+    SettableFuture<Object> future = SettableFuture.create();
+    AbstractQueueVisitor counter =
+        new AbstractQueueVisitor(
+            /*parallelism=*/ 2,
+            /* keepAliveTime= */ 3L,
+            TimeUnit.SECONDS,
+            /* failFastOnException= */ true,
+            "FOO-BAR",
+            ErrorClassifier.DEFAULT);
+    counter.dependOnFuture(future);
+    Thread.currentThread().interrupt();
+    assertThrows(
+        InterruptedException.class, () -> counter.awaitQuiescence(/*interruptWorkers=*/ true));
+    assertThat(future.isCancelled()).isTrue();
   }
 
   @Test
   public void callerOwnedPool() throws Exception {
     ThreadPoolExecutor executor = new ThreadPoolExecutor(5, 5, 0, TimeUnit.SECONDS,
                                                          new LinkedBlockingQueue<Runnable>());
-    assertThat(executor.getActiveCount()).isSameAs(0);
+    assertThat(executor.getActiveCount()).isSameInstanceAs(0);
 
     CountingQueueVisitor counter = new CountingQueueVisitor(executor);
     counter.enqueue();
     counter.awaitQuiescence(/*interruptWorkers=*/ false);
-    assertThat(counter.getCount()).isSameAs(10);
+    assertThat(counter.getCount()).isSameInstanceAs(10);
 
     executor.shutdown();
     assertThat(executor.awaitTermination(TestUtils.WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
@@ -74,7 +118,7 @@ public class AbstractQueueVisitorTest {
     counter.enqueue();
     counter.enqueue();
     counter.awaitQuiescence(/*interruptWorkers=*/ false);
-    assertThat(counter.getCount()).isSameAs(10);
+    assertThat(counter.getCount()).isSameInstanceAs(10);
   }
 
   @Test
@@ -89,14 +133,10 @@ public class AbstractQueueVisitorTest {
           }
         });
 
-    try {
-      // The exception from the worker thread should be
-      // re-thrown from the main thread.
-      visitor.awaitQuiescence(/*interruptWorkers=*/ false);
-      fail();
-    } catch (Exception e) {
-      assertThat(e).isSameAs(myException);
-    }
+    // The exception from the worker thread should be re-thrown from the main thread.
+    Exception e =
+        assertThrows(Exception.class, () -> visitor.awaitQuiescence(/*interruptWorkers=*/ false));
+    assertThat(e).isSameInstanceAs(myException);
   }
 
   // Regression test for "AbstractQueueVisitor loses track of jobs if thread allocation fails".
@@ -122,13 +162,10 @@ public class AbstractQueueVisitorTest {
 
     CountingQueueVisitor counter = new CountingQueueVisitor(executor);
     counter.enqueue();
-    try {
-      counter.awaitQuiescence(/*interruptWorkers=*/ false);
-      fail();
-    } catch (Error expected) {
-      assertThat(expected).hasMessage("Could not create thread (fakeout)");
-    }
-    assertThat(counter.getCount()).isSameAs(5);
+    Error expected =
+        assertThrows(Error.class, () -> counter.awaitQuiescence(/*interruptWorkers=*/ false));
+    assertThat(expected).hasMessageThat().isEqualTo("Could not create thread (fakeout)");
+    assertThat(counter.getCount()).isSameInstanceAs(5);
 
     executor.shutdown();
     assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
@@ -156,13 +193,10 @@ public class AbstractQueueVisitorTest {
     assertThat(threadStarted.await(TestUtils.WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
     // Interrupt will not be processed until work starts.
     Thread.currentThread().interrupt();
-    try {
-      visitor.awaitQuiescence(/*interruptWorkers=*/ true);
-      fail();
-    } catch (Exception e) {
-      assertThat(e).isEqualTo(THROWABLE);
-      assertThat(Thread.interrupted()).isTrue();
-    }
+    Exception e =
+        assertThrows(Exception.class, () -> visitor.awaitQuiescence(/*interruptWorkers=*/ true));
+    assertThat(e).isEqualTo(THROWABLE);
+    assertThat(Thread.interrupted()).isTrue();
   }
 
   @Test
@@ -188,28 +222,21 @@ public class AbstractQueueVisitorTest {
         });
 
     TestThread interrupterThread =
-        new TestThread() {
-          @Override
-          public void runTest() throws Exception {
-            latch1.await();
-            mainThread.interrupt();
-            assertThat(
-                    visitor
-                        .getInterruptionLatchForTestingOnly()
-                        .await(TestUtils.WAIT_TIMEOUT_MILLISECONDS, TimeUnit.MILLISECONDS))
-                .isTrue();
-            latch2.countDown();
-          }
-        };
-
+        new TestThread(
+            () -> {
+              latch1.await();
+              mainThread.interrupt();
+              assertThat(
+                      visitor
+                          .getInterruptionLatchForTestingOnly()
+                          .await(TestUtils.WAIT_TIMEOUT_MILLISECONDS, TimeUnit.MILLISECONDS))
+                  .isTrue();
+              latch2.countDown();
+            });
     interrupterThread.start();
 
-    try {
-      visitor.awaitQuiescence(/*interruptWorkers=*/ false);
-      fail();
-    } catch (InterruptedException e) {
-      // Expected.
-    }
+    assertThrows(
+        InterruptedException.class, () -> visitor.awaitQuiescence(/*interruptWorkers=*/ false));
 
     interrupterThread.joinAndAssertState(400);
     assertThat(workerThreadCompleted[0]).isTrue();
@@ -250,12 +277,8 @@ public class AbstractQueueVisitorTest {
     latch1.await();
     Thread.currentThread().interrupt();
 
-    try {
-      visitor.awaitQuiescence(/*interruptWorkers=*/ true);
-      fail();
-    } catch (InterruptedException e) {
-      // Expected.
-    }
+    assertThrows(
+        InterruptedException.class, () -> visitor.awaitQuiescence(/*interruptWorkers=*/ true));
 
     assertThat(workerThreadInterrupted[0]).isTrue();
   }
@@ -323,15 +346,12 @@ public class AbstractQueueVisitorTest {
     latchB.await();
     visitor.execute(interrupt ? interruptingRunnable(Thread.currentThread()) : throwingRunnable());
 
-    try {
-      visitor.awaitQuiescence(/*interruptWorkers=*/ false);
-      fail();
-    } catch (Exception e) {
-      if (interrupt) {
+    Exception e =
+        assertThrows(Exception.class, () -> visitor.awaitQuiescence(/*interruptWorkers=*/ false));
+    if (interrupt) {
         assertThat(e).isInstanceOf(InterruptedException.class);
       } else {
-        assertThat(e).isSameAs(THROWABLE);
-      }
+      assertThat(e).isSameInstanceAs(THROWABLE);
     }
     assertWithMessage("got: " + visitedList + "\nwant: " + Arrays.toString(expectedVisited))
         .that(Sets.newHashSet(visitedList))
@@ -374,12 +394,9 @@ public class AbstractQueueVisitorTest {
     visitor.execute(throwingRunnable());
     CountDownLatch exnLatch = visitor.getExceptionLatchForTestingOnly();
 
-    try {
-      visitor.awaitQuiescence(/*interruptWorkers=*/ true);
-      fail();
-    } catch (Exception e) {
-      assertThat(e).isSameAs(THROWABLE);
-    }
+    Exception e =
+        assertThrows(Exception.class, () -> visitor.awaitQuiescence(/*interruptWorkers=*/ true));
+    assertThat(e).isSameInstanceAs(THROWABLE);
 
     assertThat(wasInterrupted.get()).isTrue();
     assertThat(executor.isShutdown()).isTrue();

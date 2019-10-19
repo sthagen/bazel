@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 
 #include <windows.h>
 
@@ -38,19 +40,26 @@ static void ReportLastError(const std::wstring& error_str, JNIEnv* env,
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeIsJunction(
-    JNIEnv* env, jclass clazz, jstring path, jobjectArray error_msg_holder) {
+Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeIsSymlinkOrJunction(
+    JNIEnv* env, jclass clazz, jstring path, jbooleanArray result_holder,
+    jobjectArray error_msg_holder) {
   std::wstring wpath(bazel::windows::GetJavaWstring(env, path));
-  int result = bazel::windows::IsJunctionOrDirectorySymlink(wpath.c_str());
-  if (result == bazel::windows::IS_JUNCTION_ERROR &&
-      CanReportError(env, error_msg_holder)) {
-    DWORD err_code = GetLastError();
-    ReportLastError(
-        bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
-                                         L"nativeIsJunction", wpath, err_code),
-        env, error_msg_holder);
+  std::wstring error;
+  bool is_sym = false;
+  int result =
+      bazel::windows::IsSymlinkOrJunction(wpath.c_str(), &is_sym, &error);
+  if (result == bazel::windows::IsSymlinkOrJunctionResult::kSuccess) {
+    jboolean is_sym_jbool = is_sym ? JNI_TRUE : JNI_FALSE;
+    env->SetBooleanArrayRegion(result_holder, 0, 1, &is_sym_jbool);
+  } else {
+    if (!error.empty() && CanReportError(env, error_msg_holder)) {
+      ReportLastError(
+          bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
+                                           L"nativeIsJunction", wpath, error),
+          env, error_msg_holder);
+    }
   }
-  return result;
+  return static_cast<jint>(result);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -60,11 +69,13 @@ Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeGetLo
   std::unique_ptr<WCHAR[]> result;
   std::wstring wpath(bazel::windows::GetJavaWstring(env, path));
   std::wstring error(bazel::windows::GetLongPath(wpath.c_str(), &result));
-  if (!error.empty() && CanReportError(env, error_msg_holder)) {
-    ReportLastError(
-        bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
-                                         L"nativeGetLongPath", wpath, error),
-        env, error_msg_holder);
+  if (!error.empty()) {
+    if (CanReportError(env, error_msg_holder)) {
+      ReportLastError(
+          bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
+                                           L"nativeGetLongPath", wpath, error),
+          env, error_msg_holder);
+    }
     return JNI_FALSE;
   }
   env->SetObjectArrayElement(
@@ -89,7 +100,30 @@ Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeCreat
                         wname + L", " + wtarget, error),
                     env, error_msg_holder);
   }
-  return result;
+  return static_cast<jint>(result);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeReadSymlinkOrJunction(
+    JNIEnv* env, jclass clazz, jstring name, jobjectArray target_holder,
+    jobjectArray error_msg_holder) {
+  std::wstring wname(bazel::windows::GetJavaWstring(env, name));
+  std::wstring target, error;
+  int result = bazel::windows::ReadSymlinkOrJunction(wname, &target, &error);
+  if (result == bazel::windows::ReadSymlinkOrJunctionResult::kSuccess) {
+    env->SetObjectArrayElement(
+        target_holder, 0,
+        env->NewString(reinterpret_cast<const jchar*>(target.c_str()),
+                       target.size()));
+  } else {
+    if (!error.empty() && CanReportError(env, error_msg_holder)) {
+      ReportLastError(bazel::windows::MakeErrorMessage(
+                          WSTR(__FILE__), __LINE__,
+                          L"nativeReadSymlinkOrJunction", wname, error),
+                      env, error_msg_holder);
+    }
+  }
+  return static_cast<jint>(result);
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -106,4 +140,15 @@ Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeDelet
         env, error_msg_holder);
   }
   return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeGetCorrectCasing(
+    JNIEnv* env, jclass clazz, jstring path, jobjectArray result_holder) {
+  std::wstring wpath(bazel::windows::GetJavaWstring(env, path));
+  std::wstring result(bazel::windows::GetCorrectCasing(wpath));
+  env->SetObjectArrayElement(
+      result_holder, 0,
+      env->NewString(reinterpret_cast<const jchar*>(result.c_str()),
+                     result.size()));
 }

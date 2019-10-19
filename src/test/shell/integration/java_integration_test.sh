@@ -23,6 +23,10 @@ source "${CURRENT_DIR}/../shell_utils.sh" \
 source "${CURRENT_DIR}/../integration_test_setup.sh" \
   || { echo "integration_test_setup.sh not found!" >&2; exit 1; }
 
+# Load the helper utils.
+source "${CURRENT_DIR}/java_integration_test_utils.sh" \
+  || { echo "java_integration_test_utils.sh not found!" >&2; exit 1; }
+
 set -eu
 
 declare -r runfiles_relative_javabase="$1"
@@ -254,13 +258,20 @@ function assert_singlejar_works() {
   mkdir -p "$pkg/jvm"
   cat > "$pkg/jvm/BUILD" <<EOF
 package(default_visibility=["//visibility:public"])
-java_runtime(name='runtime', java_home='$javabase')
+java_runtime(
+    name='runtime',
+    java_home='$javabase',
+)
 EOF
 
+  create_java_test_platforms
 
   # Set javabase to an absolute path.
   bazel build //$pkg/java/hello:hello //$pkg/java/hello:hello_deploy.jar \
-      "$stamp_arg" --javabase="//$pkg/jvm:runtime" "$embed_label" >&"$TEST_log" \
+      "$stamp_arg" --javabase="//$pkg/jvm:runtime" \
+      --extra_toolchains="//$pkg/jvm:all,//tools/jdk:all" \
+      --platforms="//$pkg/jvm:platform" \
+      "$embed_label" >&"$TEST_log" \
       || fail "Build failed"
 
   mkdir $pkg/ugly/ || fail "mkdir failed"
@@ -806,7 +817,7 @@ java_library(
 )
 EOF
   bazel build --java_header_compilation=true \
-    //$pkg/java/test:a >& "$TEST_log" && fail "Unexpected success"
+    //$pkg/java/test:liba.jar >& "$TEST_log" && fail "Unexpected success"
   expect_log "symbol not found missing.NoSuch"
 }
 

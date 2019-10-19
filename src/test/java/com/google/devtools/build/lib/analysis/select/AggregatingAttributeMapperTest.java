@@ -15,13 +15,12 @@ package com.google.devtools.build.lib.analysis.select;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.packages.Type.STRING;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -36,7 +35,7 @@ import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.UnknownRuleConfiguredTarget;
 import org.junit.Before;
@@ -58,7 +57,7 @@ public class AggregatingAttributeMapperTest extends AbstractAttributeMapperTest 
 
   private static Label getDefaultMallocLabel(Rule rule) {
     return Verify.verifyNotNull(
-        (Label) rule.getRuleClassObject().getAttributeByName("malloc").getDefaultValueForTesting());
+        (Label) rule.getRuleClassObject().getAttributeByName("malloc").getDefaultValueUnchecked());
   }
 
   /**
@@ -269,8 +268,7 @@ public class AggregatingAttributeMapperTest extends AbstractAttributeMapperTest 
     }
 
     @Override
-    public ConfiguredTarget create(RuleContext ruleContext)
-        throws InterruptedException, RuleErrorException, ActionConflictException {
+    public ConfiguredTarget create(RuleContext ruleContext) {
       throw new UnsupportedOperationException();
     }
   }

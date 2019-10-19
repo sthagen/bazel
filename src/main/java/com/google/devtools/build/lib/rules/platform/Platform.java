@@ -14,7 +14,9 @@
 
 package com.google.devtools.build.lib.rules.platform;
 
-import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
@@ -26,13 +28,16 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.config.AutoCpuConverter;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.platform.ConstraintCollection;
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.CPU;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Pair;
+import java.util.List;
+import java.util.Map;
 
 /** Defines a platform for execution contexts. */
 public class Platform implements RuleConfiguredTargetFactory {
@@ -40,25 +45,27 @@ public class Platform implements RuleConfiguredTargetFactory {
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
 
+    PlatformOptions platformOptions =
+        ruleContext.getConfiguration().getOptions().get(PlatformOptions.class);
+
     PlatformInfo.Builder platformBuilder = PlatformInfo.builder().setLabel(ruleContext.getLabel());
 
-    Boolean isHostPlatform =
-        ruleContext.attributes().get(PlatformRule.HOST_PLATFORM_ATTR, Type.BOOLEAN);
-    Boolean isTargetPlatform =
-        ruleContext.attributes().get(PlatformRule.TARGET_PLATFORM_ATTR, Type.BOOLEAN);
-    if (isHostPlatform && isTargetPlatform) {
-      ruleContext.attributeError(
-          PlatformRule.HOST_PLATFORM_ATTR,
-          "A single platform cannot have both host_platform and target_platform set.");
-      return null;
-    } else if (isHostPlatform) {
-      // Create default constraints based on the current host OS and CPU values.
-      String cpuOption = ruleContext.getConfiguration().getHostCpu();
-      autodetectConstraints(cpuOption, ruleContext, platformBuilder);
-    } else if (isTargetPlatform) {
-      // Create default constraints based on the current OS and CPU values.
-      String cpuOption = ruleContext.getConfiguration().getCpu();
-      autodetectConstraints(cpuOption, ruleContext, platformBuilder);
+    List<PlatformInfo> parentPlatforms =
+        Lists.newArrayList(
+            PlatformProviderUtils.platforms(
+                ruleContext.getPrerequisites(PlatformRule.PARENTS_PLATFORM_ATTR, Mode.DONT_CHECK)));
+
+    if (parentPlatforms.size() > 1) {
+      throw ruleContext.throwWithAttributeError(
+          PlatformRule.PARENTS_PLATFORM_ATTR,
+          PlatformRule.PARENTS_PLATFORM_ATTR + " attribute must have a single value");
+    }
+    PlatformInfo parentPlatform = Iterables.getFirst(parentPlatforms, null);
+    platformBuilder.setParent(parentPlatform);
+
+    if (!platformOptions.autoConfigureHostPlatform) {
+      // If the flag is set, the constraints are defaulted by @local_config_platform.
+      setDefaultConstraints(platformBuilder, ruleContext);
     }
 
     // Add the declared constraints. Because setting the host_platform or target_platform attribute
@@ -70,21 +77,22 @@ public class Platform implements RuleConfiguredTargetFactory {
 
     String remoteExecutionProperties =
         ruleContext.attributes().get(PlatformRule.REMOTE_EXECUTION_PROPS_ATTR, Type.STRING);
-    if (Strings.isNullOrEmpty(platformBuilder.getRemoteExecutionProperties()) && isHostPlatform) {
-      // Use the default override.
-      PlatformOptions platformOptions =
-          ruleContext.getConfiguration().getOptions().get(PlatformOptions.class);
-      remoteExecutionProperties = platformOptions.hostPlatformRemotePropertiesOverride;
-    }
     platformBuilder.setRemoteExecutionProperties(remoteExecutionProperties);
+
+    Map<String, String> execProperties =
+        ruleContext.attributes().get(PlatformRule.EXEC_PROPS_ATTR, Type.STRING_DICT);
+    if (execProperties != null && !execProperties.isEmpty()) {
+      platformBuilder.setExecProperties(ImmutableMap.copyOf(execProperties));
+    }
 
     PlatformInfo platformInfo;
     try {
       platformInfo = platformBuilder.build();
-    } catch (PlatformInfo.DuplicateConstraintException e) {
-      // Report the error and return null.
-      ruleContext.attributeError(PlatformRule.CONSTRAINT_VALUES_ATTR, e.getMessage());
-      return null;
+    } catch (ConstraintCollection.DuplicateConstraintException e) {
+      throw ruleContext.throwWithAttributeError(
+          PlatformRule.CONSTRAINT_VALUES_ATTR, e.getMessage());
+    } catch (PlatformInfo.ExecPropertiesException e) {
+      throw ruleContext.throwWithAttributeError(PlatformRule.EXEC_PROPS_ATTR, e.getMessage());
     }
 
     return new RuleConfiguredTargetBuilder(ruleContext)
@@ -93,6 +101,27 @@ public class Platform implements RuleConfiguredTargetFactory {
         .addProvider(FilesToRunProvider.class, FilesToRunProvider.EMPTY)
         .addNativeDeclaredProvider(platformInfo)
         .build();
+  }
+
+  private void setDefaultConstraints(PlatformInfo.Builder platformBuilder, RuleContext ruleContext)
+      throws RuleErrorException {
+    Boolean isHostPlatform =
+        ruleContext.attributes().get(PlatformRule.HOST_PLATFORM_ATTR, Type.BOOLEAN);
+    Boolean isTargetPlatform =
+        ruleContext.attributes().get(PlatformRule.TARGET_PLATFORM_ATTR, Type.BOOLEAN);
+    if (isHostPlatform && isTargetPlatform) {
+      throw ruleContext.throwWithAttributeError(
+          PlatformRule.HOST_PLATFORM_ATTR,
+          "A single platform cannot have both host_platform and target_platform set.");
+    } else if (isHostPlatform) {
+      // Create default constraints based on the current host OS and CPU values.
+      String cpuOption = ruleContext.getConfiguration().getHostCpu();
+      autodetectConstraints(cpuOption, ruleContext, platformBuilder);
+    } else if (isTargetPlatform) {
+      // Create default constraints based on the current OS and CPU values.
+      String cpuOption = ruleContext.getConfiguration().getCpu();
+      autodetectConstraints(cpuOption, ruleContext, platformBuilder);
+    }
   }
 
   private void autodetectConstraints(

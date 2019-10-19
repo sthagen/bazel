@@ -23,16 +23,20 @@ import com.google.devtools.build.lib.skylarkbuildapi.java.JavaInfoApi.JavaInfoPr
  */
 public class JavaBootstrap implements Bootstrap {
 
-  private final JavaCommonApi<?, ?, ?, ?, ?> javaCommonApi;
+  private final JavaCommonApi<?, ?, ?, ?, ?, ?> javaCommonApi;
   private final JavaInfoProviderApi javaInfoProviderApi;
   private final JavaProtoCommonApi<?, ?, ?> javaProtoCommonApi;
+  private final JavaCcLinkParamsProviderApi.Provider<?> javaCcLinkParamsProviderApiProvider;
 
-  public JavaBootstrap(JavaCommonApi<?, ?, ?, ?, ?> javaCommonApi,
+  public JavaBootstrap(
+      JavaCommonApi<?, ?, ?, ?, ?, ?> javaCommonApi,
       JavaInfoProviderApi javaInfoProviderApi,
-      JavaProtoCommonApi<?, ?, ?> javaProtoCommonApi) {
+      JavaProtoCommonApi<?, ?, ?> javaProtoCommonApi,
+      JavaCcLinkParamsProviderApi.Provider<?> javaCcLinkParamsProviderApiProvider) {
     this.javaCommonApi = javaCommonApi;
     this.javaInfoProviderApi = javaInfoProviderApi;
     this.javaProtoCommonApi = javaProtoCommonApi;
+    this.javaCcLinkParamsProviderApiProvider = javaCcLinkParamsProviderApiProvider;
   }
 
   @Override
@@ -40,5 +44,6 @@ public class JavaBootstrap implements Bootstrap {
     builder.put("java_common", javaCommonApi);
     builder.put("JavaInfo", javaInfoProviderApi);
     builder.put("java_proto_common", javaProtoCommonApi);
+    builder.put("JavaCcLinkParamsInfo", javaCcLinkParamsProviderApiProvider);
   }
 }

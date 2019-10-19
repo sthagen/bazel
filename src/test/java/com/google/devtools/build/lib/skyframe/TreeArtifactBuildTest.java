@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.actions.ActionInputHelper.treeFileArtifact;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
@@ -33,6 +33,8 @@ import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
+import com.google.devtools.build.lib.actions.ActionLookupData;
+import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -43,7 +45,6 @@ import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
-import com.google.devtools.build.lib.actions.OutputBaseSupplier;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.TestAction;
@@ -52,6 +53,7 @@ import com.google.devtools.build.lib.analysis.actions.SpawnActionTemplate;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.StoredEventHandler;
+import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.ActionTemplateExpansionKey;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -107,20 +109,24 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     writeFile(in, "input_content");
 
     outOne = createTreeArtifact("outputOne");
-    outOneFileOne = treeFileArtifact(outOne, "out_one_file_one");
-    outOneFileTwo = treeFileArtifact(outOne, "out_one_file_two");
+    outOneFileOne =
+        ActionsTestUtil.createTreeFileArtifactWithNoGeneratingAction(outOne, "out_one_file_one");
+    outOneFileTwo =
+        ActionsTestUtil.createTreeFileArtifactWithNoGeneratingAction(outOne, "out_one_file_two");
 
     outTwo = createTreeArtifact("outputTwo");
-    outTwoFileOne = treeFileArtifact(outTwo, "out_one_file_one");
-    outTwoFileTwo = treeFileArtifact(outTwo, "out_one_file_two");
+    outTwoFileOne =
+        ActionsTestUtil.createTreeFileArtifactWithNoGeneratingAction(outTwo, "out_one_file_one");
+    outTwoFileTwo =
+        ActionsTestUtil.createTreeFileArtifactWithNoGeneratingAction(outTwo, "out_one_file_two");
   }
 
   @Test
   public void testCodec() throws Exception {
-    new SerializationTester(outOne, outOneFileOne)
+    SpecialArtifact parent = createTreeArtifact("parent");
+    parent.setGeneratingActionKey(ActionLookupData.create(ACTION_LOOKUP_KEY, 0));
+    new SerializationTester(parent, ActionInputHelper.treeFileArtifact(parent, "child"))
         .addDependency(FileSystem.class, scratch.getFileSystem())
-        .addDependency(
-            OutputBaseSupplier.class, () -> scratch.getFileSystem().getPath(TestUtils.tmpDir()))
         .runTests();
   }
 
@@ -155,7 +161,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
   }
 
   @Test
-  public void testInputTreeArtifactPerActionFileCache() throws Exception {
+  public void testInputTreeArtifactMetadataProvider() throws Exception {
     TouchingTestAction actionOne = new TouchingTestAction(outOneFileOne, outOneFileTwo);
     registerAction(actionOne);
 
@@ -166,10 +172,10 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
           @Override
           public ActionResult execute(ActionExecutionContext actionExecutionContext) {
             try {
-              // Check the file cache for input TreeFileArtifacts.
-              MetadataProvider fileCache = actionExecutionContext.getMetadataProvider();
-              assertThat(fileCache.getMetadata(outOneFileOne).getType().isFile()).isTrue();
-              assertThat(fileCache.getMetadata(outOneFileTwo).getType().isFile()).isTrue();
+              // Check the metadata provider for input TreeFileArtifacts.
+              MetadataProvider metadataProvider = actionExecutionContext.getMetadataProvider();
+              assertThat(metadataProvider.getMetadata(outOneFileOne).getType().isFile()).isTrue();
+              assertThat(metadataProvider.getMetadata(outOneFileTwo).getType().isFile()).isTrue();
 
               // Touch the action output.
               touchFile(normalOutput);
@@ -407,6 +413,13 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     reporter.removeHandler(failFastHandler);
     reporter.addHandler(storingEventHandler);
 
+    SpecialArtifact outOne = createTreeArtifact("outputOne");
+    TreeFileArtifact outOneFileOne =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            outOne, PathFragment.create("out_one_file_one"), ACTION_LOOKUP_KEY);
+    TreeFileArtifact outOneFileTwo =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            outOne, PathFragment.create("out_one_file_two"), ACTION_LOOKUP_KEY);
     TreeArtifactTestAction failureOne = new TreeArtifactTestAction(
         Runnables.doNothing(), outOneFileOne, outOneFileTwo) {
       @Override
@@ -423,18 +436,23 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     };
 
     registerAction(failureOne);
-    try {
-      buildArtifact(outOne);
-      fail(); // Should have thrown
-    } catch (BuildFailedException e) {
-      //not all outputs were created
-      List<Event> errors = ImmutableList.copyOf(
-          Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
-      assertThat(errors).hasSize(2);
-      assertThat(errors.get(0).getMessage()).contains("not present on disk");
-      assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
-    }
+    outOneFileOne.setGeneratingActionKey(outOne.getGeneratingActionKey());
+    outOneFileTwo.setGeneratingActionKey(outOne.getGeneratingActionKey());
+    assertThrows(BuildFailedException.class, () -> buildArtifact(outOne));
+    // not all outputs were created
+    List<Event> errors =
+        ImmutableList.copyOf(Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
+    assertThat(errors).hasSize(2);
+    assertThat(errors.get(0).getMessage()).contains("not present on disk");
+    assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
 
+    SpecialArtifact outTwo = createTreeArtifact("outputTwo");
+    TreeFileArtifact outTwoFileOne =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            outTwo, PathFragment.create("out_two_file_one"), ACTION_LOOKUP_KEY);
+    TreeFileArtifact outTwoFileTwo =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            outTwo, PathFragment.create("out_two_file_two"), ACTION_LOOKUP_KEY);
     TreeArtifactTestAction failureTwo = new TreeArtifactTestAction(
         Runnables.doNothing(), outTwoFileOne, outTwoFileTwo) {
       @Override
@@ -453,17 +471,15 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     };
 
     registerAction(failureTwo);
+    outTwoFileOne.setGeneratingActionKey(outTwo.getGeneratingActionKey());
+    outTwoFileTwo.setGeneratingActionKey(outTwo.getGeneratingActionKey());
     storingEventHandler.clear();
-    try {
-      buildArtifact(outTwo);
-      fail(); // Should have thrown
-    } catch (BuildFailedException e) {
-      List<Event> errors = ImmutableList.copyOf(
-          Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
-      assertThat(errors).hasSize(2);
-      assertThat(errors.get(0).getMessage()).contains("not present on disk");
-      assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
-    }
+    assertThrows(BuildFailedException.class, () -> buildArtifact(outTwo));
+    errors =
+        ImmutableList.copyOf(Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
+    assertThat(errors).hasSize(2);
+    assertThat(errors.get(0).getMessage()).contains("not present on disk");
+    assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
   }
 
   private static void checkDirectoryPermissions(Path path) throws IOException {
@@ -565,17 +581,13 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     registerAction(action);
 
-    try {
-      buildArtifact(action.getSoleOutput());
-      fail(); // Should have thrown
-    } catch (BuildFailedException e) {
-      List<Event> errors = ImmutableList.copyOf(
-          Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
+    assertThrows(BuildFailedException.class, () -> buildArtifact(action.getSoleOutput()));
+    List<Event> errors =
+        ImmutableList.copyOf(Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
       assertThat(errors).hasSize(2);
       assertThat(errors.get(0).getMessage()).contains(
           "Failed to resolve relative path links/link");
-      assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
-    }
+    assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
   }
 
   @Test
@@ -605,16 +617,12 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     registerAction(action);
 
-    try {
-      buildArtifact(action.getSoleOutput());
-      fail(); // Should have thrown
-    } catch (BuildFailedException e) {
-      List<Event> errors = ImmutableList.copyOf(
-          Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
+    assertThrows(BuildFailedException.class, () -> buildArtifact(action.getSoleOutput()));
+    List<Event> errors =
+        ImmutableList.copyOf(Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
       assertThat(errors).hasSize(2);
       assertThat(errors.get(0).getMessage()).contains("Failed to resolve relative path links/link");
-      assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
-    }
+    assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
   }
 
   @Test
@@ -671,18 +679,54 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     registerAction(action);
 
-    try {
-      buildArtifact(action.getSoleOutput());
-      fail(); // Should have thrown
-    } catch (BuildFailedException e) {
-      List<Event> errors = ImmutableList.copyOf(
-          Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
+    assertThrows(BuildFailedException.class, () -> buildArtifact(action.getSoleOutput()));
+    List<Event> errors =
+        ImmutableList.copyOf(Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
       assertThat(errors).hasSize(2);
       assertThat(errors.get(0).getMessage()).contains(
           "A TreeArtifact may not contain relative symlinks whose target paths traverse "
           + "outside of the TreeArtifact");
-      assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
-    }
+    assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
+  }
+
+  @Test
+  public void testRelativeSymlinkTraversingToDirOutsideOfTreeArtifactRejected() throws Exception {
+    // Failure expected
+    StoredEventHandler storingEventHandler = new StoredEventHandler();
+    reporter.removeHandler(failFastHandler);
+    reporter.addHandler(storingEventHandler);
+
+    final SpecialArtifact out = createTreeArtifact("output");
+
+    // Create a valid directory that can be referenced
+    scratch.dir(out.getRoot().getRoot().getRelative("some/dir").getPathString());
+
+    TreeArtifactTestAction action =
+        new TreeArtifactTestAction(out) {
+          @Override
+          public ActionResult execute(ActionExecutionContext actionExecutionContext) {
+            try {
+              writeFile(out.getPath().getChild("one"), "one");
+              writeFile(out.getPath().getChild("two"), "two");
+              FileSystemUtils.ensureSymbolicLink(
+                  out.getPath().getChild("links").getChild("link"), "../../some/dir");
+            } catch (Exception e) {
+              throw new RuntimeException(e);
+            }
+            return ActionResult.EMPTY;
+          }
+        };
+
+    registerAction(action);
+
+    assertThrows(BuildFailedException.class, () -> buildArtifact(action.getSoleOutput()));
+    List<Event> errors =
+        ImmutableList.copyOf(Iterables.filter(storingEventHandler.getEvents(), IS_ERROR_EVENT));
+      assertThat(errors).hasSize(2);
+      assertThat(errors.get(0).getMessage()).contains(
+          "A TreeArtifact may not contain relative symlinks whose target paths traverse "
+              + "outside of the TreeArtifact");
+    assertThat(errors.get(1).getMessage()).contains("not all outputs were created or valid");
   }
 
   // This is more a smoke test than anything, because it turns out that:
@@ -730,11 +774,15 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
   public void testExpandedActionsBuildInActionTemplate() throws Throwable {
     // artifact1 is a tree artifact generated by a TouchingTestAction.
     SpecialArtifact artifact1 = createTreeArtifact("treeArtifact1");
-    TreeFileArtifact treeFileArtifactA = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child1"));
-    TreeFileArtifact treeFileArtifactB = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child2"));
+    TreeFileArtifact treeFileArtifactA =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child1"), ACTION_LOOKUP_KEY);
+    TreeFileArtifact treeFileArtifactB =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child2"), ACTION_LOOKUP_KEY);
     registerAction(new TouchingTestAction(treeFileArtifactA, treeFileArtifactB));
+    treeFileArtifactA.setGeneratingActionKey(artifact1.getGeneratingActionKey());
+    treeFileArtifactB.setGeneratingActionKey(artifact1.getGeneratingActionKey());
 
     // artifact2 is a tree artifact generated by an action template.
     SpecialArtifact artifact2 = createTreeArtifact("treeArtifact2");
@@ -744,10 +792,13 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     // We mock out the action template function to expand into two actions that just touch the
     // output files.
-    TreeFileArtifact expectedOutputTreeFileArtifact1 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child1"));
-    TreeFileArtifact expectedOutputTreeFileArtifact2 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child2"));
+    ActionTemplateExpansionKey secondOwner = ActionTemplateExpansionKey.of(ACTION_LOOKUP_KEY, 1);
+    TreeFileArtifact expectedOutputTreeFileArtifact1 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2, PathFragment.createAlreadyNormalized("child1"), secondOwner);
+    TreeFileArtifact expectedOutputTreeFileArtifact2 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2, PathFragment.createAlreadyNormalized("child2"), secondOwner);
     Action generateOutputAction = new DummyAction(
         ImmutableList.<Artifact>of(treeFileArtifactA), expectedOutputTreeFileArtifact1);
     Action noGenerateOutputAction = new DummyAction(
@@ -767,11 +818,15 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     // artifact1 is a tree artifact generated by a TouchingTestAction.
     SpecialArtifact artifact1 = createTreeArtifact("treeArtifact1");
-    TreeFileArtifact treeFileArtifactA = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child1"));
-    TreeFileArtifact treeFileArtifactB = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child2"));
+    TreeFileArtifact treeFileArtifactA =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child1"), ACTION_LOOKUP_KEY);
+    TreeFileArtifact treeFileArtifactB =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child2"), ACTION_LOOKUP_KEY);
     registerAction(new TouchingTestAction(treeFileArtifactA, treeFileArtifactB));
+    treeFileArtifactA.setGeneratingActionKey(artifact1.getGeneratingActionKey());
+    treeFileArtifactB.setGeneratingActionKey(artifact1.getGeneratingActionKey());
 
     // artifact2 is a tree artifact generated by an action template.
     SpecialArtifact artifact2 = createTreeArtifact("treeArtifact2");
@@ -782,10 +837,13 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     // We mock out the action template function to expand into two actions:
     // One Action that touches the output file.
     // The other action that does not generate the output file.
-    TreeFileArtifact expectedOutputTreeFileArtifact1 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child1"));
-    TreeFileArtifact expectedOutputTreeFileArtifact2 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child2"));
+    ActionTemplateExpansionKey secondOwner = ActionTemplateExpansionKey.of(ACTION_LOOKUP_KEY, 1);
+    TreeFileArtifact expectedOutputTreeFileArtifact1 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2, PathFragment.createAlreadyNormalized("child1"), secondOwner);
+    TreeFileArtifact expectedOutputTreeFileArtifact2 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2, PathFragment.createAlreadyNormalized("child2"), secondOwner);
     Action generateOutputAction = new DummyAction(
         ImmutableList.<Artifact>of(treeFileArtifactA), expectedOutputTreeFileArtifact1);
     Action noGenerateOutputAction = new NoOpDummyAction(
@@ -796,12 +854,9 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
         new DummyActionTemplateExpansionFunction(
             actionKeyContext, ImmutableList.of(generateOutputAction, noGenerateOutputAction));
 
-    try {
-      buildArtifact(artifact2);
-      fail("Expected BuildFailedException");
-    } catch (BuildFailedException e) {
-      assertThat(e).hasMessageThat().contains("not all outputs were created or valid");
-    }
+    BuildFailedException e =
+        assertThrows(BuildFailedException.class, () -> buildArtifact(artifact2));
+    assertThat(e).hasMessageThat().contains("not all outputs were created or valid");
   }
 
   @Test
@@ -811,11 +866,15 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     // artifact1 is a tree artifact generated by a TouchingTestAction.
     SpecialArtifact artifact1 = createTreeArtifact("treeArtifact1");
-    TreeFileArtifact treeFileArtifactA = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child1"));
-    TreeFileArtifact treeFileArtifactB = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child2"));
+    TreeFileArtifact treeFileArtifactA =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child1"), ACTION_LOOKUP_KEY);
+    TreeFileArtifact treeFileArtifactB =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child2"), ACTION_LOOKUP_KEY);
     registerAction(new TouchingTestAction(treeFileArtifactA, treeFileArtifactB));
+    treeFileArtifactA.setGeneratingActionKey(artifact1.getGeneratingActionKey());
+    treeFileArtifactB.setGeneratingActionKey(artifact1.getGeneratingActionKey());
 
     // artifact2 is a tree artifact generated by an action template.
     SpecialArtifact artifact2 = createTreeArtifact("treeArtifact2");
@@ -826,10 +885,16 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     // We mock out the action template function to expand into two actions:
     // One Action that touches the output file.
     // The other action that just throws when executed.
-    TreeFileArtifact expectedOutputTreeFileArtifact1 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child1"));
-    TreeFileArtifact expectedOutputTreeFileArtifact2 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child2"));
+    TreeFileArtifact expectedOutputTreeFileArtifact1 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2,
+            PathFragment.createAlreadyNormalized("child1"),
+            ActionTemplateExpansionKey.of(artifact1.getArtifactOwner(), 1));
+    TreeFileArtifact expectedOutputTreeFileArtifact2 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2,
+            PathFragment.createAlreadyNormalized("child2"),
+            ActionTemplateExpansionKey.of(artifact1.getArtifactOwner(), 1));
     Action generateOutputAction = new DummyAction(
         ImmutableList.<Artifact>of(treeFileArtifactA), expectedOutputTreeFileArtifact1);
     Action throwingAction = new ThrowingDummyAction(
@@ -840,12 +905,9 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
         new DummyActionTemplateExpansionFunction(
             actionKeyContext, ImmutableList.of(generateOutputAction, throwingAction));
 
-    try {
-      buildArtifact(artifact2);
-      fail("Expected BuildFailedException");
-    } catch (BuildFailedException e) {
-      assertThat(e).hasMessageThat().contains("Throwing dummy action");
-    }
+    BuildFailedException e =
+        assertThrows(BuildFailedException.class, () -> buildArtifact(artifact2));
+    assertThat(e).hasMessageThat().contains("Throwing dummy action");
   }
 
   @Test
@@ -855,11 +917,15 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     // artifact1 is a tree artifact generated by a TouchingTestAction.
     SpecialArtifact artifact1 = createTreeArtifact("treeArtifact1");
-    TreeFileArtifact treeFileArtifactA = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child1"));
-    TreeFileArtifact treeFileArtifactB = ActionInputHelper.treeFileArtifact(
-        artifact1, PathFragment.create("child2"));
+    TreeFileArtifact treeFileArtifactA =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child1"), ACTION_LOOKUP_KEY);
+    TreeFileArtifact treeFileArtifactB =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact1, PathFragment.create("child2"), ACTION_LOOKUP_KEY);
     registerAction(new TouchingTestAction(treeFileArtifactA, treeFileArtifactB));
+    treeFileArtifactA.setGeneratingActionKey(artifact1.getGeneratingActionKey());
+    treeFileArtifactB.setGeneratingActionKey(artifact1.getGeneratingActionKey());
 
     // artifact2 is a tree artifact generated by an action template.
     SpecialArtifact artifact2 = createTreeArtifact("treeArtifact2");
@@ -868,10 +934,13 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     registerAction(actionTemplate);
 
     // We mock out the action template function to expand into two actions that throw when executed.
-    TreeFileArtifact expectedOutputTreeFileArtifact1 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child1"));
-    TreeFileArtifact expectedOutputTreeFileArtifact2 = ActionInputHelper.treeFileArtifact(
-        artifact2, PathFragment.create("child2"));
+    ActionTemplateExpansionKey secondOwner = ActionTemplateExpansionKey.of(ACTION_LOOKUP_KEY, 1);
+    TreeFileArtifact expectedOutputTreeFileArtifact1 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2, PathFragment.createAlreadyNormalized("child1"), secondOwner);
+    TreeFileArtifact expectedOutputTreeFileArtifact2 =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            artifact2, PathFragment.createAlreadyNormalized("child2"), secondOwner);
     Action throwingAction = new ThrowingDummyAction(
         ImmutableList.<Artifact>of(treeFileArtifactA),
         ImmutableList.<Artifact>of(expectedOutputTreeFileArtifact1));
@@ -883,12 +952,9 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
         new DummyActionTemplateExpansionFunction(
             actionKeyContext, ImmutableList.of(throwingAction, anotherThrowingAction));
 
-    try {
-      buildArtifact(artifact2);
-      fail("Expected BuildFailedException");
-    } catch (BuildFailedException e) {
-      assertThat(e).hasMessageThat().contains("Throwing dummy action");
-    }
+    BuildFailedException e =
+        assertThrows(BuildFailedException.class, () -> buildArtifact(artifact2));
+    assertThat(e).hasMessageThat().contains("Throwing dummy action");
   }
 
   @Test
@@ -907,12 +973,9 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
         artifact1, artifact2);
     registerAction(actionTemplate);
 
-    try {
-      buildArtifact(artifact2);
-      fail("Expected BuildFailedException");
-    } catch (BuildFailedException e) {
-      assertThat(e).hasMessageThat().contains("Throwing dummy action");
-    }
+    BuildFailedException e =
+        assertThrows(BuildFailedException.class, () -> buildArtifact(artifact2));
+    assertThat(e).hasMessageThat().contains("Throwing dummy action");
   }
 
   @Test
@@ -1030,8 +1093,8 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
       } catch (RuntimeException e) {
         throw new RuntimeException(e);
       } catch (Exception e) {
-        throw new ActionExecutionException("TestAction failed due to exception",
-            e, this, false);
+        throw new ActionExecutionException(
+            "TestAction failed due to exception: " + e.getMessage(), e, this, false);
       }
       return ActionResult.EMPTY;
     }
@@ -1074,7 +1137,8 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
             @Nullable
             @Override
             public TreeFileArtifact apply(String s) {
-              return ActionInputHelper.treeFileArtifact(parent, s);
+              return ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+                  parent, PathFragment.create(s), parent.getArtifactOwner());
             }
           });
     }
@@ -1178,7 +1242,8 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
   private SpecialArtifact createTreeArtifact(String name) {
     FileSystem fs = scratch.getFileSystem();
-    Path execRoot = fs.getPath(TestUtils.tmpDir());
+    Path execRoot =
+        fs.getPath(TestUtils.tmpDir()).getRelative("execroot").getRelative("default-exec-root");
     PathFragment execPath = PathFragment.create("out").getRelative(name);
     return new SpecialArtifact(
         ArtifactRoot.asDerivedRoot(execRoot, execRoot.getRelative("out")),
@@ -1240,7 +1305,11 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     public SkyValue compute(SkyKey skyKey, Environment env) {
       try {
         return new ActionTemplateExpansionValue(
-            Actions.filterSharedActionsAndThrowActionConflict(actionKeyContext, actions));
+            Actions.assignOwnersAndFilterSharedActionsAndThrowActionConflict(
+                actionKeyContext,
+                actions,
+                (ActionLookupValue.ActionLookupKey) skyKey,
+                /*outputFiles=*/ null));
       } catch (ActionConflictException e) {
         throw new IllegalStateException(e);
       }

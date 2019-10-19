@@ -44,11 +44,11 @@ EOF
   expect_log "java-home: .*/_embedded_binaries/embedded_tools/jdk"
 }
 
-function test_rhs_host_javabase() {
+function test_host_javabase() {
   mkdir -p foobar/bin
   cat << EOF > BUILD
 java_runtime(
-    name = "rhs_host_javabase",
+    name = "host_javabase",
     java_home = "$PWD/foobar",
     visibility = ["//visibility:public"],
 )
@@ -65,20 +65,40 @@ EOF
 
   # We expect the given host_javabase to appear in the command line of
   # java_library actions.
-  bazel aquery --output=text --host_javabase=//:rhs_host_javabase //java:javalib >& $TEST_log
+  bazel aquery --output=text --host_javabase=//:host_javabase //java:javalib >& $TEST_log
   expect_log "exec .*foobar/bin/java"
 
   # If we don't specify anything, we expect the embedded JDK to be used.
   # Note that this will change in the future but is the current state.
   bazel aquery --output=text //java:javalib >& $TEST_log
-  expect_log "exec external/embedded_jdk/bin/java"
+  expect_not_log "exec external/embedded_jdk/bin/java"
+  expect_log "exec external/remotejdk11_.*/bin/java"
+
+  bazel aquery --output=text --host_javabase=//:host_javabase \
+    //java:javalib >& $TEST_log
+  expect_log "exec .*foobar/bin/java"
+  expect_not_log "exec external/remotejdk_.*/bin/java"
+
+  bazel aquery --output=text --incompatible_use_jdk11_as_host_javabase \
+    //java:javalib >& $TEST_log
+  expect_log "exec external/remotejdk11_.*/bin/java"
 }
 
-function test_rhs_javabase() {
+function test_javabase() {
   mkdir -p zoo/bin
   cat << EOF > BUILD
+load("@bazel_tools//tools/jdk:default_java_toolchain.bzl", "default_java_toolchain")
+default_java_toolchain(
+    name = "toolchain",
+    # Implicitly use the host_javabase bootclasspath, since the target doesn't
+    # exist in this test.
+    bootclasspath = [],
+    javabuilder = ["@bazel_tools//tools/jdk:vanillajavabuilder"],
+    jvm_opts = [],
+    visibility = ["//visibility:public"],
+)
 java_runtime(
-    name = "rhs_javabase",
+    name = "javabase",
     java_home = "$PWD/zoo",
     visibility = ["//visibility:public"],
 )
@@ -96,7 +116,7 @@ public class HelloWorld {}
 EOF
 
   # Check that the RHS javabase appears in the launcher.
-  bazel build --javabase=//:rhs_javabase //java:javabin
+  bazel build --java_toolchain=//:toolchain --javabase=//:javabase //java:javabin
   cat bazel-bin/java/javabin >& $TEST_log
   expect_log "JAVABIN=.*/zoo/bin/java"
 
@@ -106,5 +126,110 @@ EOF
   expect_log "JAVABIN=.*/local_jdk/bin/java"
 }
 
+function write_javabase_files() {
+  mkdir -p javabase_test
+  cat << EOF > javabase_test/BUILD
+java_binary(
+    name = "a",
+    srcs = ["A.java"],
+    main_class = "A",
+)
+EOF
+
+  cat << EOF > javabase_test/A.java
+class A {
+  public static void main(String[] args) {
+    System.err.println("hello");
+  }
+}
+EOF
+}
+
+function test_no_javabase() {
+  # Only run this test when there's no locally installed JDK.
+  which javac && return
+
+  write_javabase_files
+
+  bazel build //javabase_test:a
+
+  ($(bazel-bin/javabase_test/a --print_javabin) -version || true) >& $TEST_log
+  expect_log "bazel-bin/javabase_test/a.runfiles/local_jdk/bin/java: No such file or directory"
+}
+
+function test_no_javabase() {
+  # Only run this test when there's no locally installed JDK.
+  which javac && return
+
+  write_javabase_files
+
+  bazel --batch build //javabase_test:a
+
+  ($(bazel-bin/javabase_test/a --print_javabin) -version || true) >& $TEST_log
+  expect_log "bazel-bin/javabase_test/a.runfiles/local_jdk/bin/java: No such file or directory"
+}
+
+function test_genrule() {
+  mkdir -p foo/bin bar/bin
+  cat << EOF > BUILD
+java_runtime(
+    name = "foo_javabase",
+    java_home = "$PWD/foo",
+    visibility = ["//visibility:public"],
+)
+
+java_runtime(
+    name = "bar_runtime",
+    visibility = ["//visibility:public"],
+    srcs = ["bar/bin/java"],
+)
+
+genrule(
+    name = "without_java",
+    srcs = ["in"],
+    outs = ["out_without"],
+    cmd = "cat \$(SRCS) > \$(OUTS)",
+)
+
+genrule(
+    name = "with_java",
+    srcs = ["in"],
+    outs = ["out_with"],
+    cmd = "echo \$(JAVA) > \$(OUTS)",
+    toolchains = [":bar_runtime"],
+)
+EOF
+
+  # Use --max_config_changes_to_show=0, as changed option names may otherwise
+  # erroneously match the expected regexes.
+
+  # Test the genrule with no java dependencies.
+  bazel cquery --max_config_changes_to_show=0 --implicit_deps \
+    'deps(//:without_java)' >& $TEST_log
+  expect_not_log "foo"
+  expect_not_log "bar"
+  expect_not_log "embedded_jdk"
+  expect_not_log "remotejdk_"
+  expect_not_log "remotejdk11_"
+
+  # Test the genrule that specifically depends on :bar_runtime.
+  bazel cquery --max_config_changes_to_show=0 --implicit_deps \
+    'deps(//:with_java)' >& $TEST_log
+  expect_not_log "foo"
+  expect_log "bar"
+  expect_not_log "embedded_jdk"
+  expect_not_log "remotejdk_"
+  expect_not_log "remotejdk11_"
+
+  # Setting the javabase should not change the use of :bar_runtime from the
+  # roolchains attribute.
+  bazel cquery --max_config_changes_to_show=0 --implicit_deps \
+    'deps(//:with_java)' --host_javabase=:foo_javabase >& $TEST_log
+  expect_not_log "foo"
+  expect_log "bar"
+  expect_not_log "embedded_jdk"
+  expect_not_log "remotejdk_"
+  expect_not_log "remotejdk11_"
+}
 
 run_suite "Tests of specifying custom server_javabase/host_javabase and javabase."

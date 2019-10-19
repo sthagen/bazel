@@ -4,17 +4,17 @@ filegroup(
     visibility = ["//scripts:__subpackages__"],
 )
 
-load("//tools/build_defs/pkg:pkg.bzl", "pkg_tar", "pkg_deb")
+load("@rules_pkg//:pkg.bzl", "pkg_deb", "pkg_tar")
 
 pkg_tar(
     name = "bazel-bin",
     srcs = [
-        "//scripts/packages:without-jdk/bazel",
-        "//scripts/packages:without-jdk/bazel-real",
+        "//scripts/packages:with-jdk/bazel",
+        "//scripts/packages:with-jdk/bazel-real",
     ],
     mode = "0755",
     package_dir = "/usr/bin",
-    strip_prefix = "/scripts/packages/without-jdk",
+    strip_prefix = "/scripts/packages/with-jdk",
 )
 
 pkg_tar(
@@ -77,16 +77,20 @@ pkg_deb(
     data = ":debian-data",
     depends = [
         # Keep in sync with Depends section in ./control
-        "google-jdk | java8-sdk-headless | java8-jdk | java8-sdk | oracle-java8-installer",
         "g++",
         "zlib1g-dev",
-        "bash-completion",
         "unzip",
+        "python",
     ],
     description_file = "description",
     homepage = "http://bazel.build",
     maintainer = "The Bazel Authors <bazel-dev@googlegroups.com>",
     package = "bazel",
+    suggests = [
+        # Keep in sync with Suggests section in ./control
+        "google-jdk | java8-sdk-headless | java8-jdk | java8-sdk | oracle-java8-installer",
+        "bash-completion",
+    ],
     version_file = ":version.txt",
     visibility = ["//scripts/packages:__pkg__"],
 )

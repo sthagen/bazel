@@ -13,58 +13,59 @@
 // limitations under the License.
 package com.google.devtools.build.lib.runtime;
 
-import com.google.devtools.common.options.Converter;
+import com.google.devtools.build.lib.actions.LocalHostCapacity;
+import com.google.devtools.build.lib.util.ResourceConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParsingException;
+import java.util.logging.Logger;
 
 /** Defines the --loading_phase_threads option which is used by multiple commands. */
 public class LoadingPhaseThreadsOption extends OptionsBase {
+
+  private static final Logger logger = Logger.getLogger(LoadingPhaseThreadsOption.class.getName());
+
   @Option(
-    name = "loading_phase_threads",
-    defaultValue = LoadingPhaseThreadCountConverter.DEFAULT_VALUE,
-    documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
-    effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-    converter = LoadingPhaseThreadCountConverter.class,
-    help = "Number of parallel threads to use for the loading/analysis phase."
-  )
+      name = "loading_phase_threads",
+      defaultValue = "auto",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      converter = LoadingPhaseThreadCountConverter.class,
+      help =
+          "Number of parallel threads to use for the loading/analysis phase."
+              + "Takes "
+              + ResourceConverter.FLAG_SYNTAX
+              + ". \"auto\" sets a reasonable default based on"
+              + "host resources. Must be at least 1.")
   public int threads;
 
   /**
-   * A converter for loading phase thread count. Since the default is not a true constant, we create
-   * a converter here to implement the default logic.
+   * A converter for loading phase thread count. Takes {@value FLAG_SYNTAX}. Caps at 20 for tests.
    */
-  public static final class LoadingPhaseThreadCountConverter implements Converter<Integer> {
+  public static final class LoadingPhaseThreadCountConverter extends ResourceConverter {
 
-    private static final String DEFAULT_VALUE = "default";
-    // Reduce thread count while running tests. Test cases are typically small, and large thread
-    // pools vying for a relatively small number of CPU cores may induce non-optimal
-    // performance.
-    private static final int NON_TEST_THREADS = 200;
-    private static final int TEST_THREADS = 20;
-
-    @Override
-    public Integer convert(String input) throws OptionsParsingException {
-      if (DEFAULT_VALUE.equals(input)) {
-        return System.getenv("TEST_TMPDIR") == null ? NON_TEST_THREADS : TEST_THREADS;
-      }
-
-      try {
-        int result = Integer.decode(input);
-        if (result < 1) {
-          throw new OptionsParsingException("'" + input + "' must be at least 1");
-        }
-        return result;
-      } catch (NumberFormatException e) {
-        throw new OptionsParsingException("'" + input + "' is not an int");
-      }
+    public LoadingPhaseThreadCountConverter() {
+      // TODO(jmmv): Using the number of cores has proven to yield reasonable analysis times on
+      // Mac Pros and MacBook Pros but we should probably do better than this. (We haven't made
+      // any guarantees that "auto" means number of cores precisely to leave us room to tune this
+      // further in the future.)
+      super(() -> (int) Math.ceil(LocalHostCapacity.getLocalHostCapacity().getCpuUsage()));
     }
 
     @Override
-    public String getTypeDescription() {
-      return "an integer";
+    public int checkAndLimit(int value) throws OptionsParsingException {
+      // Cap thread count while running tests. Test cases are typically small and large thread
+      // pools vying for a relatively small number of CPU cores may induce non-optimal
+      // performance.
+      //
+      // TODO(jmmv): If tests care about this, it's them who should be setting a cap.
+      if (System.getenv("TEST_TMPDIR") != null) {
+        value = Math.min(20, value);
+        logger.info("Running under a test; loading_phase_threads capped at " + value);
+      }
+      return super.checkAndLimit(value);
     }
   }
 }

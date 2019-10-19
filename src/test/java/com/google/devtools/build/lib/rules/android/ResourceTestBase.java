@@ -33,9 +33,9 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.AbstractRuleErrorConsumer;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.RuleErrorConsumer;
+import com.google.devtools.build.lib.rules.android.databinding.DataBinding;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
@@ -57,6 +57,7 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
           "static_aapt_tool",
           "aapt.static",
           "aapt",
+          "static_aapt2_tool",
           "aapt2",
           "empty.sh",
           "android_blaze.jar",
@@ -74,8 +75,7 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
       };
 
   /** A faked {@link RuleErrorConsumer} that validates that only expected errors were reported. */
-  public static final class FakeRuleErrorConsumer extends AbstractRuleErrorConsumer
-      implements RuleErrorConsumer {
+  public static final class FakeRuleErrorConsumer implements RuleErrorConsumer {
     private String ruleErrorMessage = null;
     private String attributeErrorAttribute = null;
     private String attributeErrorMessage = null;
@@ -177,14 +177,14 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
       assertThat(attributeErrorMessage).isNull();
       assertThat(attributeErrorAttribute).isNull();
     }
-  };
+  }
 
   public FakeRuleErrorConsumer errorConsumer;
   public FileSystem fileSystem;
   public ArtifactRoot root;
 
   @Before
-  public void setup() {
+  public void setup() throws Exception {
     errorConsumer = new FakeRuleErrorConsumer();
     fileSystem = new InMemoryFileSystem();
     root = ArtifactRoot.asSourceRoot(Root.fromPath(fileSystem.getPath("/")));
@@ -214,7 +214,7 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
 
   private Artifact getArtifact(String subdir, String pathString) {
     Path path = fileSystem.getPath("/" + subdir + "/" + pathString);
-    return new Artifact(
+    return new Artifact.SourceArtifact(
         root, root.getExecPath().getRelative(root.getRoot().relativize(path)), OWNER);
   }
 
@@ -239,6 +239,7 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
             ConfiguredTargetKey.of(dummyTarget.getLabel(), targetConfig),
             /*isSystemEnv=*/ false,
             targetConfig.extendedSanityChecks(),
+            targetConfig.allowAnalysisFailures(),
             eventHandler,
             null),
         new BuildConfigurationCollection(
@@ -259,18 +260,20 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
                 includeAapt2Outs ? getOutput("symbols.zip") : null,
                 manifest.getManifest().getOwnerLabel(),
                 manifest,
-                DataBinding.asDisabledDataBindingContext()),
+                DataBinding.DISABLED_V1_CONTEXT),
             getOutput("merged/resources.zip"),
             getOutput("class.jar"),
+            includeAapt2Outs ? getOutput("aapt2-r.txt") : null,
             /* dataBindingInfoZip = */ null,
             resourceDependencies,
             manifest),
         getOutput("r.txt"),
         getOutput("source.jar"),
         getOutput("resources.apk"),
-        includeAapt2Outs ? getOutput("aapt2-r.txt") : null,
+        includeAapt2Outs ? getOutput("aapt2-validation.txt") : null,
         includeAapt2Outs ? getOutput("aapt2-source.jar") : null,
-        includeAapt2Outs ? getOutput("aapt2-static-lib") : null);
+        includeAapt2Outs ? getOutput("aapt2-static-lib") : null,
+        /*useRTxtFromMergedResources=*/ true);
   }
 
   /**

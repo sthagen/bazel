@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_binary", "java_library")
+
 # Description:
 #   The Java library builders, which are used by Bazel to compile Java
 #   source code.
@@ -9,6 +11,7 @@ filegroup(
         ["**"],
     ) + [
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins:srcs",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/statistics:srcs",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass:srcs",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/jarhelper:srcs",
     ],
@@ -20,8 +23,11 @@ java_library(
         "InvalidCommandLineException.java",
         "OptionsParser.java",
     ],
+    visibility = [
+        "//src/java_tools/buildjar:buildjar_package_group",
+        "//src/test/java/com/google/devtools/build/lib:__subpackages__",
+    ],
     deps = [
-        ":JarOwner",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -38,6 +44,7 @@ java_library(
     deps = [
         ":invalid_command_line_exception",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/statistics",
         "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
@@ -69,7 +76,6 @@ java_library(
         ],
     ),
     deps = [
-        ":JarOwner",
         ":invalid_command_line_exception",
         ":jarhelper",
         ":javac",
@@ -78,6 +84,7 @@ java_library(
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins:dependency",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins:errorprone",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/plugins:processing",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/statistics",
         "//src/main/protobuf:worker_protocol_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",

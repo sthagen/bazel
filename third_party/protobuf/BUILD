@@ -4,7 +4,7 @@ licenses(["notice"])
 
 load(":proto_alias.bzl", "proto_alias")
 
-PROTOBUF_VERSION = "3.6.0"
+PROTOBUF_VERSION = "3.6.1"
 
 filegroup(
     name = "srcs",
@@ -25,6 +25,8 @@ proto_alias("protobuf_java_util", PROTOBUF_VERSION)
 proto_alias("protobuf_python", PROTOBUF_VERSION)
 
 proto_alias("protobuf", PROTOBUF_VERSION)
+
+proto_alias("protobuf_headers", PROTOBUF_VERSION)
 
 proto_alias("protoc_lib", PROTOBUF_VERSION)
 

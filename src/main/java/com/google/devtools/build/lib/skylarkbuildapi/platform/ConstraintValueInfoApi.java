@@ -19,30 +19,32 @@ import com.google.devtools.build.lib.skylarkbuildapi.StructApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 
 /**
  * Info object representing a value for a constraint setting that can be used to define a platform.
  */
 @SkylarkModule(
     name = "ConstraintValueInfo",
-    doc = "A value for a constraint setting that can be used to define a platform.",
-    category = SkylarkModuleCategory.PROVIDER
-)
+    doc =
+        "A value for a constraint setting that can be used to define a platform. "
+            + PlatformInfoApi.EXPERIMENTAL_WARNING,
+    category = SkylarkModuleCategory.PROVIDER)
 public interface ConstraintValueInfoApi extends StructApi {
 
   @SkylarkCallable(
-    name = "constraint",
-    doc =
-        "The <a href=\"ConstraintSettingInfo.html\">ConstraintSettingInfo</a> this value can be "
-            + "applied to.",
-    structField = true
-  )
-  public ConstraintSettingInfoApi constraint();
+      name = "constraint",
+      doc =
+          "The <a href=\"ConstraintSettingInfo.html\">ConstraintSettingInfo</a> this value can be "
+              + "applied to.",
+      structField = true,
+      enableOnlyWithFlag = FlagIdentifier.EXPERIMENTAL_PLATFORM_API)
+  ConstraintSettingInfoApi constraint();
 
   @SkylarkCallable(
-    name = "label",
-    doc = "The label of the target that created this constraint value.",
-    structField = true
-  )
-  public Label label();
+      name = "label",
+      doc = "The label of the target that created this constraint value.",
+      structField = true,
+      enableOnlyWithFlag = FlagIdentifier.EXPERIMENTAL_PLATFORM_API)
+  Label label();
 }

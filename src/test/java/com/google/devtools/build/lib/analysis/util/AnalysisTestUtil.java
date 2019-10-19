@@ -23,12 +23,11 @@ import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
+import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
-import com.google.devtools.build.lib.actions.ArtifactFactory;
-import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.MiddlemanFactory;
@@ -36,24 +35,25 @@ import com.google.devtools.build.lib.actions.MutableActionGraph;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
-import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
-import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.Key;
+import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.Options;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.shell.Command;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
+import com.google.devtools.build.skyframe.SkyFunctionName;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -69,13 +69,12 @@ import java.util.regex.Pattern;
  */
 public final class AnalysisTestUtil {
 
-  /**
-   * TopLevelArtifactContext that should be sufficient for testing.
-   */
+  /** TopLevelArtifactContext that should be sufficient for testing. */
   public static final TopLevelArtifactContext TOP_LEVEL_ARTIFACT_CONTEXT =
       new TopLevelArtifactContext(
-          /*runTestsExclusively=*/false,
-          /*outputGroups=*/ImmutableSortedSet.copyOf(OutputGroupInfo.DEFAULT_GROUPS));
+          /*runTestsExclusively=*/ false,
+          /*expandFilesets=*/ false,
+          /*outputGroups=*/ ImmutableSortedSet.copyOf(OutputGroupInfo.DEFAULT_GROUPS));
 
   /**
    * An {@link AnalysisEnvironment} implementation that collects the actions registered.
@@ -120,8 +119,15 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Artifact getDerivedArtifact(PathFragment rootRelativePath, ArtifactRoot root) {
+    public Artifact.DerivedArtifact getDerivedArtifact(
+        PathFragment rootRelativePath, ArtifactRoot root) {
       return original.getDerivedArtifact(rootRelativePath, root);
+    }
+
+    @Override
+    public Artifact.DerivedArtifact getDerivedArtifact(
+        PathFragment rootRelativePath, ArtifactRoot root, boolean contentBasedPath) {
+      return original.getDerivedArtifact(rootRelativePath, root, contentBasedPath);
     }
 
     @Override
@@ -131,7 +137,12 @@ public final class AnalysisTestUtil {
 
     @Override
     public SpecialArtifact getTreeArtifact(PathFragment rootRelativePath, ArtifactRoot root) {
-      return null;
+      return original.getTreeArtifact(rootRelativePath, root);
+    }
+
+    @Override
+    public SpecialArtifact getSymlinkArtifact(PathFragment rootRelativePath, ArtifactRoot root) {
+      return original.getSymlinkArtifact(rootRelativePath, root);
     }
 
     @Override
@@ -160,7 +171,7 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public SkylarkSemantics getSkylarkSemantics() throws InterruptedException {
+    public StarlarkSemantics getSkylarkSemantics() throws InterruptedException {
       return original.getSkylarkSemantics();
     }
 
@@ -176,13 +187,12 @@ public final class AnalysisTestUtil {
 
     @Override
     public ImmutableList<Artifact> getBuildInfo(
-        RuleContext ruleContext, BuildInfoKey key, BuildConfiguration config)
-        throws InterruptedException {
-      return original.getBuildInfo(ruleContext, key, config);
+        boolean stamp, BuildInfoKey key, BuildConfiguration config) throws InterruptedException {
+      return original.getBuildInfo(stamp, key, config);
     }
 
     @Override
-    public ArtifactOwner getOwner() {
+    public ActionLookupValue.ActionLookupKey getOwner() {
       return original.getOwner();
     }
 
@@ -221,8 +231,10 @@ public final class AnalysisTestUtil {
     public ActionResult execute(ActionExecutionContext actionExecutionContext)
         throws ActionExecutionException {
       try {
-        FileSystemUtils.writeContent(stableStatus.getPath(), new byte[] {});
-        FileSystemUtils.writeContent(volatileStatus.getPath(), new byte[] {});
+        FileSystemUtils.writeContent(
+            actionExecutionContext.getInputPath(stableStatus), new byte[] {});
+        FileSystemUtils.writeContent(
+            actionExecutionContext.getInputPath(volatileStatus), new byte[] {});
       } catch (IOException e) {
         throw new ActionExecutionException(e, this, true);
       }
@@ -260,32 +272,38 @@ public final class AnalysisTestUtil {
     public ImmutableMap<String, Key> getVolatileKeys() {
       return ImmutableMap.of();
     }
+
+    @Override
+    public Options getOptions() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ImmutableMap<String, String> getClientEnv() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Command getCommand() {
+      throw new UnsupportedOperationException();
+    }
   }
 
   /**
    * A workspace status action factory that does not do any interaction with the environment.
    */
   public static class DummyWorkspaceStatusActionFactory implements WorkspaceStatusAction.Factory {
-    private final BlazeDirectories directories;
-
-    public DummyWorkspaceStatusActionFactory(BlazeDirectories directories) {
-      this.directories = directories;
-    }
-
     @Override
     public WorkspaceStatusAction createWorkspaceStatusAction(
-        ArtifactFactory artifactFactory, ArtifactOwner artifactOwner, String workspaceName) {
-      Artifact stableStatus = artifactFactory.getDerivedArtifact(
-          PathFragment.create("build-info.txt"),
-          directories.getBuildDataDirectory(workspaceName), artifactOwner);
-      Artifact volatileStatus = artifactFactory.getConstantMetadataArtifact(
-          PathFragment.create("build-changelist.txt"),
-          directories.getBuildDataDirectory(workspaceName), artifactOwner);
+        WorkspaceStatusAction.Environment env) {
+      Artifact stableStatus = env.createStableArtifact("build-info.txt");
+      Artifact volatileStatus = env.createVolatileArtifact("build-changelist.txt");
       return new DummyWorkspaceStatusAction(stableStatus, volatileStatus);
     }
 
     @Override
-    public Map<String, String> createDummyWorkspaceStatus() {
+    public Map<String, String> createDummyWorkspaceStatus(
+        WorkspaceStatusAction.DummyEnvironment env) {
       return ImmutableMap.of();
     }
   }
@@ -294,6 +312,14 @@ public final class AnalysisTestUtil {
 
   /** An AnalysisEnvironment with stubbed-out methods. */
   public static class StubAnalysisEnvironment implements AnalysisEnvironment {
+    private static final ActionLookupValue.ActionLookupKey DUMMY_KEY =
+        new ActionLookupValue.ActionLookupKey() {
+          @Override
+          public SkyFunctionName functionName() {
+            return null;
+          }
+        };
+
     @Override
     public void registerAction(ActionAnalysisMetadata... action) {
     }
@@ -310,6 +336,11 @@ public final class AnalysisTestUtil {
 
     @Override
     public SpecialArtifact getTreeArtifact(PathFragment rootRelativePath, ArtifactRoot root) {
+      return null;
+    }
+
+    @Override
+    public SpecialArtifact getSymlinkArtifact(PathFragment rootRelativePath, ArtifactRoot root) {
       return null;
     }
 
@@ -339,7 +370,7 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public SkylarkSemantics getSkylarkSemantics() throws InterruptedException {
+    public StarlarkSemantics getSkylarkSemantics() throws InterruptedException {
       return null;
     }
 
@@ -349,7 +380,14 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Artifact getDerivedArtifact(PathFragment rootRelativePath, ArtifactRoot root) {
+    public Artifact.DerivedArtifact getDerivedArtifact(
+        PathFragment rootRelativePath, ArtifactRoot root) {
+      return null;
+    }
+
+    @Override
+    public Artifact.DerivedArtifact getDerivedArtifact(
+        PathFragment rootRelativePath, ArtifactRoot root, boolean contentBasedPath) {
       return null;
     }
 
@@ -364,14 +402,14 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public ImmutableList<Artifact> getBuildInfo(RuleContext ruleContext, BuildInfoKey key,
-        BuildConfiguration config) {
+    public ImmutableList<Artifact> getBuildInfo(
+        boolean stamp, BuildInfoKey key, BuildConfiguration config) {
       return ImmutableList.of();
     }
 
     @Override
-    public ArtifactOwner getOwner() {
-      return ArtifactOwner.NullArtifactOwner.INSTANCE;
+    public ActionLookupValue.ActionLookupKey getOwner() {
+      return DUMMY_KEY;
     }
 
     @Override
@@ -397,14 +435,13 @@ public final class AnalysisTestUtil {
       Pattern.compile("(?<=" + TestConstants.PRODUCT_NAME + "-out/)gcc[^/]*-grte-\\w+-");
 
   /**
-   * Given a collection of Artifacts, returns a corresponding set of strings of
-   * the form "{root} {relpath}", such as "bin x/libx.a".  Such strings make
-   * assertions easier to write.
+   * Given a collection of Artifacts, returns a corresponding set of strings of the form "{root}
+   * {relpath}", such as "bin x/libx.a". Such strings make assertions easier to write.
    *
    * <p>The returned set preserves the order of the input.
    */
-  public static Set<String> artifactsToStrings(BuildConfigurationCollection configurations,
-      Iterable<Artifact> artifacts) {
+  public static Set<String> artifactsToStrings(
+      BuildConfigurationCollection configurations, Iterable<? extends Artifact> artifacts) {
     Map<String, String> rootMap = new HashMap<>();
     BuildConfiguration targetConfiguration =
         Iterables.getOnlyElement(configurations.getTargetConfigurations());

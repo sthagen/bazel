@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.actions;
 
 import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableList;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,35 +25,10 @@ public final class SpawnMetrics {
   private static final double STATS_SHOW_THRESHOLD = 0.10;
 
   /** Represents a zero cost/null statistic. */
-  public static final SpawnMetrics EMPTY =
-      new SpawnMetrics(
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          Duration.ZERO,
-          0L,
-          0L,
-          0L);
+  public static final SpawnMetrics EMPTY = new Builder().build();
 
   public static SpawnMetrics forLocalExecution(Duration wallTime) {
-    return new SpawnMetrics(
-        wallTime,
-        Duration.ZERO,
-        Duration.ZERO,
-        Duration.ZERO,
-        Duration.ZERO,
-        Duration.ZERO,
-        Duration.ZERO,
-        wallTime,
-        Duration.ZERO,
-        0L,
-        0L,
-        0L);
+    return new Builder().setTotalTime(wallTime).setExecutionWallTime(wallTime).build();
   }
 
   private final Duration totalTime;
@@ -63,6 +39,7 @@ public final class SpawnMetrics {
   private final Duration setupTime;
   private final Duration executionWallTime;
   private final Duration retryTime;
+  private final Duration remoteProcessOutputsTime;
   private final Duration networkTime;
   private final long inputBytes;
   private final long inputFiles;
@@ -78,6 +55,7 @@ public final class SpawnMetrics {
       Duration uploadTime,
       Duration executionWallTime,
       Duration retryTime,
+      Duration remoteProcessOutputsTime,
       long inputBytes,
       long inputFiles,
       long memoryEstimateBytes) {
@@ -90,9 +68,26 @@ public final class SpawnMetrics {
     this.uploadTime = uploadTime;
     this.executionWallTime = executionWallTime;
     this.retryTime = retryTime;
+    this.remoteProcessOutputsTime = remoteProcessOutputsTime;
     this.inputBytes = inputBytes;
     this.inputFiles = inputFiles;
     this.memoryEstimateBytes = memoryEstimateBytes;
+  }
+
+  private SpawnMetrics(Builder builder) {
+    this.totalTime = builder.totalTime;
+    this.parseTime = builder.parseTime;
+    this.networkTime = builder.networkTime;
+    this.fetchTime = builder.fetchTime;
+    this.remoteQueueTime = builder.remoteQueueTime;
+    this.setupTime = builder.setupTime;
+    this.uploadTime = builder.uploadTime;
+    this.executionWallTime = builder.executionWallTime;
+    this.retryTime = builder.retryTime;
+    this.remoteProcessOutputsTime = builder.remoteProcessOutputsTime;
+    this.inputBytes = builder.inputBytes;
+    this.inputFiles = builder.inputFiles;
+    this.memoryEstimateBytes = builder.memoryEstimateBytes;
   }
 
   /**
@@ -157,6 +152,11 @@ public final class SpawnMetrics {
     return retryTime;
   }
 
+  /** Time spend by the execution framework on processing outputs. */
+  public Duration remoteProcessOutputsTime() {
+    return remoteProcessOutputsTime;
+  }
+
   /** Any time that is not measured by a more specific component, out of {@code totalTime()}. */
   public Duration otherTime() {
     return totalTime
@@ -167,7 +167,8 @@ public final class SpawnMetrics {
         .minus(setupTime)
         .minus(executionWallTime)
         .minus(fetchTime)
-        .minus(retryTime);
+        .minus(retryTime)
+        .minus(remoteProcessOutputsTime);
   }
 
   /** Total size in bytes of inputs or 0 if unavailable. */
@@ -205,6 +206,7 @@ public final class SpawnMetrics {
     addStatToString(stats, "process", true, executionWallTime, total);
     addStatToString(stats, "fetch", !summary, fetchTime, total);
     addStatToString(stats, "retry", !summary, retryTime, total);
+    addStatToString(stats, "processOutputs", !summary, remoteProcessOutputsTime, total);
     addStatToString(stats, "other", !summary, otherTime(), total);
     if (!summary) {
       stats.add("input files: " + inputFiles);
@@ -244,5 +246,150 @@ public final class SpawnMetrics {
       return "N/A";
     }
     return String.format("%.2f%%", duration.toMillis() * 100.0 / total.toMillis());
+  }
+
+  /**
+   * Aggregates a the duration and values of a collection of SpawnMetrics called by {@link
+   * CriticalPathComponent#addSpawnResult}
+   *
+   * @param spawnMetrics - collection of SpawnMetrics to aggregate
+   * @param onlyDuration - if true, only aggregate the Duration fields, otherwise everything
+   * @return a single SpawnMetrics object has the total duration (and other values)
+   */
+  public static SpawnMetrics aggregateMetrics(
+      ImmutableList<SpawnMetrics> spawnMetrics, boolean onlyDuration) {
+    Duration totalTime = Duration.ZERO;
+    Duration parseTime = Duration.ZERO;
+    Duration networkTime = Duration.ZERO;
+    Duration fetchTime = Duration.ZERO;
+    Duration remoteQueueTime = Duration.ZERO;
+    Duration uploadTime = Duration.ZERO;
+    Duration setupTime = Duration.ZERO;
+    Duration executionWallTime = Duration.ZERO;
+    Duration retryTime = Duration.ZERO;
+    Duration remoteProcessOutputsTime = Duration.ZERO;
+    long inputFiles = 0L;
+    long inputBytes = 0L;
+    long memoryEstimate = 0L;
+
+    for (SpawnMetrics metric : spawnMetrics) {
+      totalTime = totalTime.plus(metric.totalTime());
+      parseTime = parseTime.plus(metric.parseTime());
+      networkTime = networkTime.plus(metric.networkTime());
+      fetchTime = fetchTime.plus(metric.fetchTime());
+      remoteQueueTime = remoteQueueTime.plus(metric.remoteQueueTime());
+      uploadTime = uploadTime.plus(metric.uploadTime());
+      setupTime = setupTime.plus(metric.setupTime());
+      executionWallTime = executionWallTime.plus(metric.executionWallTime());
+      retryTime = retryTime.plus(metric.retryTime());
+      remoteProcessOutputsTime = remoteProcessOutputsTime.plus(metric.remoteProcessOutputsTime());
+      inputFiles = onlyDuration ? metric.inputFiles() : inputFiles + metric.inputFiles();
+      inputBytes = onlyDuration ? metric.inputBytes() : inputBytes + metric.inputBytes();
+      memoryEstimate =
+          onlyDuration ? metric.memoryEstimate() : memoryEstimate + metric.memoryEstimate();
+    }
+
+    return new SpawnMetrics.Builder()
+        .setTotalTime(totalTime)
+        .setParseTime(parseTime)
+        .setNetworkTime(networkTime)
+        .setFetchTime(fetchTime)
+        .setRemoteQueueTime(remoteQueueTime)
+        .setSetupTime(setupTime)
+        .setUploadTime(uploadTime)
+        .setExecutionWallTime(executionWallTime)
+        .setRetryTime(retryTime)
+        .setRemoteProcessOutputsTime(remoteProcessOutputsTime)
+        .setInputBytes(inputBytes)
+        .setInputFiles(inputFiles)
+        .setMemoryEstimateBytes(memoryEstimate)
+        .build();
+  }
+
+  /** Builder class for SpawnMetrics. */
+  public static class Builder {
+    private Duration totalTime = Duration.ZERO;
+    private Duration parseTime = Duration.ZERO;
+    private Duration networkTime = Duration.ZERO;
+    private Duration fetchTime = Duration.ZERO;
+    private Duration remoteQueueTime = Duration.ZERO;
+    private Duration setupTime = Duration.ZERO;
+    private Duration uploadTime = Duration.ZERO;
+    private Duration executionWallTime = Duration.ZERO;
+    private Duration retryTime = Duration.ZERO;
+    private Duration remoteProcessOutputsTime = Duration.ZERO;
+    private long inputBytes = 0;
+    private long inputFiles = 0;
+    private long memoryEstimateBytes = 0;
+
+    public SpawnMetrics build() {
+      // TODO(ulfjack): Add consistency checks here?
+      return new SpawnMetrics(this);
+    }
+
+    public Builder setTotalTime(Duration totalTime) {
+      this.totalTime = totalTime;
+      return this;
+    }
+
+    public Builder setParseTime(Duration parseTime) {
+      this.parseTime = parseTime;
+      return this;
+    }
+
+    public Builder setNetworkTime(Duration networkTime) {
+      this.networkTime = networkTime;
+      return this;
+    }
+
+    public Builder setFetchTime(Duration fetchTime) {
+      this.fetchTime = fetchTime;
+      return this;
+    }
+
+    public Builder setRemoteQueueTime(Duration remoteQueueTime) {
+      this.remoteQueueTime = remoteQueueTime;
+      return this;
+    }
+
+    public Builder setSetupTime(Duration setupTime) {
+      this.setupTime = setupTime;
+      return this;
+    }
+
+    public Builder setUploadTime(Duration uploadTime) {
+      this.uploadTime = uploadTime;
+      return this;
+    }
+
+    public Builder setExecutionWallTime(Duration executionWallTime) {
+      this.executionWallTime = executionWallTime;
+      return this;
+    }
+
+    public Builder setRetryTime(Duration retryTime) {
+      this.retryTime = retryTime;
+      return this;
+    }
+
+    public Builder setRemoteProcessOutputsTime(Duration remoteProcessOutputsTime) {
+      this.remoteProcessOutputsTime = remoteProcessOutputsTime;
+      return this;
+    }
+
+    public Builder setInputBytes(long inputBytes) {
+      this.inputBytes = inputBytes;
+      return this;
+    }
+
+    public Builder setInputFiles(long inputFiles) {
+      this.inputFiles = inputFiles;
+      return this;
+    }
+
+    public Builder setMemoryEstimateBytes(long memoryEstimateBytes) {
+      this.memoryEstimateBytes = memoryEstimateBytes;
+      return this;
+    }
   }
 }

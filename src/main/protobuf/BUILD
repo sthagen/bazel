@@ -1,9 +1,13 @@
+load("@rules_java//java:defs.bzl", "java_proto_library")
+
 package(default_visibility = ["//visibility:public"])
 
 load("//tools/build_rules:genproto.bzl", "cc_grpc_library")
 load("//tools/build_rules:utilities.bzl", "java_library_srcs")
-load("//third_party/protobuf/3.6.0:protobuf.bzl", "py_proto_library")
+load("//third_party/protobuf/3.6.1:protobuf.bzl", "py_proto_library")
 load("//third_party/grpc:build_defs.bzl", "java_grpc_library")
+load("@rules_cc//cc:defs.bzl", "cc_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
 
 exports_files(
     ["execution_statitics.proto"],
@@ -18,7 +22,6 @@ FILES = [
     "bazel_flags",
     "build",
     "builtin",
-    "bundlemerge",
     "command_server",
     "crosstool_config",
     "deps",
@@ -27,7 +30,6 @@ FILES = [
     "extra_actions_base",
     "invocation_policy",
     "java_compilation",
-    "plmerge",
     "spawn",
     "test_status",
     "worker_protocol",
@@ -52,6 +54,14 @@ proto_library(
     name = "analysis_proto",
     srcs = ["analysis.proto"],
     deps = [":build_proto"],
+)
+
+py_proto_library(
+    name = "analysis_py_proto",
+    srcs = ["analysis.proto"],
+    default_runtime = "//third_party/protobuf:protobuf_python",
+    protoc = "//third_party/protobuf:protoc",
+    deps = [":build_pb_py"],
 )
 
 java_proto_library(
@@ -104,6 +114,21 @@ java_library_srcs(
     name = "command_line_java_proto_srcs",
     visibility = ["//visibility:private"],
     deps = [":command_line_java_proto"],
+)
+
+# Proto needed by singlejar and embedded into the java tools archive.
+genrule(
+    name = "desugar_deps_zip",
+    srcs = ["desugar_deps.proto"],
+    outs = ["desugar_deps.zip"],
+    cmd = "zip -q $@ $<",
+    visibility = ["//src/tools/singlejar:__pkg__"],
+)
+
+filegroup(
+    name = "desugar_deps_filegroup",
+    srcs = ["desugar_deps.proto"],
+    visibility = ["//src/tools/singlejar:__pkg__"],
 )
 
 cc_proto_library(

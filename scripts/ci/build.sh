@@ -64,7 +64,7 @@ fi
 #   exit 1
 # fi
 
-export APT_GPG_KEY_ID=$(gsutil cat gs://bazel-encrypted-secrets/release-key.gpg.id)
+export APT_GPG_KEY_ID=$(gsutil cat gs://bazel-trusted-encrypted-secrets/release-key.gpg.id)
 
 # Generate a string from a template and a list of substitutions.
 # The first parameter is the template name and each subsequent parameter
@@ -126,7 +126,7 @@ The binaries and source-code of the bundled OpenJDK can be
 [downloaded from our mirror server](https://mirror.bazel.build/openjdk/index.html).
 
 _Security_: All our binaries are signed with our
-[public key](https://bazel.build/bazel-release.pub.gpg) 48457EE0.
+[public key](https://bazel.build/bazel-release.pub.gpg) 3D5919B448457EE0.
 '
 }
 
@@ -142,10 +142,10 @@ function release_to_github() {
   local rc=$(get_release_candidate)
 
   if [ -n "${release_name}" ] && [ -z "${rc}" ]; then
-    local github_token="$(gsutil cat gs://bazel-encrypted-secrets/github-token.enc | \
-        gcloud kms decrypt --location global --keyring buildkite --key github-token --ciphertext-file - --plaintext-file -)"
+    local github_token="$(gsutil cat gs://bazel-trusted-encrypted-secrets/github-trusted-token.enc | \
+        gcloud kms decrypt --project bazel-public --location global --keyring buildkite --key github-trusted-token --ciphertext-file - --plaintext-file -)"
 
-    GITHUB_TOKEN=${github_token} github-release "bazelbuild/bazel" "${release_name}" "" "$(get_release_page)" "${artifact_dir}/*"
+    GITHUB_TOKEN="${github_token}" github-release "bazelbuild/bazel" "${release_name}" "" "$(get_release_page)" "${artifact_dir}/*"
   fi
 }
 
@@ -185,7 +185,7 @@ function release_to_gcs() {
       release_path="${release_name}/rc${rc}"
     fi
     create_index_html "${artifact_dir}" > "${artifact_dir}/index.html"
-    gsutil -m cp -a public-read "${artifact_dir}/**" "gs://bazel/${release_path}"
+    gsutil -m cp "${artifact_dir}/**" "gs://bazel/${release_path}"
   fi
 }
 
@@ -193,7 +193,7 @@ function ensure_gpg_secret_key_imported() {
   if ! gpg --list-secret-keys | grep "${APT_GPG_KEY_ID}" > /dev/null; then
     keyfile=$(mktemp --tmpdir)
     chmod 0600 "${keyfile}"
-    gsutil cat "gs://bazel-encrypted-secrets/release-key.gpg.enc" | \
+    gsutil cat "gs://bazel-trusted-encrypted-secrets/release-key.gpg.enc" | \
         gcloud kms decrypt --location "global" --keyring "buildkite" --key "bazel-release-key" --ciphertext-file "-" --plaintext-file "${keyfile}"
     gpg --allow-secret-key-import --import "${keyfile}"
     rm -f "${keyfile}"
@@ -259,7 +259,7 @@ EOF
   reprepro -C jdk1.8 includedeb "${distribution}" "${deb_pkg_name}"
   reprepro -C jdk1.8 includedsc "${distribution}" "${deb_dsc_name}"
 
-  gsutil -m cp -a public-read -r dists pool "gs://bazel-apt"
+  gsutil -m cp -r dists pool "gs://bazel-apt"
 }
 
 function release_to_apt() {

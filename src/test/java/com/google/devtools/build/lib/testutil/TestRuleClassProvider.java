@@ -17,8 +17,8 @@ package com.google.devtools.build.lib.testutil;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.OUTPUT_LIST;
-import static com.google.devtools.build.lib.syntax.Type.INTEGER;
-import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
+import static com.google.devtools.build.lib.packages.Type.INTEGER;
+import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -39,7 +39,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -49,6 +49,7 @@ import java.util.Map;
  */
 public class TestRuleClassProvider {
   private static ConfiguredRuleClassProvider ruleProvider = null;
+  private static ConfiguredRuleClassProvider ruleProviderWithClearedSuffix = null;
 
   /**
    * Adds all the rule classes supported internally within the build tool to the given builder.
@@ -67,19 +68,34 @@ public class TestRuleClassProvider {
     }
   }
 
-  /**
-   * Return a rule class provider.
-   */
-  public static ConfiguredRuleClassProvider getRuleClassProvider() {
+  private static ConfiguredRuleClassProvider createRuleClassProvider(boolean clearSuffix) {
+    ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
+    addStandardRules(builder);
+    builder.addRuleDefinition(new TestingDummyRule());
+    builder.addRuleDefinition(new MockToolchainRule());
+    if (clearSuffix) {
+      builder.clearWorkspaceFileSuffixForTesting();
+    }
+    return builder.build();
+  }
+
+  /** Return a rule class provider. */
+  public static ConfiguredRuleClassProvider getRuleClassProvider(boolean clearSuffix) {
+    if (clearSuffix) {
+      if (ruleProviderWithClearedSuffix == null) {
+        ruleProviderWithClearedSuffix = createRuleClassProvider(true);
+      }
+      return ruleProviderWithClearedSuffix;
+    }
     if (ruleProvider == null) {
-      ConfiguredRuleClassProvider.Builder builder =
-          new ConfiguredRuleClassProvider.Builder();
-      addStandardRules(builder);
-      builder.addRuleDefinition(new TestingDummyRule());
-      builder.addRuleDefinition(new MockToolchainRule());
-      ruleProvider = builder.build();
+      ruleProvider = createRuleClassProvider(false);
     }
     return ruleProvider;
+  }
+
+  /** Return a rule class provider. */
+  public static ConfiguredRuleClassProvider getRuleClassProvider() {
+    return getRuleClassProvider(false);
   }
 
   /**

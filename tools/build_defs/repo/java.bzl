@@ -64,7 +64,7 @@ Sometimes jars are distributed with their dependencies shaded. What this means
 is that com.initech.tps will contain classes like
 com.initech.tps.shade.com.fakecorp.foo. This is less problematic, since it
 won't lead to mysterious classpath conflicts. But it can lead to inefficient
-use of space and make the license of the the end product more difficult to
+use of space and make the license of the end product more difficult to
 determine.
 
 #### Licensing
@@ -86,13 +86,12 @@ by those with terms most permissive to least:
 ### Naming
 
 Bazel repository names must match the following pattern: `[_0-9A-Za-z]+`. To
-choose an appropriate name based on a Maven group and artifact ID, we recommend
-an algorithm https://gist.github.com/jart/41bfd977b913c2301627162f1c038e55 which
-can be best explained by the following examples:
+choose an appropriate name based on a Maven group and artifact ID, replacing
+illegal characters with underscores and leaving off the version. For example:
 
-- com.google.guava:guava becomes com_google_guava
-- commons-logging:commons-logging becomes commons_logging
-- junit:junit becomes junit
+- com.google.guava:guava:27.0-jre becomes com_google_guava_guava
+- commons-logging:commons-logging:1.2 becomes commons_logging_commons_logging
+- junit:junit:4.12 becomes junit_junit
 
 Adopting this naming convention will help maximize the chances that your
 codebase will be able to successfully interoperate with other Bazel codebases
@@ -104,7 +103,7 @@ Here is an example of a best practice definition of Google's Guava library:
 
 ```python
 java_import_external(
-    name = "com_google_guava",
+    name = "com_google_guava_guava",
     licenses = ["notice"],  # Apache 2.0
     jar_urls = [
         "http://bazel-mirror.storage.googleapis.com/repo1.maven.org/maven2/com/google/guava/guava/20.0/guava-20.0.jar",
@@ -163,7 +162,7 @@ disjoint from production code.
 
 ### Provided Dependencies
 
-The feature in Bazel most analagous to Maven's provided scope is the neverlink
+The feature in Bazel most analogous to Maven's provided scope is the neverlink
 attribute. This should be used in rare circumstances when a distributed jar
 will be loaded into a runtime environment where certain dependencies can be
 reasonably expected to already be provided.

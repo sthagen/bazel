@@ -14,7 +14,7 @@
 
 package com.google.devtools.build.lib.windows;
 
-import com.google.common.base.Charsets;
+import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.shell.Subprocess;
 import com.google.devtools.build.lib.shell.SubprocessBuilder;
 import com.google.devtools.build.lib.shell.SubprocessBuilder.StreamAction;
@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.windows.jni.WindowsProcesses;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -33,19 +34,14 @@ import java.util.TreeMap;
 public class WindowsSubprocessFactory implements SubprocessFactory {
   public static final WindowsSubprocessFactory INSTANCE = new WindowsSubprocessFactory();
 
-  private WindowsSubprocessFactory() {
-    // Singleton
-  }
-
   @Override
   public Subprocess create(SubprocessBuilder builder) throws IOException {
     List<String> argv = builder.getArgv();
 
     // DO NOT quote argv0, createProcess will do it for us.
     String argv0 = processArgv0(argv.get(0));
-    String argvRest =
-        argv.size() > 1 ? WindowsProcesses.quoteCommandLine(argv.subList(1, argv.size())) : "";
-    byte[] env = builder.getEnv() == null ? null : convertEnvToNative(builder.getEnv());
+    String argvRest = argv.size() > 1 ? escapeArgvRest(argv.subList(1, argv.size())) : "";
+    byte[] env = convertEnvToNative(builder.getEnv());
 
     String stdoutPath = getRedirectPath(builder.getStdout(), builder.getStdoutFile());
     String stderrPath = getRedirectPath(builder.getStderr(), builder.getStderrFile());
@@ -73,7 +69,21 @@ public class WindowsSubprocessFactory implements SubprocessFactory {
         builder.getTimeoutMillis());
   }
 
-  public String processArgv0(String argv0) {
+  private String escapeArgvRest(List<String> argv) {
+    StringBuilder result = new StringBuilder();
+    boolean first = true;
+    for (String arg : argv) {
+      if (first) {
+        first = false;
+      } else {
+        result.append(" ");
+      }
+      result.append(ShellUtils.windowsEscapeArg(arg));
+    }
+    return result.toString();
+  }
+
+  public static String processArgv0(String argv0) {
     // Normalize the path and make it Windows-style.
     // If argv0 is at least MAX_PATH (260 chars) long, createNativeProcess calls GetShortPathNameW
     // to obtain a 8dot3 name for it (thereby support long paths in CreateProcessA), but then argv0
@@ -83,10 +93,10 @@ public class WindowsSubprocessFactory implements SubprocessFactory {
     // If it's not absolute, then it cannot be longer than MAX_PATH, since MAX_PATH also limits the
     // length of file names.
     PathFragment argv0fragment = PathFragment.create(argv0);
-    return (argv0fragment.isAbsolute()) ? argv0fragment.getPathString().replace('/', '\\') : argv0;
+    return argv0fragment.isAbsolute() ? argv0fragment.getPathString().replace('/', '\\') : argv0;
   }
 
-  private String getRedirectPath(StreamAction action, File file) {
+  private static String getRedirectPath(StreamAction action, File file) {
     switch (action) {
       case DISCARD:
         return "NUL";  // That's /dev/null on Windows
@@ -102,38 +112,34 @@ public class WindowsSubprocessFactory implements SubprocessFactory {
     }
   }
 
-  private String getSystemRoot(Map<String, String> env) {
-    // Windows environment variables are case-insensitive, so we can't just say
-    // System.getenv().get("SystemRoot")
-    for (String key : env.keySet()) {
-      if (key.toUpperCase().equals("SYSTEMROOT")) {
-        return env.get(key);
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Converts an environment map to the format expected in lpEnvironment by CreateProcess().
-   */
-  private byte[] convertEnvToNative(Map<String, String> env) throws IOException {
+  /** Converts an environment map to the format expected in lpEnvironment by CreateProcess(). */
+  private static byte[] convertEnvToNative(Map<String, String> envMap) throws IOException {
     Map<String, String> realEnv = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-    realEnv.putAll(env == null ? System.getenv() : env);
-    if (getSystemRoot(realEnv) == null) {
-      // Some versions of MSVCRT.DLL require SystemRoot to be set. It's quite a common library to
-      // link in, so we add this environment variable regardless of whether the caller requested
-      // it or not.
-      String systemRoot = getSystemRoot(System.getenv());
-      if (systemRoot != null) {
-        realEnv.put("SystemRoot", systemRoot);
+    Map<String, String> systemEnv = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    if (envMap != null) {
+      realEnv.putAll(envMap);
+    }
+    // It is fine to use System.getenv to get default SYSTEMROOT and SYSTEMDRIVE, because they are
+    // very special system environment variables and Bazel's client and server are running on the
+    // same machine, so it should be the same in client environment.
+    systemEnv.putAll(System.getenv());
+    // Some versions of MSVCRT.DLL and tools require SYSTEMROOT and SYSTEMDRIVE to be set. They are
+    // very common environment variables on Windows, so we add these environment variables
+    // regardless of whether the caller requested it or not.
+    String[] systemEnvironmentVars = {"SYSTEMROOT", "SYSTEMDRIVE"};
+    for (String env : systemEnvironmentVars) {
+      if (realEnv.getOrDefault(env, null) == null) {
+        String value = systemEnv.getOrDefault(env, null);
+        if (value != null) {
+          realEnv.put(env, value);
+        }
       }
     }
 
     if (realEnv.isEmpty()) {
       // Special case: CreateProcess() always expects the environment block to be terminated
       // with two zeros.
-      return new byte[] { 0, 0, };
+      return "\0".getBytes(StandardCharsets.UTF_16LE);
     }
 
     StringBuilder result = new StringBuilder();
@@ -148,6 +154,6 @@ public class WindowsSubprocessFactory implements SubprocessFactory {
     }
 
     result.append("\0");
-    return result.toString().getBytes(Charsets.UTF_8);
+    return result.toString().getBytes(StandardCharsets.UTF_16LE);
   }
 }

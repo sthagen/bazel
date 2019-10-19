@@ -31,16 +31,10 @@ function set_up() {
   copy_examples
   setup_objc_test_support
 
-  # Find the version number for an installed 7-series or 8-series Xcode
-  # (any sub-version will do)
-  bazel query "labels('versions', '@local_config_xcode//:host_xcodes')" \
-      --output xml  | grep 'name="version"' \
-      | sed -E 's/.*(value=\"(([0-9]|.)+))\".*/\2/' > xcode_versions
+  # Find the version number for an installed Xcode.
+  XCODE_VERSION=$(xcodebuild -version | grep ^Xcode | cut -d' ' -f2)
 
-  XCODE_VERSION=$(cat xcode_versions | grep -m1 '7\|8\|9')
-
-  # Allow access to //external:xcrunwrapper.
-  use_bazel_workspace_file
+  create_new_workspace
 }
 
 function test_fat_binary_no_srcs() {
@@ -85,12 +79,57 @@ EOF
     || fail "expected output binary to contain 2 architectures"
 }
 
+function test_additive_cpus_flag() {
+  mkdir -p package
+  cat > package/BUILD <<EOF
+objc_library(
+    name = "lib_a",
+    srcs = ["a.m"],
+)
+objc_library(
+    name = "lib_b",
+    srcs = ["b.m"],
+)
+apple_binary(
+    name = "main_binary",
+    deps = [":lib_a", ":lib_b"],
+    platform_type = "ios",
+    minimum_os_version = "10.0",
+)
+genrule(
+  name = "lipo_run",
+  srcs = [":main_binary_lipobin"],
+  outs = ["lipo_out"],
+  cmd =
+      "set -e && " +
+      "lipo -info \$(location :main_binary_lipobin) > \$(@)",
+  tags = ["requires-darwin"],
+)
+EOF
+  touch package/a.m
+  cat > package/b.m <<EOF
+int main() {
+  return 0;
+}
+EOF
+
+  bazel build --verbose_failures --xcode_version=$XCODE_VERSION \
+      //package:lipo_out \
+      --ios_multi_cpus=i386 --ios_multi_cpus=x86_64 \
+      || fail "should build apple_binary and obtain info via lipo"
+
+  cat bazel-genfiles/package/lipo_out | grep "i386 x86_64" \
+    || fail "expected output binary to contain 2 architectures"
+}
+
 function test_host_xcodes() {
   XCODE_VERSION=$(env -i xcodebuild -version | grep "Xcode" \
       | sed -E "s/Xcode (([0-9]|.)+).*/\1/")
+  XCODE_BUILD_VERSION=$(env -i xcodebuild -version | grep "Build version" \
+      | sed -E "s/Build version (([0-9]|.)+).*/\1/")
   IOS_SDK=$(env -i xcodebuild -version -sdk | grep iphoneos \
       | sed -E "s/.*\(iphoneos(([0-9]|.)+)\).*/\1/")
-  MACOSX_SDK=$(env -i xcodebuild -version -sdk | grep macosx \
+  MACOSX_SDK=$(env -i xcodebuild -version -sdk | grep "(macosx" \
       | sed -E "s/.*\(macosx(([0-9]|.)+)\).*/\1/" | head -n 1)
 
   # Unfortunately xcodebuild -version doesn't always pad with trailing .0, so,
@@ -100,10 +139,12 @@ function test_host_xcodes() {
     XCODE_VERSION="${XCODE_VERSION}.0"
   fi
 
+  XCODE_VERSION_FULL="${XCODE_VERSION}.${XCODE_BUILD_VERSION}"
+
   bazel build @local_config_xcode//:host_xcodes >"${TEST_log}" 2>&1 \
      || fail "Expected host_xcodes to build"
 
-  bazel query "attr(version, $XCODE_VERSION, \
+  bazel query "attr(version, $XCODE_VERSION_FULL, \
       attr(default_ios_sdk_version, $IOS_SDK, \
       attr(default_macos_sdk_version, $MACOSX_SDK, \
       labels('versions', '@local_config_xcode//:host_xcodes'))))" \
@@ -169,7 +210,6 @@ std::string GetString() { return "h3ll0"; }
 EOF
 
   bazel build --verbose_failures //package:lipo_out \
-    --apple_crosstool_transition \
     --ios_multi_cpus=i386,x86_64 \
     --xcode_version=$XCODE_VERSION \
     || fail "should build apple_binary and obtain info via lipo"
@@ -244,7 +284,6 @@ std::string GetString() { return "h3ll0"; }
 EOF
 
   bazel build --verbose_failures //package:lipo_out \
-      --apple_crosstool_transition \
       --watchos_cpus=armv7k \
       --xcode_version=$XCODE_VERSION \
       || fail "should build watch binary"
@@ -253,7 +292,6 @@ EOF
       || fail "expected output binary to be for armv7k architecture"
 
   bazel build --verbose_failures //package:lipo_out \
-      --apple_crosstool_transition \
       --watchos_cpus=i386 \
       --xcode_version=$XCODE_VERSION \
       || fail "should build watch binary"
@@ -378,7 +416,6 @@ int main() {
 EOF
 
   bazel build --verbose_failures //package:main_binary \
-      --apple_crosstool_transition \
       --ios_multi_cpus=i386,x86_64 \
       --xcode_version=$XCODE_VERSION \
       --apple_generate_dsym=true \
@@ -407,7 +444,6 @@ int main() {
 EOF
 
   bazel build --verbose_failures //package:main_binary \
-      --apple_crosstool_transition \
       --ios_multi_cpus=i386,x86_64 \
       --xcode_version=$XCODE_VERSION \
       --apple_generate_dsym=true \
@@ -433,7 +469,6 @@ static int dummy __attribute__((unused,used)) = 0;
 EOF
 
   bazel build --verbose_failures //package:static_lib \
-      --apple_crosstool_transition \
       --ios_multi_cpus=i386,x86_64 \
       --ios_minimum_os=8.0 \
       --xcode_version=$XCODE_VERSION \

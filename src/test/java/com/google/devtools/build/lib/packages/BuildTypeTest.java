@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.packages;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
-import static org.junit.Assert.fail;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -27,13 +26,12 @@ import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.BuildType.LabelConversionContext;
 import com.google.devtools.build.lib.packages.BuildType.Selector;
+import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.SelectorList;
 import com.google.devtools.build.lib.syntax.SelectorValue;
-import com.google.devtools.build.lib.syntax.Type;
-import com.google.devtools.build.lib.syntax.Type.ConversionException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -111,68 +109,76 @@ public class BuildTypeTest {
 
   @Test
   public void testLabelKeyedStringDictConvertingStringShouldFail() throws Exception {
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert("//actually/a:label", null, currentRule);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage(
-              "expected value of type 'dict(label, string)', "
-                  + "but got \"//actually/a:label\" (string)");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () ->
+                BuildType.LABEL_KEYED_STRING_DICT.convert("//actually/a:label", null, currentRule));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo(
+            "expected value of type 'dict(label, string)', "
+                + "but got \"//actually/a:label\" (string)");
   }
 
   @Test
   public void testLabelKeyedStringDictConvertingListShouldFail() throws Exception {
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(
-          ImmutableList.of("//actually/a:label"), null, currentRule);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage(
-              "expected value of type 'dict(label, string)', "
-                  + "but got [\"//actually/a:label\"] (List)");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () ->
+                BuildType.LABEL_KEYED_STRING_DICT.convert(
+                    ImmutableList.of("//actually/a:label"), null, currentRule));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo(
+            "expected value of type 'dict(label, string)', "
+                + "but got [\"//actually/a:label\"] (List)");
   }
 
   @Test
   public void testLabelKeyedStringDictConvertingMapWithNonStringKeyShouldFail() throws Exception {
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(ImmutableMap.of(1, "OK"), null, currentRule);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage("expected value of type 'string' for dict key element, but got 1 (int)");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () ->
+                BuildType.LABEL_KEYED_STRING_DICT.convert(
+                    ImmutableMap.of(1, "OK"), null, currentRule));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo("expected value of type 'string' for dict key element, but got 1 (int)");
   }
 
   @Test
   public void testLabelKeyedStringDictConvertingMapWithNonStringValueShouldFail() throws Exception {
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(
-          ImmutableMap.of("//actually/a:label", 3), null, currentRule);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage("expected value of type 'string' for dict value element, but got 3 (int)");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () ->
+                BuildType.LABEL_KEYED_STRING_DICT.convert(
+                    ImmutableMap.of("//actually/a:label", 3), null, currentRule));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo("expected value of type 'string' for dict value element, but got 3 (int)");
   }
 
   @Test
   public void testLabelKeyedStringDictConvertingMapWithInvalidLabelKeyShouldFail()
       throws Exception {
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(
-          ImmutableMap.of("//uplevel/references/are:../../forbidden", "OK"), null, currentRule);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage(
-              "invalid label '//uplevel/references/are:../../forbidden' in "
-                  + "dict key element: invalid target name '../../forbidden': "
-                  + "target names may not contain up-level references '..'");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () ->
+                BuildType.LABEL_KEYED_STRING_DICT.convert(
+                    ImmutableMap.of("//uplevel/references/are:../../forbidden", "OK"),
+                    null,
+                    currentRule));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo(
+            "invalid label '//uplevel/references/are:../../forbidden' in "
+                + "dict key element: invalid target name '../../forbidden': "
+                + "target names may not contain up-level references '..'");
   }
 
   @Test
@@ -183,15 +189,15 @@ public class BuildTypeTest {
         .put(":reference", "value1")
         .put("//current/package:reference", "value2")
         .build();
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(input, null, context);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage(
-              "duplicate labels: //current/package:reference "
-                  + "(as [\":reference\", \"//current/package:reference\"])");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () -> BuildType.LABEL_KEYED_STRING_DICT.convert(input, null, context));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo(
+            "duplicate labels: //current/package:reference "
+                + "(as [\":reference\", \"//current/package:reference\"])");
   }
 
   @Test
@@ -207,17 +213,17 @@ public class BuildTypeTest {
         .put("//not/involved/in/any:collisions", "same value")
         .put("//also/not/involved/in/any:collisions", "same value")
         .build();
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(input, null, context);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage(
-              "duplicate labels: //current/rule:rule "
-                  + "(as [\":rule\", \"//current/rule:rule\", \"//current/rule\"]), "
-                  + "//other/package:package "
-                  + "(as [\"//other/package:package\", \"//other/package\"])");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () -> BuildType.LABEL_KEYED_STRING_DICT.convert(input, null, context));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo(
+            "duplicate labels: //current/rule:rule "
+                + "(as [\":rule\", \"//current/rule:rule\", \"//current/rule\"]), "
+                + "//other/package:package "
+                + "(as [\"//other/package:package\", \"//other/package\"])");
   }
 
   @Test
@@ -228,15 +234,15 @@ public class BuildTypeTest {
         .put(":reference", "value1")
         .put("//current/package:reference", "value2")
         .build();
-    try {
-      BuildType.LABEL_KEYED_STRING_DICT.convert(input, "flag map", context);
-      fail("Expected a conversion exception to be thrown.");
-    } catch (ConversionException expected) {
-      assertThat(expected)
-          .hasMessage(
-              "duplicate labels in flag map: //current/package:reference "
-                  + "(as [\":reference\", \"//current/package:reference\"])");
-    }
+    ConversionException expected =
+        assertThrows(
+            ConversionException.class,
+            () -> BuildType.LABEL_KEYED_STRING_DICT.convert(input, "flag map", context));
+    assertThat(expected)
+        .hasMessageThat()
+        .isEqualTo(
+            "duplicate labels in flag map: //current/package:reference "
+                + "(as [\":reference\", \"//current/package:reference\"])");
   }
 
   @Test
@@ -354,12 +360,11 @@ public class BuildTypeTest {
     ImmutableMap<String, String> input = ImmutableMap.of(
         "//conditions:a", "not a/../label", "//conditions:b", "also not a/../label",
         BuildType.Selector.DEFAULT_CONDITION_KEY, "whatever");
-    try {
-      new Selector<>(input, null, labelConversionContext, BuildType.LABEL);
-      fail("Expected Selector instantiation to fail since the input isn't a selection of labels");
-    } catch (ConversionException e) {
-      assertThat(e).hasMessageThat().contains("invalid label 'not a/../label'");
-    }
+    ConversionException e =
+        assertThrows(
+            ConversionException.class,
+            () -> new Selector<>(input, null, labelConversionContext, BuildType.LABEL));
+    assertThat(e).hasMessageThat().contains("invalid label 'not a/../label'");
   }
 
   /**
@@ -370,12 +375,11 @@ public class BuildTypeTest {
     ImmutableMap<String, String> input = ImmutableMap.of(
         "not a/../label", "//a:a",
         BuildType.Selector.DEFAULT_CONDITION_KEY, "whatever");
-    try {
-      new Selector<>(input, null, labelConversionContext, BuildType.LABEL);
-      fail("Expected Selector instantiation to fail since the key isn't a label");
-    } catch (ConversionException e) {
-      assertThat(e).hasMessageThat().contains("invalid label 'not a/../label'");
-    }
+    ConversionException e =
+        assertThrows(
+            ConversionException.class,
+            () -> new Selector<>(input, null, labelConversionContext, BuildType.LABEL));
+    assertThat(e).hasMessageThat().contains("invalid label 'not a/../label'");
   }
 
   /**
@@ -437,16 +441,16 @@ public class BuildTypeTest {
         new SelectorValue(ImmutableMap.of("//conditions:a", ImmutableList.of("//a:a")), "");
     Object selector2 =
         new SelectorValue(ImmutableMap.of("//conditions:b", "//b:b"), "");
-    try {
-      new BuildType.SelectorList<>(
-          ImmutableList.of(selector1, selector2),
-          null,
-          labelConversionContext,
-          BuildType.LABEL_LIST);
-      fail("Expected SelectorList initialization to fail on mixed element types");
-    } catch (ConversionException e) {
-      assertThat(e).hasMessageThat().contains("expected value of type 'list(label)'");
-    }
+    ConversionException e =
+        assertThrows(
+            ConversionException.class,
+            () ->
+                new BuildType.SelectorList<>(
+                    ImmutableList.of(selector1, selector2),
+                    null,
+                    labelConversionContext,
+                    BuildType.LABEL_LIST));
+    assertThat(e).hasMessageThat().contains("expected value of type 'list(label)'");
   }
 
   @Test
@@ -533,19 +537,19 @@ public class BuildTypeTest {
   }
 
   /**
-   * Tests that {@link com.google.devtools.build.lib.syntax.Type#convert} fails on selector inputs.
+   * Tests that {@link com.google.devtools.build.lib.packages.Type#convert} fails on selector
+   * inputs.
    */
   @Test
   public void testConvertDoesNotAcceptSelectables() throws Exception {
     Object selectableInput = SelectorList.of(
         new SelectorValue(
             ImmutableMap.of("//conditions:a", Arrays.asList("//a:a1", "//a:a2")), ""));
-    try {
-      BuildType.LABEL_LIST.convert(selectableInput, null, currentRule);
-      fail("Expected conversion to fail on a selectable input");
-    } catch (ConversionException e) {
-      assertThat(e).hasMessageThat().contains("expected value of type 'list(label)'");
-    }
+    ConversionException e =
+        assertThrows(
+            ConversionException.class,
+            () -> BuildType.LABEL_LIST.convert(selectableInput, null, currentRule));
+    assertThat(e).hasMessageThat().contains("expected value of type 'list(label)'");
   }
 
   /**
@@ -717,19 +721,9 @@ public class BuildTypeTest {
     assertThat(EvalUtils.isImmutable(makeFilesetEntry())).isFalse();
   }
 
-  private static ImmutableList<Label> collectLabels(Type<?> type, Object value)
-      throws InterruptedException {
+  private static ImmutableList<Label> collectLabels(Type<?> type, Object value) {
     final ImmutableList.Builder<Label> result = ImmutableList.builder();
-    type.visitLabels(
-        new Type.LabelVisitor<Object>() {
-          @SuppressWarnings("unchecked")
-          @Override
-          public void visit(Label label, Object dummy) throws InterruptedException {
-            result.add(label);
-          }
-        },
-        value,
-        /*context=*/ null);
+    type.visitLabels((label, dummy) -> result.add(label), value, /*context=*/ null);
     return result.build();
   }
 }

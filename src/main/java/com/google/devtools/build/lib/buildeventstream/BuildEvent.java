@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.buildeventstream;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.vfs.Path;
@@ -40,21 +41,22 @@ public interface BuildEvent extends ChainableEvent, ExtendedEventHandler.Postabl
      * associated files for.
      */
     public enum LocalFileType {
-      SOURCE,
       OUTPUT,
       SUCCESSFUL_TEST_OUTPUT,
       FAILED_TEST_OUTPUT,
+      COVERAGE_OUTPUT,
       STDOUT,
       STDERR,
       LOG,
+      PERFORMANCE_LOG,
     }
 
     public final Path path;
     public final LocalFileType type;
 
     public LocalFile(Path path, LocalFileType type) {
-      this.path = path;
-      this.type = type;
+      this.path = Preconditions.checkNotNull(path);
+      this.type = Preconditions.checkNotNull(type);
     }
 
     @Override

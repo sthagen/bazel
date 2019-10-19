@@ -65,12 +65,18 @@ TEST_stderr=$(dirname $TEST_log)/stderr
 
 #### HELPER FUNCTIONS ##################################################
 
+if ! type try_with_timeout >&/dev/null; then
+  # Bazel's testenv.sh defines try_with_timeout but the Google-internal version
+  # uses a different testenv.sh.
+  function try_with_timeout() { $* ; }
+fi
+
 function set_up() {
     cd ${WORKSPACE_DIR}
 }
 
 function tear_down() {
-    bazel shutdown
+  try_with_timeout bazel shutdown
 }
 
 #### TESTS #############################################################
@@ -102,7 +108,7 @@ function test_query_buildfiles_with_load() {
     rm -f $pkg/y/rules.bzl
     bazel query --noshow_progress "buildfiles(//$pkg/x)" 2>$TEST_log &&
         fail "Expected error"
-    expect_log "Extension file not found. Unable to load file '//$pkg/y:rules.bzl'"
+    expect_log "Unable to load file '//$pkg/y:rules.bzl'"
 }
 
 # Regression test for:
@@ -153,9 +159,7 @@ function test_bazelrc_option() {
     local -r pkg="${FUNCNAME}"
     mkdir -p "$pkg" || fail "could not create \"$pkg\""
 
-    if [[ "$(realpath "${bazelrc}")" != "$(realpath ".${PRODUCT_NAME}rc")" ]]; then
-      cp "${bazelrc}" ".${PRODUCT_NAME}rc"
-    fi
+    cp "${bazelrc}" ".${PRODUCT_NAME}rc" || true
 
     echo "build --subcommands" >>".${PRODUCT_NAME}rc"    # default bazelrc
     $PATH_TO_BAZEL_BIN info --announce_rc >/dev/null 2>$TEST_log
@@ -319,33 +323,153 @@ function test_no_package_loading_on_benign_workspace_file_changes() {
 
   echo 'workspace(name="wsname1")' > WORKSPACE
   echo 'sh_library(name="shname1")' > $pkg/foo/BUILD
-  # TODO(b/37617303): make tests UI-independent
-  bazel query --noexperimental_ui //$pkg/foo:all >& "$TEST_log" \
+  bazel query --experimental_ui_debug_all_events //$pkg/foo:all >& "$TEST_log" \
       || fail "Expected success"
   expect_log "Loading package: $pkg/foo"
   expect_log "//$pkg/foo:shname1"
 
   echo 'sh_library(name="shname2")' > $pkg/foo/BUILD
-  # TODO(b/37617303): make tests UI-independent
-  bazel query --noexperimental_ui //$pkg/foo:all >& "$TEST_log" \
+  bazel query --experimental_ui_debug_all_events //$pkg/foo:all >& "$TEST_log" \
       || fail "Expected success"
   expect_log "Loading package: $pkg/foo"
   expect_log "//$pkg/foo:shname2"
 
   # Test that comment changes do not cause package reloading
   echo '#benign comment' >> WORKSPACE
-  # TODO(b/37617303): make tests UI-independent
-  bazel query --noexperimental_ui //$pkg/foo:all >& "$TEST_log" \
+  bazel query --experimental_ui_debug_all_events //$pkg/foo:all >& "$TEST_log" \
       || fail "Expected success"
   expect_not_log "Loading package: $pkg/foo"
   expect_log "//$pkg/foo:shname2"
 
   echo 'workspace(name="wsname2")' > WORKSPACE
-  # TODO(b/37617303): make tests UI-independent
-  bazel query --noexperimental_ui //$pkg/foo:all >& "$TEST_log" \
+  bazel query --experimental_ui_debug_all_events //$pkg/foo:all >& "$TEST_log" \
       || fail "Expected success"
   expect_log "Loading package: $pkg/foo"
   expect_log "//$pkg/foo:shname2"
+}
+
+function test_disallow_load_labels_to_cross_package_boundaries() {
+  local -r pkg="${FUNCNAME}"
+  mkdir -p "$pkg" || fail "could not create \"$pkg\""
+
+  mkdir "$pkg"/foo
+  echo "load(\"//$pkg/foo/a:b/b.bzl\", \"b\")" > "$pkg"/foo/BUILD
+  mkdir -p "$pkg"/foo/a/b
+  touch "$pkg"/foo/a/BUILD
+  touch "$pkg"/foo/a/b/BUILD
+  echo "b = 42" > "$pkg"/foo/a/b/b.bzl
+
+  bazel query "$pkg/foo:BUILD" >& "$TEST_log" && fail "Expected failure"
+  expect_log "Label '//$pkg/foo/a:b/b.bzl' is invalid because '$pkg/foo/a/b' is a subpackage"
+}
+
+function test_package_loading_errors_in_target_parsing() {
+  mkdir bad || fail "mkdir failed"
+  echo "nope" > bad/BUILD || fail "echo failed"
+
+  for keep_going in "--keep_going" "--nokeep_going"
+  do
+    for target_pattern in "//bad:BUILD" "//bad:all" "//bad/..."
+    do
+      bazel build --nobuild "$keep_going" "$target_pattern" >& "$TEST_log" \
+        && fail "Expected failure"
+      expect_log "Build did NOT complete successfully"
+    done
+  done
+}
+
+function test_severe_package_loading_errors_via_test_suites_in_target_parsing() {
+
+  mkdir bad || fail "mkdir failed"
+  cat > bad/BUILD <<EOF
+load("//bad:bad.bzl", "some_val")
+sh_test(name = "some_test", srcs = ["test.sh"])
+EOF
+
+  cat > bad/bad.bzl <<EOF
+fail()
+EOF
+
+  mkdir dependsonbad || fail "mkdir failed"
+  cat > dependsonbad/BUILD <<EOF
+test_suite(name = "suite", tests = ["//bad:some_test"])
+EOF
+
+  for keep_going in "--keep_going" "--nokeep_going"
+  do
+    bazel build --nobuild "$keep_going" //dependsonbad:suite >& "$TEST_log" \
+      && fail "Expected failure"
+    local exit_code=$?
+    assert_equals 1 "$exit_code"
+    expect_log "Build did NOT complete successfully"
+    expect_not_log "Illegal"
+  done
+}
+
+function test_illegal_glob_exclude_pattern_in_bzl() {
+  mkdir badglob-bzl || fail "mkdir failed"
+  cat > badglob-bzl/BUILD <<EOF
+load("//badglob-bzl:badglob.bzl", "f")
+f()
+EOF
+  cat > badglob-bzl/badglob.bzl  <<EOF
+def f():
+  return native.glob(include = ["BUILD"], exclude = ["a/**b/c"])
+EOF
+
+  bazel query //badglob-bzl:BUILD >& "$TEST_log" && fail "Expected failure"
+  local exit_code=$?
+  assert_equals 7 "$exit_code"
+  expect_log "illegal argument in call to glob"
+  expect_not_log "IllegalArgumentException"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/issues/9176
+function test_windows_only__glob_with_junction() {
+  if ! $is_windows; then
+    echo "Skipping $FUNCNAME because execution platform is not Windows"
+    return
+  fi
+
+  mkdir -p foo/bar foo2
+  touch foo/bar/x.txt
+  touch foo/a.txt
+  touch foo2/b.txt
+  cat >BUILD <<eof
+filegroup(name = 'x', srcs = glob(["foo/**"]))
+filegroup(name = 'y', srcs = glob(["foo2/**"]))
+eof
+  # Create junction foo2/bar2 -> foo/bar
+  cmd.exe /C mklink /J foo2\\bar2 foo\\bar >NUL
+
+  bazel query 'deps(//:x)' >& "$TEST_log"
+  expect_log "//:x"
+  expect_log "//:foo/a.txt"
+  expect_log "//:foo/bar/x.txt"
+
+  bazel query 'deps(//:y)' >& "$TEST_log"
+  expect_log "//:y"
+  expect_log "//:foo2/b.txt"
+  expect_log "//:foo2/bar2/x.txt"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/pull/9269#issuecomment-531221290
+# Verify that bazel-bin and the other bazel-* symlinks are not treated as
+# packages when expanding the "//..." pattern.
+function test_bazel_bin_is_not_a_package() {
+  local -r pkg="${FUNCNAME[0]}"
+  mkdir "$pkg" || fail "Could not mkdir $pkg"
+  echo "filegroup(name = '$pkg')" > "$pkg/BUILD"
+
+  # Ensure bazel-<pkg> is created.
+  bazel build --symlink_prefix="foo_prefix-" "//$pkg" || fail "build failed"
+  [[ -d "foo_prefix-bin" ]] || fail "bazel-bin was not created"
+
+  # Assert that "//..." does not expand to //foo_prefix-*
+  bazel query //... >& "$TEST_log"
+  expect_log_once "//$pkg:$pkg"
+  expect_log_once "//.*:$pkg"
+  expect_not_log "//foo_prefix"
 }
 
 run_suite "Integration tests of ${PRODUCT_NAME} using loading/analysis phases."

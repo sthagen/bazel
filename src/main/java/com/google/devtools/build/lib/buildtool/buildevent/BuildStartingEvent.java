@@ -25,6 +25,7 @@ import com.google.devtools.build.lib.buildeventstream.ProgressEvent;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.CommandLineEvent;
+import com.google.devtools.build.lib.util.ProcessUtils;
 import java.util.Collection;
 
 /**
@@ -87,6 +88,7 @@ public final class BuildStartingEvent implements BuildEvent {
         BuildEventId.structuredCommandlineId(CommandLineEvent.OriginalCommandLineEvent.LABEL),
         BuildEventId.structuredCommandlineId(CommandLineEvent.CanonicalCommandLineEvent.LABEL),
         BuildEventId.structuredCommandlineId(CommandLineEvent.ToolCommandLineEvent.LABEL),
+        BuildEventId.buildMetadataId(),
         BuildEventId.optionsParsedId(),
         BuildEventId.workspaceStatusId(),
         BuildEventId.targetPatternExpanded(request.getTargets()),
@@ -101,7 +103,8 @@ public final class BuildStartingEvent implements BuildEvent {
             .setStartTimeMillis(request.getStartTime())
             .setBuildToolVersion(BlazeVersionInfo.instance().getVersion())
             .setOptionsDescription(request.getOptionsDescription())
-            .setCommand(request.getCommandName());
+            .setCommand(request.getCommandName())
+            .setServerPid(ProcessUtils.getpid());
     if (pwd != null) {
       started.setWorkingDirectory(pwd);
     }

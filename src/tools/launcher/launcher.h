@@ -26,6 +26,8 @@ namespace launcher {
 
 typedef int32_t ExitCode;
 static constexpr const char* WORKSPACE_NAME = "workspace_name";
+static constexpr const char* SYMLINK_RUNFILES_ENABLED =
+    "symlink_runfiles_enabled";
 
 // The maximum length of lpCommandLine is 32768 characters.
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms682425(v=vs.85).aspx
@@ -52,22 +54,21 @@ class BinaryLauncherBase {
 
   // Map a runfile path to its absolute path.
   //
-  // If need_workspace_name is true, then this method prepend workspace name to
-  // path before doing rlocation.
-  // If need_workspace_name is false, then this method uses path directly.
-  // The default value of need_workspace_name is true.
-  std::wstring Rlocation(const std::wstring& path,
-                         bool need_workspace_name = true) const;
-  std::wstring Rlocation(const std::string& path,
-                         bool need_workspace_name = true) const;
+  // 'has_workspace_name' indicates whether 'path' already starts with the
+  // runfile's workspace name. (This is implicitly true when 'path' is under
+  // "external/".) If the path does not have a workspace name (and does not
+  // start with "external/"), this method prepends the main repository's name to
+  // it before looking up the runfile.
+  std::wstring Rlocation(std::wstring path,
+                         bool has_workspace_name = false) const;
 
   // Lauch a process with given executable and command line arguments.
   // If --print_launcher_command exists in arguments, then we print the full
   // command line instead of launching the real process.
   //
-  // exectuable: the binary to be executed.
-  // arguments:  the command line arguments to be passed to the exectuable,
-  //             it doesn't include the exectuable itself.
+  // executable: the binary to be executed.
+  // arguments:  the command line arguments to be passed to the executable,
+  //             it doesn't include the executable itself.
   //             The arguments are expected to be quoted if having spaces.
   ExitCode LaunchProcess(const std::wstring& executable,
                          const std::vector<std::wstring>& arguments,
@@ -92,7 +93,7 @@ class BinaryLauncherBase {
   // Path to the runfiles directory, if one exists.
   const std::wstring runfiles_dir;
 
-  // The commandline arguments recieved.
+  // The commandline arguments received.
   // The first argument is the path of this launcher itself.
   std::vector<std::wstring> commandline_arguments;
 
@@ -101,6 +102,9 @@ class BinaryLauncherBase {
 
   // A map to store all entries of the manifest file.
   ManifestFileMap manifest_file_map;
+
+  // If symlink runfiles tree is enabled, this value is true.
+  const bool symlink_runfiles_enabled;
 
   // If --print_launcher_command is presented in arguments,
   // then print the command line.
@@ -112,9 +116,9 @@ class BinaryLauncherBase {
 
   // Create a command line to be passed to Windows CreateProcessA API.
   //
-  // exectuable: the binary to be executed.
-  // arguments:  the command line arguments to be passed to the exectuable,
-  //             it doesn't include the exectuable itself.
+  // executable: the binary to be executed.
+  // arguments:  the command line arguments to be passed to the executable,
+  //             it doesn't include the executable itself.
   void CreateCommandLine(CmdLine* result, const std::wstring& executable,
                          const std::vector<std::wstring>& arguments) const;
 

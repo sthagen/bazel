@@ -15,8 +15,13 @@
 #ifndef BAZEL_SRC_MAIN_NATIVE_WINDOWS_UTIL_H__
 #define BAZEL_SRC_MAIN_NATIVE_WINDOWS_UTIL_H__
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include <windows.h>
 
+#include <memory>
 #include <string>
 
 namespace bazel {
@@ -27,15 +32,27 @@ using std::wstring;
 // A wrapper for the `HANDLE` type that calls CloseHandle in its d'tor.
 // WARNING: do not use for HANDLE returned by FindFirstFile; those must be
 // closed with FindClose (otherwise they aren't closed properly).
-struct AutoHandle {
-  AutoHandle(HANDLE _handle = INVALID_HANDLE_VALUE) : handle_(_handle) {}
+class AutoHandle {
+ public:
+  explicit AutoHandle(HANDLE handle = INVALID_HANDLE_VALUE) : handle_(handle) {}
+  AutoHandle(const AutoHandle&) = delete;
+  AutoHandle(AutoHandle&& other) = delete;
+  AutoHandle& operator=(const AutoHandle&) = delete;
+  AutoHandle& operator=(AutoHandle&& other) = delete;
 
   ~AutoHandle() {
-    ::CloseHandle(handle_);  // succeeds if handle == INVALID_HANDLE_VALUE
-    handle_ = INVALID_HANDLE_VALUE;
+    if (IsValid()) {
+      ::CloseHandle(handle_);
+    }
   }
 
-  bool IsValid() { return handle_ != INVALID_HANDLE_VALUE && handle_ != NULL; }
+  AutoHandle(AutoHandle* other) : handle_(other->handle_) {
+    other->handle_ = INVALID_HANDLE_VALUE;
+  }
+
+  bool IsValid() const {
+    return handle_ != INVALID_HANDLE_VALUE && handle_ != NULL;
+  }
 
   AutoHandle& operator=(const HANDLE& rhs) {
     if (IsValid()) {
@@ -51,28 +68,58 @@ struct AutoHandle {
   HANDLE handle_;
 };
 
-struct AutoAttributeList {
-  AutoAttributeList(DWORD dwAttributeCount) {
-    SIZE_T size = 0;
-    InitializeProcThreadAttributeList(NULL, dwAttributeCount, 0, &size);
-    lpAttributeList =
-        reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(malloc(size));
-    InitializeProcThreadAttributeList(lpAttributeList, dwAttributeCount, 0,
-                                      &size);
-  }
+class AutoAttributeList {
+ public:
+  AutoAttributeList() {}
 
-  ~AutoAttributeList() {
-    if (lpAttributeList) {
-      DeleteProcThreadAttributeList(lpAttributeList);
-      free(lpAttributeList);
-    }
-    lpAttributeList = NULL;
-  }
+  static bool Create(HANDLE stdin_h, HANDLE stdout_h, HANDLE stderr_h,
+                     std::unique_ptr<AutoAttributeList>* result,
+                     std::wstring* error_msg = nullptr);
+  ~AutoAttributeList();
 
-  operator LPPROC_THREAD_ATTRIBUTE_LIST() const { return lpAttributeList; }
+  bool InheritAnyHandles() const { return handles_.ValidHandlesCount() > 0; }
+
+  void InitStartupInfoExW(STARTUPINFOEXW* startup_info) const;
+
+  bool HasConsoleHandle() const { return handles_.HasConsoleHandle(); }
 
  private:
-  LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList;
+  class StdHandles {
+   public:
+    StdHandles();
+    StdHandles(HANDLE stdin_h, HANDLE stdout_h, HANDLE stderr_h);
+    size_t ValidHandlesCount() const { return valid_handles_; }
+    HANDLE* ValidHandles() { return valid_handle_array_; }
+    HANDLE StdIn() const { return stdin_h_; }
+    HANDLE StdOut() const { return stdout_h_; }
+    HANDLE StdErr() const { return stderr_h_; }
+
+    bool HasConsoleHandle() const {
+      for (size_t i = 0; i < valid_handles_; ++i) {
+        if (GetFileType(valid_handle_array_[i]) == FILE_TYPE_CHAR) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+   private:
+    size_t valid_handles_;
+    HANDLE valid_handle_array_[3];
+    HANDLE stdin_h_;
+    HANDLE stdout_h_;
+    HANDLE stderr_h_;
+  };
+
+  AutoAttributeList(std::unique_ptr<uint8_t[]>&& data, HANDLE stdin_h,
+                    HANDLE stdout_h, HANDLE stderr_h);
+  AutoAttributeList(const AutoAttributeList&) = delete;
+  AutoAttributeList& operator=(const AutoAttributeList&) = delete;
+
+  operator LPPROC_THREAD_ATTRIBUTE_LIST() const;
+
+  std::unique_ptr<uint8_t[]> data_;
+  StdHandles handles_;
 };
 
 #define WSTR1(x) L##x
@@ -112,7 +159,7 @@ wstring AsShortPath(wstring path, wstring* result);
 // `path`, and if that succeeds and the result is at most MAX_PATH - 1 long (not
 // including null terminator), then that will be the result (plus quotes).
 // Otherwise this function fails and returns an error message.
-wstring AsExecutablePathForCreateProcess(const wstring& path, wstring* result);
+wstring AsExecutablePathForCreateProcess(wstring path, wstring* result);
 
 }  // namespace windows
 }  // namespace bazel

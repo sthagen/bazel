@@ -22,9 +22,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Unit tests for {@code JavaRuntimeInfo}
- */
+/** Unit tests for {@code JavaRuntimeInfo} */
 @RunWith(JUnit4.class)
 public class JavaRuntimeInfoTest {
   @Test
@@ -35,6 +33,7 @@ public class JavaRuntimeInfoTest {
             NestedSetBuilder.emptySet(Order.STABLE_ORDER),
             PathFragment.create(""),
             PathFragment.create(""),
+            PathFragment.create(""),
             PathFragment.create(""));
     JavaRuntimeInfo b =
         JavaRuntimeInfo.create(
@@ -42,11 +41,9 @@ public class JavaRuntimeInfoTest {
             NestedSetBuilder.emptySet(Order.STABLE_ORDER),
             PathFragment.create(""),
             PathFragment.create(""),
+            PathFragment.create(""),
             PathFragment.create(""));
 
-    new EqualsTester()
-        .addEqualityGroup(a)
-        .addEqualityGroup(b)
-        .testEquals();
+    new EqualsTester().addEqualityGroup(a).addEqualityGroup(b).testEquals();
   }
 }

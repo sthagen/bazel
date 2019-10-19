@@ -14,23 +14,36 @@
 
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.common.base.Predicates.equalTo;
+import static com.google.common.base.Predicates.not;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
+import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
+import com.google.devtools.build.lib.packages.RuleClass;
+import com.google.devtools.build.lib.packages.Target;
+import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetFunction.ConfiguredValueCreationException;
 import com.google.devtools.build.lib.skyframe.PlatformLookupUtil.InvalidPlatformException;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+import com.google.devtools.build.skyframe.ValueOrException;
 import java.util.List;
+import java.util.Map;
 import javax.annotation.Nullable;
 
 /** {@link SkyFunction} that returns all registered execution platforms available. */
@@ -49,13 +62,13 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
     }
     BuildConfiguration configuration = buildConfigurationValue.getConfiguration();
 
-    ImmutableList.Builder<String> targetPatterns = new ImmutableList.Builder<>();
+    ImmutableList.Builder<String> targetPatternBuilder = new ImmutableList.Builder<>();
 
     // Get the execution platforms from the configuration.
     PlatformConfiguration platformConfiguration =
         configuration.getFragment(PlatformConfiguration.class);
     if (platformConfiguration != null) {
-      targetPatterns.addAll(platformConfiguration.getExtraExecutionPlatforms());
+      targetPatternBuilder.addAll(platformConfiguration.getExtraExecutionPlatforms());
     }
 
     // Get the registered execution platforms from the WORKSPACE.
@@ -63,14 +76,14 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
     if (workspaceExecutionPlatforms == null) {
       return null;
     }
-    targetPatterns.addAll(workspaceExecutionPlatforms);
+    targetPatternBuilder.addAll(workspaceExecutionPlatforms);
+    ImmutableList<String> targetPatterns = targetPatternBuilder.build();
 
     // Expand target patterns.
     ImmutableList<Label> platformLabels;
     try {
       platformLabels =
-          TargetPatternUtil.expandTargetPatterns(
-              env, targetPatterns.build(), FilteringPolicies.ruleType("platform", true));
+          TargetPatternUtil.expandTargetPatterns(env, targetPatterns, HasPlatformInfo.create());
       if (env.valuesMissing()) {
         return null;
       }
@@ -81,7 +94,8 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
 
     // Load the configured target for each, and get the declared execution platforms providers.
     ImmutableList<ConfiguredTargetKey> registeredExecutionPlatformKeys =
-        configureRegisteredExecutionPlatforms(env, configuration, platformLabels);
+        configureRegisteredExecutionPlatforms(
+            env, configuration, configuration.trimConfigurationsRetroactively(), platformLabels);
     if (env.valuesMissing()) {
       return null;
     }
@@ -99,7 +113,7 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
   public static List<String> getWorkspaceExecutionPlatforms(Environment env)
       throws InterruptedException {
     PackageValue externalPackageValue =
-        (PackageValue) env.getValue(PackageValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER));
+        (PackageValue) env.getValue(PackageValue.key(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER));
     if (externalPackageValue == null) {
       return null;
     }
@@ -109,27 +123,64 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
   }
 
   private ImmutableList<ConfiguredTargetKey> configureRegisteredExecutionPlatforms(
-      Environment env, BuildConfiguration configuration, List<Label> labels)
+      Environment env,
+      BuildConfiguration configuration,
+      boolean sanityCheckConfiguration,
+      List<Label> labels)
       throws InterruptedException, RegisteredExecutionPlatformsFunctionException {
-    ImmutableList<ConfiguredTargetKey> keys =
-        labels
-            .stream()
-            .map(label -> ConfiguredTargetKey.of(label, configuration))
-            .collect(ImmutableList.toImmutableList());
 
-    // Load the actual configured targets and ensure that they have real, valid PlatformInfo
-    // instances. These are loaded later during toolchain resolution, so this is work that needs to
-    // be done anyway, but here we can fail fast on an error.
-    try {
-      PlatformLookupUtil.getPlatformInfo(keys, env);
-      if (env.valuesMissing()) {
-        return null;
+    ImmutableList<ConfiguredTargetKey> keys =
+        labels.stream()
+            .map(label -> ConfiguredTargetKey.of(label, configuration))
+            .collect(toImmutableList());
+
+    Map<SkyKey, ValueOrException<ConfiguredValueCreationException>> values =
+        env.getValuesOrThrow(keys, ConfiguredValueCreationException.class);
+    ImmutableList.Builder<ConfiguredTargetKey> validPlatformKeys = new ImmutableList.Builder<>();
+    boolean valuesMissing = false;
+    for (ConfiguredTargetKey platformKey : keys) {
+      Label platformLabel = platformKey.getLabel();
+      try {
+        ValueOrException<ConfiguredValueCreationException> valueOrException =
+            values.get(platformKey);
+        if (valueOrException.get() == null) {
+          valuesMissing = true;
+          continue;
+        }
+        ConfiguredTarget target =
+            ((ConfiguredTargetValue) valueOrException.get()).getConfiguredTarget();
+        // This check is necessary because trimming for other rules assumes that platform resolution
+        // uses the platform fragment and _only_ the platform fragment. Without this check, it's
+        // possible another fragment could slip in without us realizing, and thus break this
+        // assumption.
+        if (sanityCheckConfiguration
+            && target.getConfigurationKey().getFragments().stream()
+                .anyMatch(not(equalTo(PlatformConfiguration.class)))) {
+          // Only the PlatformConfiguration fragment may be present on a platform rule in
+          // retroactive trimming mode.
+          throw new RegisteredExecutionPlatformsFunctionException(
+              new InvalidPlatformException(
+                  target.getLabel(),
+                  "has fragments other than PlatformConfiguration, "
+                      + "which is forbidden in retroactive trimming mode"),
+              Transience.PERSISTENT);
+        }
+        PlatformInfo platformInfo = PlatformProviderUtils.platform(target);
+        if (platformInfo == null) {
+          throw new RegisteredExecutionPlatformsFunctionException(
+              new InvalidPlatformException(platformLabel), Transience.PERSISTENT);
+        }
+        validPlatformKeys.add(platformKey);
+      } catch (ConfiguredValueCreationException e) {
+        throw new RegisteredExecutionPlatformsFunctionException(
+            new InvalidPlatformException(platformLabel, e), Transience.PERSISTENT);
       }
-    } catch (InvalidPlatformException e) {
-      throw new RegisteredExecutionPlatformsFunctionException(e, Transience.PERSISTENT);
     }
 
-    return keys;
+    if (valuesMissing) {
+      return null;
+    }
+    return validPlatformKeys.build();
   }
 
   @Nullable
@@ -171,6 +222,31 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
     private RegisteredExecutionPlatformsFunctionException(
         InvalidPlatformException cause, Transience transience) {
       super(cause, transience);
+    }
+  }
+
+  @AutoValue
+  @AutoCodec
+  abstract static class HasPlatformInfo extends FilteringPolicy {
+
+    @Override
+    public boolean shouldRetain(Target target, boolean explicit) {
+      if (explicit) {
+        return true;
+      }
+
+      // If the rule requires platforms or toolchain resolution, it can't be used as a platform.
+      RuleClass ruleClass = target.getAssociatedRule().getRuleClassObject();
+      if (ruleClass == null || ruleClass.useToolchainResolution()) {
+        return false;
+      }
+
+      return ruleClass.getAdvertisedProviders().advertises(PlatformInfo.class);
+    }
+
+    @AutoCodec.Instantiator
+    static HasPlatformInfo create() {
+      return new AutoValue_RegisteredExecutionPlatformsFunction_HasPlatformInfo();
     }
   }
 }

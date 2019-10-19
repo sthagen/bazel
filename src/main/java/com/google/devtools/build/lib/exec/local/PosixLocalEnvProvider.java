@@ -16,7 +16,7 @@ package com.google.devtools.build.lib.exec.local;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
-import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.exec.BinTools;
 import java.util.Map;
 
 /** {@link LocalEnvProvider} implementation for actions running on Unix-like platforms. */
@@ -25,6 +25,9 @@ public final class PosixLocalEnvProvider implements LocalEnvProvider {
 
   /**
    * Create a new {@link PosixLocalEnvProvider}.
+   *
+   * <p>Use {@link LocalEnvProvider#forCurrentOs(Map)} to instantiate this unless the calling code
+   * is platform-specific.
    *
    * @param clientEnv a map of the current Bazel command's environment
    */
@@ -41,7 +44,7 @@ public final class PosixLocalEnvProvider implements LocalEnvProvider {
    */
   @Override
   public Map<String, String> rewriteLocalEnv(
-      Map<String, String> env, Path execRoot, String fallbackTmpDir) {
+      Map<String, String> env, BinTools binTools, String fallbackTmpDir) {
     ImmutableMap.Builder<String, String> result = ImmutableMap.builder();
     result.putAll(Maps.filterKeys(env, k -> !k.equals("TMPDIR")));
     String p = clientEnv.get("TMPDIR");

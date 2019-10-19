@@ -78,8 +78,19 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
   public RepositoryPathApi<?> path(Object path) throws EvalException, InterruptedException;
 
   @SkylarkCallable(
+      name = "report_progress",
+      doc = "Updates the progress status for the fetching of this repository",
+      parameters = {
+        @Param(
+            name = "status",
+            allowedTypes = {@ParamType(type = String.class)},
+            doc = "string describing the current status of the fetch progress")
+      })
+  public void reportProgress(String status);
+
+  @SkylarkCallable(
       name = "symlink",
-      doc = "Create a symlink on the filesystem.",
+      doc = "Creates a symlink on the filesystem.",
       useLocation = true,
       parameters = {
         @Param(
@@ -104,7 +115,7 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
 
   @SkylarkCallable(
       name = "file",
-      doc = "Generate a file in the repository directory with the provided content.",
+      doc = "Generates a file in the repository directory with the provided content.",
       useLocation = true,
       parameters = {
         @Param(
@@ -127,14 +138,23 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
             type = Boolean.class,
             defaultValue = "True",
             doc = "set the executable flag on the created file, true by default."),
+        @Param(
+            name = "legacy_utf8",
+            named = true,
+            type = Boolean.class,
+            defaultValue = "True",
+            doc =
+                "encode file content to UTF-8, true by default. Future versions will change"
+                    + " the default and remove this parameter."),
       })
-  public void createFile(Object path, String content, Boolean executable, Location location)
+  public void createFile(
+      Object path, String content, Boolean executable, Boolean legacyUtf8, Location location)
       throws RepositoryFunctionExceptionT, EvalException, InterruptedException;
 
   @SkylarkCallable(
       name = "template",
       doc =
-          "Generate a new file using a <code>template</code>. Every occurrence in "
+          "Generates a new file using a <code>template</code>. Every occurrence in "
               + "<code>template</code> of a key of <code>substitutions</code> will be replaced by "
               + "the corresponding value. The result is written in <code>path</code>. An optional"
               + "<code>executable</code> argument (default to true) can be set to turn on or off"
@@ -173,9 +193,26 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
   public void createFileFromTemplate(
       Object path,
       Object template,
-      SkylarkDict<String, String> substitutions,
+      SkylarkDict<?, ?> substitutions, // <String, String> expected
       Boolean executable,
       Location location)
+      throws RepositoryFunctionExceptionT, EvalException, InterruptedException;
+
+  @SkylarkCallable(
+      name = "read",
+      doc = "Reads the content of a file on the filesystem.",
+      useLocation = true,
+      parameters = {
+        @Param(
+            name = "path",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = Label.class),
+              @ParamType(type = RepositoryPathApi.class)
+            },
+            doc = "path of the file to read from."),
+      })
+  public String readFile(Object path, Location location)
       throws RepositoryFunctionExceptionT, EvalException, InterruptedException;
 
   @SkylarkCallable(
@@ -219,14 +256,74 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
             defaultValue = "True",
             named = true,
             doc = "If stdout and stderr should be printed to the terminal."),
+        @Param(
+            name = "working_directory",
+            type = String.class,
+            defaultValue = "\"\"",
+            named = true,
+            doc =
+                "Working directory for command execution.\n"
+                    + "Can be relative to the repository root or absolute."),
       })
   public SkylarkExecutionResultApi execute(
-      SkylarkList<Object> arguments,
+      SkylarkList<?> arguments,
       Integer timeout,
-      SkylarkDict<String, String> environment,
+      SkylarkDict<?, ?> environment, // <String, String> expected
       boolean quiet,
+      String workingDirectory,
       Location location)
-      throws EvalException, RepositoryFunctionExceptionT;
+      throws EvalException, RepositoryFunctionExceptionT, InterruptedException;
+
+  @SkylarkCallable(
+      name = "delete",
+      doc =
+          "Deletes a file or a directory. Returns a bool, indicating whether the file or directory"
+              + " was actually deleted by this call.",
+      useLocation = true,
+      parameters = {
+        @Param(
+            name = "path",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = RepositoryPathApi.class)
+            },
+            doc =
+                "Path of the file to delete, relative to the repository directory, or absolute."
+                    + " Can be a path or a string."),
+      })
+  public boolean delete(Object path, Location location)
+      throws EvalException, RepositoryFunctionExceptionT, InterruptedException;
+
+  @SkylarkCallable(
+      name = "patch",
+      doc =
+          "Apply a patch file to the root directory of external repository. "
+              + "The patch file should be a standard "
+              + "<a href=\"https://en.wikipedia.org/wiki/Diff#Unified_format\">"
+              + "unified diff format</a> file. "
+              + "The Bazel-native patch implementation doesn't support fuzz match and binary patch "
+              + "like the patch command line tool.",
+      useLocation = true,
+      parameters = {
+        @Param(
+            name = "patch_file",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = Label.class),
+              @ParamType(type = RepositoryPathApi.class)
+            },
+            doc =
+                "The patch file to apply, it can be label, relative path or absolute path. "
+                    + "If it's a relative path, it will resolve to the repository directory."),
+        @Param(
+            name = "strip",
+            type = Integer.class,
+            named = true,
+            defaultValue = "0",
+            doc = "strip the specified number of leading components from file names."),
+      })
+  public void patch(Object patchFile, Integer strip, Location location)
+      throws EvalException, RepositoryFunctionExceptionT, InterruptedException;
 
   @SkylarkCallable(
       name = "which",
@@ -246,7 +343,10 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
 
   @SkylarkCallable(
       name = "download",
-      doc = "Download a file to the output path for the provided url.",
+      doc =
+          "Downloads a file to the output path for the provided url and returns a struct"
+              + " containing a hash of the file with the fields <code>sha256</code> and"
+              + " <code>integrity</code>.",
       useLocation = true,
       parameters = {
         @Param(
@@ -276,22 +376,110 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
                 "the expected SHA-256 hash of the file downloaded."
                     + " This must match the SHA-256 hash of the file downloaded. It is a security"
                     + " risk to omit the SHA-256 as remote files can change. At best omitting this"
-                    + " field will make your build non-hermetic. It is optional to make"
-                    + " development easier but should be set before shipping."),
+                    + " field will make your build non-hermetic. It is optional to make development"
+                    + " easier but should be set before shipping."),
         @Param(
             name = "executable",
             type = Boolean.class,
             defaultValue = "False",
             named = true,
             doc = "set the executable flag on the created file, false by default."),
+        @Param(
+            name = "allow_fail",
+            type = Boolean.class,
+            defaultValue = "False",
+            named = true,
+            doc =
+                "If set, indicate the error in the return value"
+                    + " instead of raising an error for failed downloads"),
+        @Param(
+            name = "canonical_id",
+            type = String.class,
+            defaultValue = "''",
+            named = true,
+            doc =
+                "If set, restrict cache hits to those cases where the file was added to the cache"
+                    + " with the same canonical id"),
+        @Param(
+            name = "auth",
+            type = SkylarkDict.class,
+            defaultValue = "{}",
+            named = true,
+            doc = "An optional dict specifying authentication information for some of the URLs."),
+        @Param(
+            name = "integrity",
+            type = String.class,
+            defaultValue = "''",
+            named = true,
+            positional = false,
+            doc =
+                "Expected checksum of the file downloaded, in Subresource Integrity format."
+                    + " This must match the checksum of the file downloaded. It is a security"
+                    + " risk to omit the checksum as remote files can change. At best omitting this"
+                    + " field will make your build non-hermetic. It is optional to make development"
+                    + " easier but should be set before shipping."),
       })
-  public void download(
-      Object url, Object output, String sha256, Boolean executable, Location location)
+  public StructApi download(
+      Object url,
+      Object output,
+      String sha256,
+      Boolean executable,
+      Boolean allowFail,
+      String canonicalId,
+      SkylarkDict<?, ?> auth, // <String, SkylarkDict<?, ?>> expected
+      String integrity,
+      Location location)
       throws RepositoryFunctionExceptionT, EvalException, InterruptedException;
 
   @SkylarkCallable(
+      name = "extract",
+      doc = "Extract an archive to the repository directory.",
+      useLocation = true,
+      parameters = {
+        @Param(
+            name = "archive",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = Label.class),
+              @ParamType(type = RepositoryPathApi.class)
+            },
+            named = true,
+            doc =
+                "path to the archive that will be unpacked,"
+                    + " relative to the repository directory."),
+        @Param(
+            name = "output",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = Label.class),
+              @ParamType(type = RepositoryPathApi.class)
+            },
+            defaultValue = "''",
+            named = true,
+            doc =
+                "path to the directory where the archive will be unpacked,"
+                    + " relative to the repository directory."),
+        @Param(
+            name = "stripPrefix",
+            type = String.class,
+            defaultValue = "''",
+            named = true,
+            doc =
+                "a directory prefix to strip from the extracted files."
+                    + "\nMany archives contain a top-level directory that contains all files in the"
+                    + " archive. Instead of needing to specify this prefix over and over in the"
+                    + " <code>build_file</code>, this field can be used to strip it from extracted"
+                    + " files."),
+      })
+  public void extract(Object archive, Object output, String stripPrefix, Location location)
+      throws RepositoryFunctionExceptionT, InterruptedException, EvalException;
+
+  @SkylarkCallable(
       name = "download_and_extract",
-      doc = "Download a file to the output path for the provided url, and extract it.",
+      doc =
+          "Downloads a file to the output path for the provided url, extracts it, and returns"
+              + " a struct containing a hash of the downloaded file with the fields"
+              + " <code>sha256</code> and <code>integrity</code>.",
       useLocation = true,
       parameters = {
         @Param(
@@ -323,11 +511,11 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
                 "the expected SHA-256 hash of the file downloaded."
                     + " This must match the SHA-256 hash of the file downloaded. It is a security"
                     + " risk to omit the SHA-256 as remote files can change. At best omitting this"
-                    + " field will make your build non-hermetic. It is optional to make"
-                    + " development easier but should be set before shipping."
+                    + " field will make your build non-hermetic. It is optional to make development"
+                    + " easier but should be set before shipping."
                     + " If provided, the repository cache will first be checked for a file with the"
-                    + " given hash; a download will only be attempted, if the file was not found"
-                    + " in the cache. After a successful download, the file will be added to the"
+                    + " given hash; a download will only be attempted if the file was not found in"
+                    + " the cache. After a successful download, the file will be added to the"
                     + " cache."),
         @Param(
             name = "type",
@@ -336,10 +524,10 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
             named = true,
             doc =
                 "the archive type of the downloaded file."
-                    + " By default, the archive type is determined from the file extension of the"
-                    + " URL. If the file has no extension, you can explicitly specify either"
-                    + " \"zip\", \"jar\", \"war\", \"tar.gz\", \"tgz\", \"tar.bz2\", or \"tar.xz\""
-                    + " here."),
+                    + " By default, the archive type is determined from the file extension of"
+                    + " the URL."
+                    + " If the file has no extension, you can explicitly specify either \"zip\","
+                    + " \"jar\", \"war\", \"tar.gz\", \"tgz\", \"tar.bz2\", or \"tar.xz\" here."),
         @Param(
             name = "stripPrefix",
             type = String.class,
@@ -351,8 +539,51 @@ public interface SkylarkRepositoryContextApi<RepositoryFunctionExceptionT extend
                     + " archive. Instead of needing to specify this prefix over and over in the"
                     + " <code>build_file</code>, this field can be used to strip it from extracted"
                     + " files."),
+        @Param(
+            name = "allow_fail",
+            type = Boolean.class,
+            defaultValue = "False",
+            named = true,
+            doc =
+                "If set, indicate the error in the return value"
+                    + " instead of raising an error for failed downloads"),
+        @Param(
+            name = "canonical_id",
+            type = String.class,
+            defaultValue = "''",
+            named = true,
+            doc =
+                "If set, restrict cache hits to those cases where the file was added to the cache"
+                    + " with the same canonical id"),
+        @Param(
+            name = "auth",
+            type = SkylarkDict.class,
+            defaultValue = "{}",
+            named = true,
+            doc = "An optional dict specifying authentication information for some of the URLs."),
+        @Param(
+            name = "integrity",
+            type = String.class,
+            defaultValue = "''",
+            named = true,
+            positional = false,
+            doc =
+                "Expected checksum of the file downloaded, in Subresource Integrity format."
+                    + " This must match the checksum of the file downloaded. It is a security"
+                    + " risk to omit the checksum as remote files can change. At best omitting this"
+                    + " field will make your build non-hermetic. It is optional to make development"
+                    + " easier but should be set before shipping."),
       })
-  public void downloadAndExtract(
-      Object url, Object output, String sha256, String type, String stripPrefix, Location location)
+  public StructApi downloadAndExtract(
+      Object url,
+      Object output,
+      String sha256,
+      String type,
+      String stripPrefix,
+      Boolean allowFail,
+      String canonicalId,
+      SkylarkDict<?, ?> auth, // <String, SkylarkDict<?, ?>> expected
+      String integrity,
+      Location location)
       throws RepositoryFunctionExceptionT, InterruptedException, EvalException;
 }

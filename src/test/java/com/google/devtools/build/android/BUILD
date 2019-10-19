@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library", "java_test")
+
 filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
@@ -168,10 +170,23 @@ java_test(
 )
 
 java_test(
+    name = "DataSourceTest",
+    size = "small",
+    srcs = ["DataSourceTest.java"],
+    deps = [
+        "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
+        "//third_party:jimfs",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
     name = "DensitySpecificManifestProcessorTest",
     size = "small",
     srcs = ["DensitySpecificManifestProcessorTest.java"],
     deps = [
+        "//src/test/java/com/google/devtools/build/lib:testutil",
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//third_party:guava",
         "//third_party:jimfs",
@@ -185,6 +200,7 @@ java_test(
     size = "small",
     srcs = ["DensitySpecificResourceFilterTest.java"],
     deps = [
+        "//src/test/java/com/google/devtools/build/lib:testutil",
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//third_party:guava",
         "//third_party:junit4",
@@ -197,6 +213,7 @@ java_test(
     size = "small",
     srcs = ["DependencyAndroidDataTest.java"],
     deps = [
+        "//src/test/java/com/google/devtools/build/lib:testutil",
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//third_party:guava",
         "//third_party:jimfs",
@@ -228,6 +245,21 @@ java_test(
     srcs = ["ParsedAndroidDataTest.java"],
     deps = [
         ":test_utils",
+        "//src/test/java/com/google/devtools/build/lib:testutil",
+        "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
+        "//third_party:android_common_25_0_0",
+        "//third_party:guava",
+        "//third_party:jimfs",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
+    name = "PlaceholderRTxtWriterTest",
+    size = "small",
+    srcs = ["PlaceholderRTxtWriterTest.java"],
+    deps = [
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//third_party:android_common_25_0_0",
         "//third_party:guava",
@@ -242,23 +274,10 @@ java_test(
     size = "small",
     srcs = ["SerializedAndroidDataTest.java"],
     deps = [
+        "//src/test/java/com/google/devtools/build/lib:testutil",
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//third_party:guava",
         "//third_party:jimfs",
-        "//third_party:junit4",
-        "//third_party:truth",
-    ],
-)
-
-java_test(
-    name = "SplitConfigurationFilterTest",
-    size = "small",
-    srcs = ["SplitConfigurationFilterTest.java"],
-    deps = [
-        "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
-        "//third_party:guava",
-        "//third_party:guava-testlib",
-        "//third_party:jsr305",
         "//third_party:junit4",
         "//third_party:truth",
     ],
@@ -269,6 +288,7 @@ java_test(
     size = "small",
     srcs = ["UnvalidatedAndroidDataTest.java"],
     deps = [
+        "//src/test/java/com/google/devtools/build/lib:testutil",
         "//src/tools/android/java/com/google/devtools/build/android:android_builder_lib",
         "//third_party:guava",
         "//third_party:jimfs",

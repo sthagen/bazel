@@ -46,8 +46,11 @@ final class FakeActionInputFileCache implements MetadataProvider {
     String hexDigest = Preconditions.checkNotNull(cas.get(input), input);
     Path path = execRoot.getRelative(input.getExecPath());
     FileStatus stat = path.stat(Symlinks.FOLLOW);
-    return FileArtifactValue.createNormalFile(
-        HashCode.fromString(hexDigest).asBytes(), FileContentsProxy.create(stat), stat.getSize());
+    return FileArtifactValue.createForNormalFile(
+        HashCode.fromString(hexDigest).asBytes(),
+        FileContentsProxy.create(stat),
+        stat.getSize(),
+        /*isShareable=*/ true);
   }
 
   @Override

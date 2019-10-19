@@ -69,7 +69,7 @@ function test_3_cpus() {
   set_up_jobcount
   # 3 CPUs, so no more than 3 tests in parallel.
   bazel test --spawn_strategy=standalone --test_output=errors \
-    --local_test_jobs=0 --local_resources=10000,3,100 \
+    --local_test_jobs=0 --local_cpu_resources=3 \
     --runs_per_test=10 //dir:test
 }
 
@@ -77,7 +77,7 @@ function test_3_local_jobs() {
   set_up_jobcount
   # 3 local test jobs, so no more than 3 tests in parallel.
   bazel test --spawn_strategy=standalone --test_output=errors \
-    --local_test_jobs=3 --local_resources=10000,10,100 \
+    --local_test_jobs=3 --local_cpu_resources=10 \
     --runs_per_test=10 //dir:test
 }
 
@@ -122,6 +122,7 @@ function test_env_vars() {
   cat > WORKSPACE <<EOF
 workspace(name = "bar")
 EOF
+  add_rules_cc_to_workspace WORKSPACE
   mkdir -p foo
   cat > foo/testenv.sh <<'EOF'
 #!/bin/sh
@@ -141,6 +142,50 @@ EOF
   expect_log "pwd: .*/foo.runfiles/bar$"
   expect_log "src: .*/foo.runfiles$"
   expect_log "ws: bar$"
+}
+
+function test_run_under_external_label_with_options() {
+  mkdir -p testing run || fail "mkdir testing run failed"
+  cat <<EOF > run/BUILD
+sh_binary(
+  name='under', srcs=['under.sh'],
+  visibility=["//visibility:public"],
+)
+EOF
+
+touch run/WORKSPACE
+
+  cat <<EOF > run/under.sh
+#!/bin/sh
+echo running under @run//:under "\$*"
+EOF
+  chmod u+x run/under.sh
+
+  cat <<EOF > testing/passing_test.sh
+#!/bin/sh
+exit 0
+EOF
+  chmod u+x testing/passing_test.sh
+
+  cat <<EOF > testing/BUILD
+sh_test(
+  name = "passing_test" ,
+  srcs = [ "passing_test.sh" ])
+EOF
+
+  cat <<EOF > WORKSPACE
+local_repository(
+    name = "run",
+    path = "./run",
+)
+EOF
+
+  bazel test //testing:passing_test --run_under='@run//:under -c' \
+    --test_output=all >& $TEST_log || fail "Expected success"
+
+  expect_log 'running under @run//:under -c testing/passing_test'
+  expect_log 'passing_test *PASSED'
+  expect_log '1 test passes.$'
 }
 
 function test_run_under_label_with_options() {
@@ -178,8 +223,7 @@ EOF
 }
 
 # This test uses "--nomaster_bazelrc" since outside .bazelrc files can pollute
-# this environment and cause --experimental_ui to be turned on, which causes
-# this test to fail. Just "--bazelrc=/dev/null" is not sufficient to fix.
+# this environment. Just "--bazelrc=/dev/null" is not sufficient to fix.
 function test_run_under_path() {
   mkdir -p testing || fail "mkdir testing failed"
   echo "sh_test(name='t1', srcs=['t1.sh'])" > testing/BUILD
@@ -198,11 +242,11 @@ EOF
 
   # We don't just use the local PATH, but use the test's PATH, which is more restrictive.
   PATH=$PATH:$PWD/scripts bazel --nomaster_bazelrc test //testing:t1 -s --run_under=hello \
-    --test_output=all --experimental_strict_action_env >& $TEST_log && fail "Expected failure"
+    --test_output=all --incompatible_strict_action_env=true >& $TEST_log && fail "Expected failure"
 
-  # With --noexperimental_strict_action_env, the local PATH is forwarded to the test.
+  # With --action_env=PATH, the local PATH is forwarded to the test.
   PATH=$PATH:$PWD/scripts bazel test //testing:t1 -s --run_under=hello \
-    --test_output=all --noexperimental_strict_action_env >& $TEST_log || fail "Expected success"
+    --test_output=all >& $TEST_log || fail "Expected success"
   expect_log 'hello script!!! testing/t1'
 
   # We need to forward the PATH to make it work.
@@ -309,17 +353,18 @@ EOF
   [ -s $xml_log ] || fail "$xml_log was not present after test"
 }
 
-# Tests that the test.xml is here in case of timeout
-function test_xml_is_present_when_timingout() {
+function write_test_xml_timeout_files() {
   mkdir -p dir
 
   cat <<'EOF' > dir/test.sh
-#!/bin/sh
-echo "bleh"
+#!/bin/bash
+echo "xmltest"
+echo -n "before "
 # Invalid XML character
 perl -e 'print "\x1b"'
 # Invalid UTF-8 characters
 perl -e 'print "\xc0\x00\xa0\xa1"'
+echo " after"
 # ]]> needs escaping
 echo "<!CDATA[]]>"
 sleep 10
@@ -333,16 +378,49 @@ sh_test(
     srcs = [ "test.sh" ],
   )
 EOF
+}
 
-  bazel test -s --test_timeout=1 \
+function test_xml_is_present_when_timingout() {
+  write_test_xml_timeout_files
+  bazel test -s --test_timeout=1 --nocache_test_results \
+     --noexperimental_split_xml_generation \
      //dir:test &> $TEST_log && fail "should have failed" || true
 
   xml_log=bazel-testlogs/dir/test/test.xml
-  [ -s "${xml_log}" ] || fail "${xml_log} was not present after test"
+  [[ -s "${xml_log}" ]] || fail "${xml_log} was not present after test"
   cat "${xml_log}" > $TEST_log
   expect_log '"Timed out"'
-  expect_log '<system-out><!\[CDATA\[bleh
-\?\?\?\?\?<!CDATA\[\]\]>\]\]<!\[CDATA\[>\]\]></system-out>'
+  expect_log '<system-out>'
+  # "xmltest" is the first line of output from the test.sh script.
+  expect_log '<!\[CDATA\[xmltest'
+  expect_log 'before ????? after'
+  expect_log '<!CDATA\[\]\]>\]\]<!\[CDATA\[>\]\]>'
+  expect_log '</system-out>'
+}
+
+function test_xml_is_present_when_timingout_split_xml() {
+  write_test_xml_timeout_files
+  bazel test -s --test_timeout=1 --nocache_test_results \
+     --experimental_split_xml_generation \
+     //dir:test &> $TEST_log && fail "should have failed" || true
+
+  xml_log=bazel-testlogs/dir/test/test.xml
+  [[ -s "${xml_log}" ]] || fail "${xml_log} was not present after test"
+  cat "${xml_log}" > $TEST_log
+  # The new script does not convert exit codes to signals.
+  expect_log '"exited with error code 142"'
+  expect_log '<system-out>'
+  # When using --noexperimental_split_xml_generation, the output of the
+  # subprocesses goes into the xml file, while
+  # --experimental_split_xml_generation inlines the entire test log into
+  # the xml file, which includes a header generated by test-setup.sh;
+  # the header starts with "exec ${PAGER:-/usr/bin/less}".
+  expect_log '<!\[CDATA\[exec ${PAGER:-/usr/bin/less}'
+  expect_log 'before ????? after'
+  # This is different from above, since we're using a SIGTERM trap to output
+  # timing information.
+  expect_log '<!CDATA\[\]\]>\]\]<!\[CDATA\[>'
+  expect_log '</system-out>'
 }
 
 # Tests that the test.xml and test.log are correct and the test does not
@@ -491,9 +569,7 @@ EOF
 
 function test_detailed_test_summary() {
   copy_examples
-  cat > WORKSPACE <<EOF
-workspace(name = "io_bazel")
-EOF
+  create_workspace_with_default_repos WORKSPACE
   setup_javatest_support
 
   local java_native_tests=//examples/java-native/src/test/java/com/example/myproject
@@ -505,8 +581,7 @@ EOF
 }
 
 # This test uses "--nomaster_bazelrc" since outside .bazelrc files can pollute
-# this environment and cause --experimental_ui to be turned on, which causes
-# this test to fail. Just "--bazelrc=/dev/null" is not sufficient to fix.
+# this environment. Just "--bazelrc=/dev/null" is not sufficient to fix.
 function test_flaky_test() {
   cat >BUILD <<EOF
 sh_test(name = "flaky", flaky = True, srcs = ["flaky.sh"])
@@ -537,42 +612,41 @@ EOF
   chmod +x true.sh flaky.sh false.sh
 
   # We do not use sandboxing so we can trick to be deterministically flaky
-  # TODO(b/37617303): make test UI-independent
-  bazel --nomaster_bazelrc test --noexperimental_ui --spawn_strategy=standalone //:flaky &> $TEST_log \
+  bazel --nomaster_bazelrc test --experimental_ui_debug_all_events \
+      --spawn_strategy=standalone //:flaky &> $TEST_log \
       || fail "//:flaky should have passed with flaky support"
   [ -f "${FLAKE_FILE}" ] || fail "Flaky test should have created the flake-file!"
 
-  expect_log_once "FAIL: //:flaky (.*/flaky/test_attempts/attempt_1.log)"
-  expect_log_once "PASS: //:flaky"
-  expect_log_once "FLAKY"
+  expect_log_once "FAIL.*: //:flaky (.*/flaky/test_attempts/attempt_1.log)"
+  expect_log_once "PASS.*: //:flaky"
+  expect_log_once "FLAKY: //:flaky"
   cat bazel-testlogs/flaky/test_attempts/attempt_1.log &> $TEST_log
-  assert_equals "fail" "$(tail -1 bazel-testlogs/flaky/test_attempts/attempt_1.log)"
+  assert_equals "fail" "$(awk "NR == $(wc -l < $TEST_log)" $TEST_log)"
   assert_equals 1 $(ls bazel-testlogs/flaky/test_attempts/*.log | wc -l)
   cat bazel-testlogs/flaky/test.log &> $TEST_log
-  assert_equals "pass" "$(tail -1 bazel-testlogs/flaky/test.log)"
+  assert_equals "pass" "$(awk "NR == $(wc -l < $TEST_log)" $TEST_log)"
 
-  # TODO(b/37617303): make test UI-independent
-  bazel --nomaster_bazelrc test --noexperimental_ui //:pass &> $TEST_log \
-      || fail "//:pass should have passed"
-  expect_log_once "PASS: //:pass"
-  expect_log_once PASSED
+  bazel --nomaster_bazelrc test --experimental_ui_debug_all_events //:pass \
+      &> $TEST_log || fail "//:pass should have passed"
+  expect_log_once "PASS.*: //:pass"
+  expect_log_once "PASSED"
   [ ! -d bazel-test_logs/pass/test_attempts ] \
     || fail "Got test attempts while expected non for non-flaky tests"
   cat bazel-testlogs/flaky/test.log &> $TEST_log
   assert_equals "pass" "$(tail -1 bazel-testlogs/flaky/test.log)"
 
-  # TODO(b/37617303): make test UI-independent
-  bazel --nomaster_bazelrc test --noexperimental_ui //:fail &> $TEST_log \
-      && fail "//:fail should have failed" \
+  bazel --nomaster_bazelrc test --experimental_ui_debug_all_events //:fail \
+      &> $TEST_log && fail "//:fail should have failed" \
       || true
-  expect_log_n "FAIL: //:fail (.*/fail/test_attempts/attempt_..log)" 2
-  expect_log_once "FAIL: //:fail (.*/fail/test.log)"
-  expect_log_once "FAILED"
+  expect_log_n "FAIL.*: //:fail (.*/fail/test_attempts/attempt_..log)" 2
+  expect_log_once "FAIL.*: //:fail (.*/fail/test.log)"
+  expect_log_once "FAILED: //:fail"
+  expect_log_n ".*/fail/test.log$" 2
   cat bazel-testlogs/fail/test_attempts/attempt_1.log &> $TEST_log
-  assert_equals "fail" "$(sed -n '4p' < bazel-testlogs/fail/test_attempts/attempt_1.log)"
+  assert_equals "fail" "$(awk "NR == $(wc -l < $TEST_log)" $TEST_log)"
   assert_equals 2 $(ls bazel-testlogs/fail/test_attempts/*.log | wc -l)
   cat bazel-testlogs/fail/test.log &> $TEST_log
-  assert_equals "fail" "$(sed -n '4p' < bazel-testlogs/fail/test.log)"
+  assert_equals "fail" "$(awk "NR == $(wc -l < $TEST_log)" $TEST_log)"
 }
 
 function test_undeclared_outputs_are_zipped_and_manifest_exists() {
@@ -683,12 +757,12 @@ EOF
   bazel test -s //dir:test &> $TEST_log || fail "expected success"
 
   # Check that the undeclared outputs directory doesn't exist.
-  outputs_dir=bazel-testlogs/dir/test/test.outputs/
-  [ ! -d $outputs_dir ] || fail "$outputs_dir was present after test"
+  outputs_zip=bazel-testlogs/dir/test/test.outputs/outputs.zip
+  [ ! -e $outputs_zip ] || fail "$outputs_zip was present after test"
 
   # Check that the undeclared outputs manifest directory doesn't exist.
-  outputs_manifest_dir=bazel-testlogs/dir/test/test.outputs_manifest/
-  [ ! -d $outputs_manifest_dir ] || fail "$outputs_manifest_dir was present after test"
+  outputs_manifest=bazel-testlogs/dir/test/test.outputs_manifest/MANIFEST
+  [ ! -d $outputs_manifest ] || fail "$outputs_manifest was present after test"
 }
 
 function test_test_with_nobuild_runfile_manifests() {

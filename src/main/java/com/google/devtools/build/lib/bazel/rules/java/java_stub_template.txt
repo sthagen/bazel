@@ -1,4 +1,4 @@
-#!/bin/bash --posix
+#!/usr/bin/env bash
 # Copyright 2014 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +43,8 @@
 #                       line flag, otherwise it creates a classpath jar.
 #
 # The remainder of the command line is passed to the program.
+
+set -o posix
 
 # Make it easy to insert 'set -x' or similar commands when debugging problems with this script.
 eval "$JAVA_STUB_DEBUG"
@@ -220,12 +222,6 @@ else
   }
 fi
 
-if is_macos || [[ ${OSTYPE} == "freebsd" ]]; then
-  function md5func() { md5 -q $@ ; }
-else
-  function md5func() { md5sum $@ | awk '{print $1}' ; }
-fi
-
 # Set JAVABIN to the path to the JVM launcher.
 %javabin%
 
@@ -257,6 +253,7 @@ export CLASSLOADER_PREFIX_PATH="${RUNPATH}"
 %set_jacoco_metadata%
 %set_jacoco_main_class%
 %set_jacoco_java_runfiles_root%
+%set_java_coverage_new_implementation%
 
 if [[ -n "$JVM_DEBUG_PORT" ]]; then
   JVM_DEBUG_SUSPEND=${DEFAULT_JVM_DEBUG_SUSPEND:-"y"}
@@ -290,40 +287,33 @@ function create_and_run_classpath_jar() {
   # Build class path as one single string separated by spaces
   MANIFEST_CLASSPATH=""
   if is_windows; then
-    IFS=';'
+    CLASSPATH_SEPARATOR=";"
     URI_PREFIX="file:/"  # e.g. "file:/C:/temp/foo.jar"
   else
-    IFS=':'
+    CLASSPATH_SEPARATOR=":"
     URI_PREFIX="file:$(pwd)/"  # e.g. "file:/usr/local/foo.jar"
   fi
-  for x in $CLASSPATH; do
-    # Add file:/ prefix and escaped space characters, it should be a URI.
-    x="${URI_PREFIX}${x// /%20}"
-    MANIFEST_CLASSPATH="$MANIFEST_CLASSPATH $x"
-  done
-  unset IFS
 
-  RAND_ID=$(cat /dev/urandom | head -c 128 | md5func)
+  URI_PREFIX=${URI_PREFIX//\//\\/}
+  MANIFEST_CLASSPATH="${CLASSPATH_SEPARATOR}${CLASSPATH}"
+
+  MANIFEST_CLASSPATH=$(sed "s/ /%20/g" <<< "${MANIFEST_CLASSPATH}")
+  MANIFEST_CLASSPATH=$(sed "s/$CLASSPATH_SEPARATOR/ $URI_PREFIX/g" <<< "${MANIFEST_CLASSPATH}")
+
   # Create manifest file
-  MANIFEST_FILE="${self}-${RAND_ID}.jar_manifest"
-
+  MANIFEST_FILE="$(mktemp -t XXXXXXXX.jar_manifest)"
   (
     echo "Manifest-Version: 1.0"
+
     CLASSPATH_LINE="Class-Path:$MANIFEST_CLASSPATH"
-    # No line in the MANIFEST.MF file may be longer than 72 bytes.
-    # A space prefix indicates the line is still the content of the last attribute.
-    for ((i = 0; i < "${#CLASSPATH_LINE}"; i += 71)); do
-      PREFIX=" "
-      if ((i == 0)); then
-        PREFIX=""
-      fi
-      echo "$PREFIX${CLASSPATH_LINE:$i:71}"
-    done
+    CLASSPATH_MANIFEST_LINES=$(sed -E $'s/(.{71})/\\1\\\n /g' <<< "${CLASSPATH_LINE}")
+
+    echo "$CLASSPATH_MANIFEST_LINES"
     echo "Created-By: Bazel"
   ) >$MANIFEST_FILE
 
   # Create classpath JAR file
-  MANIFEST_JAR_FILE="${self}-${RAND_ID}-classpath.jar"
+  MANIFEST_JAR_FILE="$(mktemp -t XXXXXXXX-classpath.jar)"
   if is_windows; then
     MANIFEST_JAR_FILE="$(cygpath --windows "$MANIFEST_JAR_FILE")"
     MANIFEST_FILE="$(cygpath --windows "$MANIFEST_FILE")"

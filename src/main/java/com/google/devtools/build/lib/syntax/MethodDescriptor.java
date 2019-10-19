@@ -14,13 +14,13 @@
 
 package com.google.devtools.build.lib.syntax;
 
+import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.Arrays;
 
 /**
@@ -30,6 +30,8 @@ import java.util.Arrays;
  * <p>The annotation metadata is duplicated in this class to avoid usage of Java dynamic proxies
  * which are ~7X slower.
  */
+// TODO(adonovan): make this private. All external uses either want parameter types, or want to
+// "invoke" a struct field, both of which need better abstractions.
 public final class MethodDescriptor {
   private final Method method;
   private final SkylarkCallable annotation;
@@ -45,8 +47,8 @@ public final class MethodDescriptor {
   private final boolean allowReturnNones;
   private final boolean useLocation;
   private final boolean useAst;
-  private final boolean useEnvironment;
-  private final boolean useSkylarkSemantics;
+  private final boolean useStarlarkThread;
+  private final boolean useStarlarkSemantics;
 
   private MethodDescriptor(
       Method method,
@@ -62,8 +64,8 @@ public final class MethodDescriptor {
       boolean allowReturnNones,
       boolean useLocation,
       boolean useAst,
-      boolean useEnvironment,
-      boolean useSkylarkSemantics) {
+      boolean useStarlarkThread,
+      boolean useStarlarkSemantics) {
     this.method = method;
     this.annotation = annotation;
     this.name = name;
@@ -77,8 +79,8 @@ public final class MethodDescriptor {
     this.allowReturnNones = allowReturnNones;
     this.useLocation = useLocation;
     this.useAst = useAst;
-    this.useEnvironment = useEnvironment;
-    this.useSkylarkSemantics = useSkylarkSemantics;
+    this.useStarlarkThread = useStarlarkThread;
+    this.useStarlarkSemantics = useStarlarkSemantics;
   }
 
   /** Returns the SkylarkCallable annotation corresponding to this method. */
@@ -87,7 +89,8 @@ public final class MethodDescriptor {
   }
 
   /** @return Skylark method descriptor for provided Java method and signature annotation. */
-  public static MethodDescriptor of(Method method, SkylarkCallable annotation) {
+  public static MethodDescriptor of(
+      Method method, SkylarkCallable annotation, StarlarkSemantics semantics) {
     // This happens when the interface is public but the implementation classes
     // have reduced visibility.
     method.setAccessible(true);
@@ -99,21 +102,16 @@ public final class MethodDescriptor {
         annotation.documented(),
         annotation.structField(),
         Arrays.stream(annotation.parameters())
-            .map(ParamDescriptor::of)
+            .map(param -> ParamDescriptor.of(param, semantics))
             .collect(ImmutableList.toImmutableList()),
-        ParamDescriptor.of(annotation.extraPositionals()),
-        ParamDescriptor.of(annotation.extraKeywords()),
+        ParamDescriptor.of(annotation.extraPositionals(), semantics),
+        ParamDescriptor.of(annotation.extraKeywords(), semantics),
         annotation.selfCall(),
         annotation.allowReturnNones(),
         annotation.useLocation(),
         annotation.useAst(),
-        annotation.useEnvironment(),
-        annotation.useSkylarkSemantics());
-  }
-
-  /** @return The result of this method invocation on the {@code obj} as a target. */
-  public Object invoke(Object obj) throws InvocationTargetException, IllegalAccessException {
-    return method.invoke(obj);
+        annotation.useStarlarkThread(),
+        annotation.useStarlarkSemantics());
   }
 
   /**
@@ -122,51 +120,54 @@ public final class MethodDescriptor {
    * <p>{@code obj} may be {@code null} in case this method is static. Methods with {@code void}
    * return type return {@code None} following Python convention.
    */
-  public Object call(Object obj, Object[] args, Location loc, Environment env)
+  public Object call(Object obj, Object[] args, Location loc, StarlarkThread thread)
       throws EvalException, InterruptedException {
+    Preconditions.checkNotNull(obj);
+    Object result;
     try {
-      if (obj == null && !Modifier.isStatic(method.getModifiers())) {
-        throw new EvalException(loc, "method '" + getName() + "' is not static");
-      }
-      Object result = method.invoke(obj, args);
-      if (method.getReturnType().equals(Void.TYPE)) {
-        return Runtime.NONE;
-      }
-      if (result == null) {
-        if (isAllowReturnNones()) {
-          return Runtime.NONE;
-        } else {
-          throw new EvalException(
-              loc,
-              "method invocation returned None, please file a bug report: "
-                  + getName()
-                  + Printer.printAbbreviatedList(ImmutableList.copyOf(args), "(", ", ", ")", null));
-        }
-      }
-      // TODO(bazel-team): get rid of this, by having everyone use the Skylark data structures
-      result = SkylarkType.convertToSkylark(result, method, env);
-      if (result != null && !EvalUtils.isSkylarkAcceptable(result.getClass())) {
-        throw new EvalException(
-            loc,
-            Printer.format(
-                "method '%s' returns an object of invalid type %r", getName(), result.getClass()));
-      }
-      return result;
+      result = method.invoke(obj, args);
     } catch (IllegalAccessException e) {
       // TODO(bazel-team): Print a nice error message. Maybe the method exists
       // and an argument is missing or has the wrong type.
       throw new EvalException(loc, "Method invocation failed: " + e);
-    } catch (InvocationTargetException e) {
-      if (e.getCause() instanceof FuncallExpression.FuncallException) {
-        throw new EvalException(loc, e.getCause().getMessage());
-      } else if (e.getCause() != null) {
-        Throwables.throwIfInstanceOf(e.getCause(), InterruptedException.class);
-        throw new EvalException.EvalExceptionWithJavaCause(loc, e.getCause());
+    } catch (InvocationTargetException x) {
+      Throwable e = x.getCause();
+      if (e == null) {
+        // This is unlikely to happen.
+        throw new IllegalStateException(
+            String.format(
+                "causeless InvocationTargetException when calling %s with arguments %s at %s",
+                obj, Arrays.toString(args), loc),
+            x);
+      }
+      Throwables.propagateIfPossible(e, InterruptedException.class);
+      if (e instanceof EvalException) {
+        throw ((EvalException) e).ensureLocation(loc);
+      }
+      throw new EvalException(loc, null, e);
+    }
+    if (method.getReturnType().equals(Void.TYPE)) {
+      return Runtime.NONE;
+    }
+    if (result == null) {
+      if (isAllowReturnNones()) {
+        return Runtime.NONE;
       } else {
-        // This is unlikely to happen
-        throw new EvalException(loc, "method invocation failed: " + e);
+        throw new IllegalStateException(
+            "method invocation returned None: "
+                + getName()
+                + SkylarkList.Tuple.copyOf(Arrays.asList(args)));
       }
     }
+    // TODO(bazel-team): get rid of this, by having everyone use the Skylark data structures
+    result = SkylarkType.convertToSkylark(result, method, thread);
+    if (result != null && !EvalUtils.isSkylarkAcceptable(result.getClass())) {
+      throw new EvalException(
+          loc,
+          Printer.format(
+              "method '%s' returns an object of invalid type %r", getName(), result.getClass()));
+    }
+    return result;
   }
 
   /** @see SkylarkCallable#name() */
@@ -179,14 +180,14 @@ public final class MethodDescriptor {
     return structField;
   }
 
-  /** @see SkylarkCallable#useEnvironment() */
-  public boolean isUseEnvironment() {
-    return useEnvironment;
+  /** @see SkylarkCallable#useStarlarkThread() */
+  public boolean isUseStarlarkThread() {
+    return useStarlarkThread;
   }
 
-  /** @see SkylarkCallable#useSkylarkSemantics() */
-  boolean isUseSkylarkSemantics() {
-    return useSkylarkSemantics;
+  /** @see SkylarkCallable#useStarlarkSemantics() */
+  boolean isUseStarlarkSemantics() {
+    return useStarlarkSemantics;
   }
 
   /** @see SkylarkCallable#useLocation() */

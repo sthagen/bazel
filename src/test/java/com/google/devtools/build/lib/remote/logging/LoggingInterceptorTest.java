@@ -17,7 +17,7 @@ package com.google.devtools.build.lib.remote.logging;
 import static com.google.common.collect.Iterators.advance;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
-import static org.mockito.Matchers.any;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -26,17 +26,24 @@ import build.bazel.remote.execution.v2.ActionCacheGrpc;
 import build.bazel.remote.execution.v2.ActionCacheGrpc.ActionCacheBlockingStub;
 import build.bazel.remote.execution.v2.ActionCacheGrpc.ActionCacheImplBase;
 import build.bazel.remote.execution.v2.ActionResult;
+import build.bazel.remote.execution.v2.CapabilitiesGrpc;
+import build.bazel.remote.execution.v2.CapabilitiesGrpc.CapabilitiesBlockingStub;
+import build.bazel.remote.execution.v2.CapabilitiesGrpc.CapabilitiesImplBase;
 import build.bazel.remote.execution.v2.ContentAddressableStorageGrpc;
 import build.bazel.remote.execution.v2.ContentAddressableStorageGrpc.ContentAddressableStorageBlockingStub;
 import build.bazel.remote.execution.v2.ContentAddressableStorageGrpc.ContentAddressableStorageImplBase;
 import build.bazel.remote.execution.v2.Digest;
 import build.bazel.remote.execution.v2.ExecuteRequest;
+import build.bazel.remote.execution.v2.ExecutionCapabilities;
 import build.bazel.remote.execution.v2.ExecutionGrpc;
 import build.bazel.remote.execution.v2.ExecutionGrpc.ExecutionImplBase;
 import build.bazel.remote.execution.v2.FindMissingBlobsRequest;
 import build.bazel.remote.execution.v2.FindMissingBlobsResponse;
 import build.bazel.remote.execution.v2.GetActionResultRequest;
+import build.bazel.remote.execution.v2.GetCapabilitiesRequest;
 import build.bazel.remote.execution.v2.OutputFile;
+import build.bazel.remote.execution.v2.ServerCapabilities;
+import build.bazel.remote.execution.v2.UpdateActionResultRequest;
 import build.bazel.remote.execution.v2.WaitExecutionRequest;
 import com.google.bytestream.ByteStreamGrpc;
 import com.google.bytestream.ByteStreamGrpc.ByteStreamBlockingStub;
@@ -49,9 +56,11 @@ import com.google.bytestream.ByteStreamProto.WriteResponse;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.ExecuteDetails;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.FindMissingBlobsDetails;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.GetActionResultDetails;
+import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.GetCapabilitiesDetails;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.LogEntry;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.ReadDetails;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.RpcCallDetails;
+import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.UpdateActionResultDetails;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.WaitExecutionDetails;
 import com.google.devtools.build.lib.remote.logging.RemoteExecutionLog.WriteDetails;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
@@ -417,13 +426,7 @@ public class LoggingInterceptorTest {
         });
     clock.advanceMillis(20000000000001L);
     Iterator<Operation> replies = ExecutionGrpc.newBlockingStub(loggedChannel).execute(request);
-    assertThrows(
-        StatusRuntimeException.class,
-        () -> {
-          while (replies.hasNext()) {
-            replies.next();
-          }
-        });
+    assertThrows(StatusRuntimeException.class, () -> replies.hasNext());
     LogEntry expectedEntry =
         LogEntry.newBuilder()
             .setMethodName(ExecutionGrpc.getExecuteMethod().getFullMethodName())
@@ -529,6 +532,93 @@ public class LoggingInterceptorTest {
   }
 
   @Test
+  public void testUpdateActionResultCallOk() {
+    Digest testDigest = DigestUtil.buildDigest("test", 8);
+    ActionResult actionResult =
+        ActionResult.newBuilder()
+            .addOutputFiles(OutputFile.newBuilder().setDigest(testDigest).setPath("root/test"))
+            .setExitCode(1)
+            .build();
+
+    UpdateActionResultRequest request =
+        UpdateActionResultRequest.newBuilder()
+            .setActionDigest(testDigest)
+            .setInstanceName("test-instance")
+            .setActionResult(actionResult)
+            .build();
+
+    serviceRegistry.addService(
+        new ActionCacheImplBase() {
+          @Override
+          public void updateActionResult(
+              UpdateActionResultRequest request, StreamObserver<ActionResult> responseObserver) {
+            clock.advanceMillis(22222);
+            responseObserver.onNext(actionResult);
+            responseObserver.onCompleted();
+          }
+        });
+    ActionCacheBlockingStub stub = ActionCacheGrpc.newBlockingStub(loggedChannel);
+
+    clock.advanceMillis(11111);
+    stub.updateActionResult(request);
+    LogEntry expectedEntry =
+        LogEntry.newBuilder()
+            .setMethodName(ActionCacheGrpc.getUpdateActionResultMethod().getFullMethodName())
+            .setDetails(
+                RpcCallDetails.newBuilder()
+                    .setUpdateActionResult(
+                        UpdateActionResultDetails.newBuilder()
+                            .setRequest(request)
+                            .setResponse(actionResult)))
+            .setStatus(com.google.rpc.Status.getDefaultInstance())
+            .setStartTime(Timestamp.newBuilder().setSeconds(11).setNanos(111000000))
+            .setEndTime(Timestamp.newBuilder().setSeconds(33).setNanos(333000000))
+            .build();
+    verify(logStream).write(expectedEntry);
+  }
+
+  @Test
+  public void testGetCapabilitiesCallOk() {
+    GetCapabilitiesRequest request =
+        GetCapabilitiesRequest.newBuilder()
+            .setInstanceName("test-instance")
+            .build();
+    ServerCapabilities response =
+        ServerCapabilities.newBuilder()
+            .setExecutionCapabilities(
+                ExecutionCapabilities.newBuilder().setExecEnabled(true).build())
+            .build();
+    serviceRegistry.addService(
+        new CapabilitiesImplBase() {
+          @Override
+          public void getCapabilities(
+              GetCapabilitiesRequest request, StreamObserver<ServerCapabilities> responseObserver) {
+            clock.advanceMillis(22222);
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+          }
+        });
+    CapabilitiesBlockingStub stub = CapabilitiesGrpc.newBlockingStub(loggedChannel);
+
+    clock.advanceMillis(11111);
+    stub.getCapabilities(request);
+    LogEntry expectedEntry =
+        LogEntry.newBuilder()
+            .setMethodName(CapabilitiesGrpc.getGetCapabilitiesMethod().getFullMethodName())
+            .setDetails(
+                RpcCallDetails.newBuilder()
+                    .setGetCapabilities(
+                        GetCapabilitiesDetails.newBuilder()
+                            .setRequest(request)
+                            .setResponse(response)))
+            .setStatus(com.google.rpc.Status.getDefaultInstance())
+            .setStartTime(Timestamp.newBuilder().setSeconds(11).setNanos(111000000))
+            .setEndTime(Timestamp.newBuilder().setSeconds(33).setNanos(333000000))
+            .build();
+    verify(logStream).write(expectedEntry);
+  }
+
+  @Test
   public void testWaitExecutionCallOk() {
     WaitExecutionRequest request = WaitExecutionRequest.newBuilder().setName("test-name").build();
     Operation response1 = Operation.newBuilder().setName("test-name").build();
@@ -599,13 +689,9 @@ public class LoggingInterceptorTest {
     clock.advanceMillis(2000);
     Iterator<Operation> replies =
         ExecutionGrpc.newBlockingStub(loggedChannel).waitExecution(request);
-    assertThrows(
-        StatusRuntimeException.class,
-        () -> {
-          while (replies.hasNext()) {
-            replies.next();
-          }
-        });
+    assertThat(replies.hasNext()).isTrue();
+    assertThat(replies.next()).isEqualTo(response);
+    assertThrows(StatusRuntimeException.class, () -> replies.hasNext());
 
     LogEntry expectedEntry =
         LogEntry.newBuilder()
@@ -687,13 +773,9 @@ public class LoggingInterceptorTest {
           }
         });
     Iterator<ReadResponse> replies = ByteStreamGrpc.newBlockingStub(loggedChannel).read(request);
-    assertThrows(
-        StatusRuntimeException.class,
-        () -> {
-          while (replies.hasNext()) {
-            replies.next();
-          }
-        });
+    assertThat(replies.hasNext()).isTrue();
+    assertThat(replies.next()).isEqualTo(response1);
+    assertThrows(StatusRuntimeException.class, () -> replies.hasNext());
 
     LogEntry expectedEntry =
         LogEntry.newBuilder()

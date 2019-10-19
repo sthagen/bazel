@@ -13,11 +13,12 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.AbstractRuleErrorConsumer;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.RuleErrorConsumer;
 
 /**
  * Base class for implementations of {@link
@@ -25,9 +26,9 @@ import com.google.devtools.build.lib.packages.Attribute;
  *
  * <p>Do not create new implementations of this class - instead, use {@link RuleContext} in Native
  * rule definitions, and {@link com.google.devtools.build.lib.analysis.skylark.SkylarkErrorReporter}
- * in Skylark API definitions. For use in testing, extend {@link AbstractRuleErrorConsumer} instead.
+ * in Skylark API definitions. For use in testing, implement {@link RuleErrorConsumer} instead.
  */
-public abstract class EventHandlingErrorReporter extends AbstractRuleErrorConsumer {
+public abstract class EventHandlingErrorReporter implements RuleErrorConsumer {
   private final String ruleClassNameForLogging;
   private final AnalysisEnvironment env;
 
@@ -36,7 +37,14 @@ public abstract class EventHandlingErrorReporter extends AbstractRuleErrorConsum
     this.env = env;
   }
 
-  public void reportError(Location location, String message) {
+  private void reportError(Location location, String message) {
+    // TODO(ulfjack): Consider generating the error message from the root cause event rather than
+    // the other way round.
+    if (!hasErrors()) {
+      // We must not report duplicate events, so we only report the first one for now.
+      env.getEventHandler()
+          .post(new AnalysisRootCauseEvent(getConfiguration(), getLabel(), message));
+    }
     env.getEventHandler().handle(Event.error(location, message));
   }
 
@@ -47,7 +55,7 @@ public abstract class EventHandlingErrorReporter extends AbstractRuleErrorConsum
 
   @Override
   public void attributeError(String attrName, String message) {
-    reportError(getAttributeLocation(attrName), completeAttributeMessage(attrName, message));
+    reportError(getRuleLocation(), completeAttributeMessage(attrName, message));
   }
 
   @Override
@@ -66,7 +74,7 @@ public abstract class EventHandlingErrorReporter extends AbstractRuleErrorConsum
 
   @Override
   public void attributeWarning(String attrName, String message) {
-    reportWarning(getAttributeLocation(attrName), completeAttributeMessage(attrName, message));
+    reportWarning(getRuleLocation(), completeAttributeMessage(attrName, message));
   }
 
   private String prefixRuleMessage(String message) {
@@ -98,7 +106,7 @@ public abstract class EventHandlingErrorReporter extends AbstractRuleErrorConsum
 
   protected abstract Label getLabel();
 
-  protected abstract Location getRuleLocation();
+  protected abstract BuildConfiguration getConfiguration();
 
-  protected abstract Location getAttributeLocation(String attrName);
+  protected abstract Location getRuleLocation();
 }

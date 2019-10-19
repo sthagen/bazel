@@ -14,12 +14,10 @@
 package com.google.devtools.build.lib.rules.platform;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.SkylarkProvider.SkylarkKey;
@@ -54,11 +52,6 @@ public class PlatformConfigurationApiTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testHostPlatform_unset() {
-    assertThrows(InvalidConfigurationException.class, () -> useConfiguration("--host_platform="));
-  }
-
-  @Test
   public void testTargetPlatform_single() throws Exception {
     scratch.file("platforms/BUILD", "platform(name = 'test_platform')");
 
@@ -78,38 +71,6 @@ public class PlatformConfigurationApiTest extends BuildViewTestCase {
         .isEqualTo(Label.parseAbsoluteUnchecked("//platforms:test_platform"));
     assertThat(platformConfiguration.getTargetPlatforms())
         .containsExactly(Label.parseAbsoluteUnchecked("//platforms:test_platform"));
-  }
-
-  @Test
-  public void testTargetPlatform_unset() {
-    assertThrows(InvalidConfigurationException.class, () -> useConfiguration("--platforms="));
-  }
-
-  @Test
-  public void testTargetPlatform_multiple() throws Exception {
-    scratch.file(
-        "platforms/BUILD",
-        "platform(name = 'test_platform1')",
-        "platform(name = 'test_platform2')");
-
-    useConfiguration("--platforms=//platforms:test_platform1,//platforms:test_platform2");
-    ruleBuilder().build();
-    scratch.file(
-        "foo/BUILD",
-        "load(':extension.bzl', 'my_rule')",
-        "my_rule(",
-        "  name = 'my_skylark_rule',",
-        ")");
-    assertNoEvents();
-
-    PlatformConfigurationApi platformConfiguration = fetchPlatformConfiguration();
-    assertThat(platformConfiguration).isNotNull();
-    // Despite setting two platforms in the flag, only a single platform should be visible to the
-    // target.
-    assertThat(platformConfiguration.getTargetPlatform())
-        .isEqualTo(Label.parseAbsoluteUnchecked("//platforms:test_platform1"));
-    assertThat(platformConfiguration.getTargetPlatforms())
-        .containsExactly(Label.parseAbsoluteUnchecked("//platforms:test_platform1"));
   }
 
   @Test

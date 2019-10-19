@@ -16,12 +16,10 @@ package com.google.devtools.build.lib.analysis.actions;
 
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
-import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.SpawnResult;
-import java.util.List;
+import com.google.devtools.build.lib.actions.SpawnContinuation;
 
 /** The action context for {@link TemplateExpansionAction} instances */
 public interface TemplateExpansionContext extends ActionContext {
-  List<SpawnResult> expandTemplate(TemplateExpansionAction action, ActionExecutionContext ctx)
-      throws ExecException, InterruptedException;
+  SpawnContinuation expandTemplate(TemplateExpansionAction action, ActionExecutionContext ctx)
+      throws InterruptedException;
 }

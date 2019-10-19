@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -51,23 +52,15 @@ public interface IncludeScannable {
   List<PathFragment> getIncludeDirs();
 
   /**
-   * Returns an immutable list of "-isystem" include paths that should be used
-   * by the IncludeScanner for this action. GCC searches these paths ahead of
-   * the built-in system include paths, but after all other paths. "-isystem"
-   * paths are treated the same as normal system directories.
+   * Returns an immutable list of "-F" framework include paths that should be used by the
+   * IncludeScanner for this action. The include scanner searches these paths after "-iquote"
+   * include paths, but before other non-framework include paths.
    */
-  List<PathFragment> getSystemIncludeDirs();
+  ImmutableList<PathFragment> getFrameworkIncludeDirs();
 
   /**
-   * Returns an immutable list of "-include" inclusions specified explicitly on
-   * the command line of this action. GCC will imagine that these files have
-   * been quote-included at the beginning of each source file.
-   */
-  List<String> getCmdlineIncludes();
-
-  /**
-   * Returns an artifact that the compiler may unconditionally include, even if the source file
-   * does not mention it.
+   * Returns an artifact that the compiler may unconditionally include, even if the source file does
+   * not mention it.
    */
   @Nullable
   List<Artifact> getBuiltInIncludeFiles();

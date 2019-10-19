@@ -26,7 +26,6 @@ import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
-import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLines;
@@ -34,6 +33,7 @@ import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
 import com.google.devtools.build.lib.actions.CompositeRunfilesSupplier;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
+import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -41,6 +41,7 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
 
@@ -68,7 +69,7 @@ public final class ExtraAction extends SpawnAction {
   ExtraAction(
       ImmutableSet<Artifact> extraActionInputs,
       RunfilesSupplier runfilesSupplier,
-      Collection<Artifact> outputs,
+      Collection<Artifact.DerivedArtifact> outputs,
       Action shadowedAction,
       boolean createDummyOutput,
       CommandLine argv,
@@ -89,9 +90,10 @@ public final class ExtraAction extends SpawnAction {
         env,
         ImmutableMap.copyOf(executionInfo),
         progressMessage,
-        new CompositeRunfilesSupplier(shadowedAction.getRunfilesSupplier(), runfilesSupplier),
+        CompositeRunfilesSupplier.of(shadowedAction.getRunfilesSupplier(), runfilesSupplier),
         mnemonic,
         false,
+        null,
         null);
     this.shadowedAction = shadowedAction;
     this.createDummyOutput = createDummyOutput;
@@ -108,6 +110,10 @@ public final class ExtraAction extends SpawnAction {
     return shadowedAction.discoversInputs();
   }
 
+  /**
+   * This method returns null when a required SkyValue is missing and a Skyframe restart is
+   * required.
+   */
   @Nullable
   @Override
   public Iterable<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
@@ -120,11 +126,13 @@ public final class ExtraAction extends SpawnAction {
     // We need to update our inputs to take account of any additional
     // inputs the shadowed action may need to do its work.
     Iterable<Artifact> oldInputs = getInputs();
+    Iterable<Artifact> inputFilesForExtraAction =
+        shadowedAction.getInputFilesForExtraAction(actionExecutionContext);
+    if (inputFilesForExtraAction == null) {
+      return null;
+    }
     updateInputs(
-        createInputs(
-            shadowedAction.getInputs(),
-            shadowedAction.getInputFilesForExtraAction(actionExecutionContext),
-            extraActionInputs));
+        createInputs(shadowedAction.getInputs(), inputFilesForExtraAction, extraActionInputs));
     return Sets.<Artifact>difference(
         ImmutableSet.<Artifact>copyOf(getInputs()), ImmutableSet.<Artifact>copyOf(oldInputs));
   }
@@ -150,34 +158,18 @@ public final class ExtraAction extends SpawnAction {
     return shadowedAction.getAllowedDerivedInputs();
   }
 
-  /**
-   * @InheritDoc
-   *
-   * <p>This method calls in to {@link AbstractAction#getInputFilesForExtraAction} and {@link
-   * Action#getExtraActionInfo} of the action being shadowed from the thread executing this
-   * ExtraAction. It assumes these methods are safe to call from a different thread than the thread
-   * responsible for the execution of the action being shadowed.
-   */
   @Override
-  public ActionResult execute(ActionExecutionContext actionExecutionContext)
-      throws ActionExecutionException, InterruptedException {
-    // PHASE 2: execution of extra_action.
-    ActionResult actionResult = super.execute(actionExecutionContext);
-
+  protected void afterExecute(
+      ActionExecutionContext actionExecutionContext, List<SpawnResult> spawnResults)
+      throws IOException {
     // PHASE 3: create dummy output.
     // If the user didn't specify output, we need to create dummy output
     // to make blaze schedule this action.
     if (createDummyOutput) {
       for (Artifact output : getOutputs()) {
-        try {
-          FileSystemUtils.touchFile(actionExecutionContext.getInputPath(output));
-        } catch (IOException e) {
-          throw new ActionExecutionException(e.getMessage(), e, this, false);
-        }
+        FileSystemUtils.touchFile(actionExecutionContext.getInputPath(output));
       }
     }
-
-    return actionResult;
   }
 
   /**

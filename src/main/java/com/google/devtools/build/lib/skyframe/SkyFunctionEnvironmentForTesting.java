@@ -17,10 +17,9 @@ package com.google.devtools.build.lib.skyframe;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.util.ResourceUsage;
 import com.google.devtools.build.skyframe.AbstractSkyFunctionEnvironment;
-import com.google.devtools.build.skyframe.BuildDriver;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -28,32 +27,29 @@ import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.ValueOrUntypedException;
 import java.util.Map;
 
-/** A skyframe environment that can be used to evaluate arbitrary skykeys for testing. */
+/**
+ * A {@link SkyFunction.Environment} backed by a {@link SkyframeExecutor} that can be used to
+ * evaluate arbitrary {@link SkyKey}s for testing.
+ */
 public class SkyFunctionEnvironmentForTesting extends AbstractSkyFunctionEnvironment
     implements SkyFunction.Environment {
 
-  private final BuildDriver buildDriver;
   private final ExtendedEventHandler eventHandler;
   private final SkyframeExecutor skyframeExecutor;
 
-  /** Creates a SkyFunctionEnvironmentForTesting that uses a BuildDriver to evaluate skykeys. */
-  public SkyFunctionEnvironmentForTesting(
-      BuildDriver buildDriver,
-      ExtendedEventHandler eventHandler,
-      SkyframeExecutor skyframeExecutor) {
-    this.buildDriver = buildDriver;
+  SkyFunctionEnvironmentForTesting(
+      ExtendedEventHandler eventHandler, SkyframeExecutor skyframeExecutor) {
     this.eventHandler = eventHandler;
     this.skyframeExecutor = skyframeExecutor;
   }
 
   @Override
   protected Map<SkyKey, ValueOrUntypedException> getValueOrUntypedExceptions(
-      Iterable<? extends SkyKey> depKeys) throws InterruptedException {
+      Iterable<? extends SkyKey> depKeys) {
     ImmutableMap.Builder<SkyKey, ValueOrUntypedException> resultMap = ImmutableMap.builder();
     Iterable<SkyKey> keysToEvaluate = ImmutableList.copyOf(depKeys);
     EvaluationResult<SkyValue> evaluationResult =
         skyframeExecutor.evaluateSkyKeys(eventHandler, keysToEvaluate, true);
-        buildDriver.evaluate(depKeys, true, ResourceUsage.getAvailableProcessors(), eventHandler);
     for (SkyKey depKey : ImmutableSet.copyOf(depKeys)) {
       resultMap.put(depKey, ValueOrUntypedException.ofValueUntyped(evaluationResult.get(depKey)));
     }
@@ -68,5 +64,10 @@ public class SkyFunctionEnvironmentForTesting extends AbstractSkyFunctionEnviron
   @Override
   public boolean inErrorBubblingForTesting() {
     return false;
+  }
+
+  @Override
+  public void dependOnFuture(ListenableFuture<?> future) {
+    throw new UnsupportedOperationException();
   }
 }

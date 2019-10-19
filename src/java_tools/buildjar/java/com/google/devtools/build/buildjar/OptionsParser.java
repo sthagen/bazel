@@ -29,6 +29,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -42,15 +43,32 @@ import javax.annotation.Nullable;
 public final class OptionsParser {
   private final List<String> javacOpts = new ArrayList<>();
 
-  private final Set<String> directJars = new HashSet<>();
+  private final Set<String> directJars = new LinkedHashSet<>();
 
   private String strictJavaDeps;
   private String fixDepsTool;
 
   private String outputDepsProtoFile;
-  private final Set<String> depsArtifacts = new HashSet<>();
+  private final Set<String> depsArtifacts = new LinkedHashSet<>();
 
-  private boolean strictClasspathMode;
+  /** This modes controls how a probablistic Java classpath reduction is used. */
+  public enum ReduceClasspathMode {
+    BAZEL_REDUCED,
+    BAZEL_FALLBACK,
+    JAVABUILDER_REDUCED,
+    NONE
+  }
+
+  /**
+   * The flag --reduce_classpath_mode can be passed to JavaBuilder to request a compilation with
+   * reduced classpath, computed from the compilations direct dependencies plus what was actually
+   * required to build those. If this compilation fails with a specific error code, then a fallback
+   * is done using the full (transitive) classpath.
+   */
+  private ReduceClasspathMode reduceClasspathMode = ReduceClasspathMode.NONE;
+
+  private int fullClasspathLength = -1;
+  private int reducedClasspathLength = -1;
 
   private String sourceGenDir;
   private String generatedSourcesOutputJar;
@@ -67,9 +85,10 @@ public final class OptionsParser {
 
   private final List<String> processorPath = new ArrayList<>();
   private final List<String> processorNames = new ArrayList<>();
+  private final List<String> builtinProcessorNames = new ArrayList<>();
 
   private String outputJar;
-  private @Nullable String nativeHeaderOutput;
+  @Nullable private String nativeHeaderOutput;
 
   private String classDir;
   private String tempDir;
@@ -80,6 +99,8 @@ public final class OptionsParser {
 
   private String targetLabel;
   private String injectingRuleKind;
+
+  @Nullable private String profile;
 
   /**
    * Constructs an {@code OptionsParser} from a list of command args. Sets the same JavacRunner for
@@ -120,7 +141,16 @@ public final class OptionsParser {
           collectFlagArguments(depsArtifacts, argQueue, "--");
           break;
         case "--reduce_classpath":
-          strictClasspathMode = true;
+          reduceClasspathMode = ReduceClasspathMode.JAVABUILDER_REDUCED;
+          break;
+        case "--reduce_classpath_mode":
+          reduceClasspathMode = ReduceClasspathMode.valueOf(getArgument(argQueue, arg));
+          break;
+        case "--full_classpath_length":
+          fullClasspathLength = Integer.parseInt(getArgument(argQueue, arg));
+          break;
+        case "--reduced_classpath_length":
+          reducedClasspathLength = Integer.parseInt(getArgument(argQueue, arg));
           break;
         case "--sourcegendir":
           sourceGenDir = getArgument(argQueue, arg);
@@ -156,6 +186,9 @@ public final class OptionsParser {
         case "--processors":
           collectProcessorArguments(processorNames, argQueue, "-");
           break;
+        case "--builtin_processors":
+          collectProcessorArguments(builtinProcessorNames, argQueue, "-");
+          break;
         case "--extclasspath":
         case "--extdir":
           collectFlagArguments(extClassPath, argQueue, "-");
@@ -187,6 +220,9 @@ public final class OptionsParser {
           break;
         case "--injecting_rule_kind":
           injectingRuleKind = getArgument(argQueue, arg);
+          break;
+        case "--profile":
+          profile = getArgument(argQueue, arg);
           break;
         default:
           throw new InvalidCommandLineException("unknown option : '" + arg + "'");
@@ -309,7 +345,7 @@ public final class OptionsParser {
     try {
       return args.remove();
     } catch (NoSuchElementException e) {
-      throw new InvalidCommandLineException(arg + ": missing argument");
+      throw new InvalidCommandLineException(arg + ": missing argument", e);
     }
   }
 
@@ -345,8 +381,16 @@ public final class OptionsParser {
     return depsArtifacts;
   }
 
-  public boolean reduceClasspath() {
-    return strictClasspathMode;
+  public ReduceClasspathMode reduceClasspathMode() {
+    return reduceClasspathMode;
+  }
+
+  public int fullClasspathLength() {
+    return fullClasspathLength;
+  }
+
+  public int reducedClasspathLength() {
+    return reducedClasspathLength;
   }
 
   public String getSourceGenDir() {
@@ -397,6 +441,10 @@ public final class OptionsParser {
     return processorNames;
   }
 
+  public List<String> getBuiltinProcessorNames() {
+    return builtinProcessorNames;
+  }
+
   public String getOutputJar() {
     return outputJar;
   }
@@ -428,5 +476,9 @@ public final class OptionsParser {
 
   public String getInjectingRuleKind() {
     return injectingRuleKind;
+  }
+
+  public String getProfile() {
+    return profile;
   }
 }

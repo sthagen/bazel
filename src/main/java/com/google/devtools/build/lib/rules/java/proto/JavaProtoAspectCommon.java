@@ -20,21 +20,18 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
+import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.StrictDepsMode;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArtifacts;
-import com.google.devtools.build.lib.rules.java.JavaCompilationHelper;
-import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaLibraryHelper;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaRuntimeInfo;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
+import com.google.devtools.build.lib.rules.java.JavaToolchainProvider;
 import com.google.devtools.build.lib.rules.proto.ProtoLangToolchainProvider;
 
-/**
- * Common logic used by java*_proto aspects (e.g. {@link JavaLiteProtoAspect}).
- */
+/** Common logic used by java*_proto aspects (e.g. {@link JavaLiteProtoAspect}). */
 public class JavaProtoAspectCommon {
 
   // The name of an attribute of {@link JavaProtoAspect} used for storing the {@link Label} of
@@ -55,36 +52,28 @@ public class JavaProtoAspectCommon {
   private final RpcSupport rpcSupport;
 
   /**
-   * Returns a {@link JavaProtoAspectCommon} instance that handles logic for
-   * {@code java_proto_library}.
+   * Returns a {@link JavaProtoAspectCommon} instance that handles logic for {@code
+   * java_proto_library}.
    */
   static JavaProtoAspectCommon getSpeedInstance(
       RuleContext ruleContext, JavaSemantics javaSemantics, RpcSupport rpcSupport) {
     return new JavaProtoAspectCommon(
-        ruleContext,
-        javaSemantics,
-        rpcSupport,
-        SPEED_PROTO_TOOLCHAIN_ATTR,
-        SPEED_JAR_SUFFIX);
+        ruleContext, javaSemantics, rpcSupport, SPEED_PROTO_TOOLCHAIN_ATTR, SPEED_JAR_SUFFIX);
   }
 
   /**
-   * Returns a {@link JavaProtoAspectCommon} instance that handles logic for
-   * {@code java_lite_proto_library}.
+   * Returns a {@link JavaProtoAspectCommon} instance that handles logic for {@code
+   * java_lite_proto_library}.
    */
   static JavaProtoAspectCommon getLiteInstance(
       RuleContext ruleContext, JavaSemantics javaSemantics) {
     return new JavaProtoAspectCommon(
-        ruleContext,
-        javaSemantics,
-        null,
-        LITE_PROTO_TOOLCHAIN_ATTR,
-        LITE_JAR_SUFFIX);
+        ruleContext, javaSemantics, null, LITE_PROTO_TOOLCHAIN_ATTR, LITE_JAR_SUFFIX);
   }
 
   /**
-   * Returns a {@link JavaProtoAspectCommon} instance that handles logic for
-   * {@code java_mutable_proto_library}.
+   * Returns a {@link JavaProtoAspectCommon} instance that handles logic for {@code
+   * java_mutable_proto_library}.
    */
   public static JavaProtoAspectCommon getMutableInstance(
       RuleContext ruleContext,
@@ -92,11 +81,7 @@ public class JavaProtoAspectCommon {
       RpcSupport rpcSupport,
       String protoToolchainAttr) {
     return new JavaProtoAspectCommon(
-        ruleContext,
-        javaSemantics,
-        rpcSupport,
-        protoToolchainAttr,
-        MUTABLE_JAR_SUFFIX);
+        ruleContext, javaSemantics, rpcSupport, protoToolchainAttr, MUTABLE_JAR_SUFFIX);
   }
 
   private JavaProtoAspectCommon(
@@ -123,21 +108,19 @@ public class JavaProtoAspectCommon {
       String injectingRuleKind,
       Artifact sourceJar,
       Artifact outputJar,
-      JavaCompilationArgsProvider dep) {
+      JavaCompilationArgsProvider dep)
+      throws InterruptedException {
     JavaLibraryHelper helper =
         new JavaLibraryHelper(ruleContext)
             .setInjectingRuleKind(injectingRuleKind)
             .setOutput(outputJar)
             .addSourceJars(sourceJar)
-            .setJavacOpts(ProtoJavacOpts.constructJavacOpts(ruleContext));
-    if (ruleContext.getFragment(JavaConfiguration.class).isProtoGeneratedStrictDeps()) {
-      helper.addDep(dep).setCompilationStrictDepsMode(StrictDepsMode.ERROR);
-    } else {
-      helper.addDep(dep).setCompilationStrictDepsMode(StrictDepsMode.OFF);
-    }
+            .setJavacOpts(ProtoJavacOpts.constructJavacOpts(ruleContext))
+            .addDep(dep)
+            .setCompilationStrictDepsMode(StrictDepsMode.ERROR);
     for (TransitiveInfoCollection t : getProtoRuntimeDeps()) {
       JavaCompilationArgsProvider provider =
-            JavaInfo.getProvider(JavaCompilationArgsProvider.class, t);
+          JavaInfo.getProvider(JavaCompilationArgsProvider.class, t);
       if (provider != null) {
         helper.addDep(provider);
       }
@@ -146,12 +129,11 @@ public class JavaProtoAspectCommon {
     JavaCompilationArtifacts artifacts =
         helper.build(
             javaSemantics,
-            JavaCompilationHelper.getJavaToolchainProvider(ruleContext),
+            JavaToolchainProvider.from(ruleContext),
             JavaRuntimeInfo.forHost(ruleContext),
-            JavaCompilationHelper.getInstrumentationJars(ruleContext),
             JavaRuleOutputJarsProvider.builder(),
-              /*createOutputSourceJar*/ false,
-              /*outputSourceJar=*/ null);
+            /*createOutputSourceJar*/ false,
+            /*outputSourceJar=*/ null);
     return helper.buildCompilationArgsProvider(
         artifacts, /*isReportedAsStrict=*/ true, /*isNeverlink=*/ false);
   }
@@ -172,12 +154,10 @@ public class JavaProtoAspectCommon {
     return result.build();
   }
 
-  /**
-   * Returns the toolchain that specifies how to generate code from {@code .proto} files.
-   */
+  /** Returns the toolchain that specifies how to generate code from {@code .proto} files. */
   public ProtoLangToolchainProvider getProtoToolchainProvider() {
-    return checkNotNull(ruleContext.getPrerequisite(
-        protoToolchainAttr, TARGET, ProtoLangToolchainProvider.class));
+    return checkNotNull(
+        ruleContext.getPrerequisite(protoToolchainAttr, TARGET, ProtoLangToolchainProvider.class));
   }
 
   /**
@@ -193,7 +173,7 @@ public class JavaProtoAspectCommon {
    * name and the library type of the current instance. For example, if the instance is created with
    * {@link getLiteInstance} the name of the jar will be "<label>-lite-src.jar".
    *
-   * The {@link Artifact} will be created in the bazel-genfiles directory.
+   * <p>The {@link Artifact} will be created in the bazel-genfiles directory.
    */
   public Artifact getSourceJarArtifact() {
     return ruleContext.getGenfilesArtifact(
@@ -205,7 +185,7 @@ public class JavaProtoAspectCommon {
    * name and the library type of the current instance. For example, if the instance is created with
    * {@link getLiteInstance} the name of the jar will be "lib<label>-lite.jar".
    *
-   * The {@link Artifact} will be created in the bazel-bin directory.
+   * <p>The {@link Artifact} will be created in the bazel-bin directory.
    */
   public Artifact getOutputJarArtifact() {
     return ruleContext.getBinArtifact(

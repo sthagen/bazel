@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+
 import build.bazel.remote.execution.v2.Action;
 import build.bazel.remote.execution.v2.ActionResult;
 import build.bazel.remote.execution.v2.Command;
@@ -22,29 +24,51 @@ import build.bazel.remote.execution.v2.DirectoryNode;
 import build.bazel.remote.execution.v2.FileNode;
 import build.bazel.remote.execution.v2.OutputDirectory;
 import build.bazel.remote.execution.v2.OutputFile;
+import build.bazel.remote.execution.v2.OutputSymlink;
+import build.bazel.remote.execution.v2.SymlinkNode;
 import build.bazel.remote.execution.v2.Tree;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.UserExecException;
+import com.google.devtools.build.lib.actions.cache.MetadataInjector;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
-import com.google.devtools.build.lib.remote.Retrier.RetryException;
-import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
+import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
+import com.google.devtools.build.lib.profiler.Profiler;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
+import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.ActionResultMetadata.DirectoryMetadata;
+import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.ActionResultMetadata.FileMetadata;
+import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.ActionResultMetadata.SymlinkMetadata;
+import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.common.SimpleBlobStore.ActionKey;
+import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.Utils;
+import com.google.devtools.build.lib.remote.util.Utils.InMemoryOutput;
 import com.google.devtools.build.lib.util.io.FileOutErr;
+import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
-import io.grpc.Context;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -55,11 +79,21 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
 /** A cache for storing artifacts (input and output) as well as the output of running an action. */
 @ThreadSafety.ThreadSafe
-public abstract class AbstractRemoteActionCache implements AutoCloseable {
+public abstract class AbstractRemoteActionCache implements MissingDigestsFinder, AutoCloseable {
+
+  /** See {@link SpawnExecutionContext#lockOutputFiles()}. */
+  @FunctionalInterface
+  interface OutputFilesLocker {
+    void lock() throws InterruptedException, IOException;
+  }
 
   private static final ListenableFuture<Void> COMPLETED_SUCCESS = SettableFuture.create();
   private static final ListenableFuture<byte[]> EMPTY_BYTES = SettableFuture.create();
@@ -69,38 +103,13 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     ((SettableFuture<byte[]>) EMPTY_BYTES).set(new byte[0]);
   }
 
-  public static boolean causedByCacheMiss(RetryException t) {
-    return t.getCause() instanceof CacheNotFoundException;
-  }
-
   protected final RemoteOptions options;
   protected final DigestUtil digestUtil;
-  private final Retrier retrier;
 
-  public AbstractRemoteActionCache(RemoteOptions options, DigestUtil digestUtil, Retrier retrier) {
+  public AbstractRemoteActionCache(RemoteOptions options, DigestUtil digestUtil) {
     this.options = options;
     this.digestUtil = digestUtil;
-    this.retrier = retrier;
   }
-
-  /**
-   * Ensures that the tree structure of the inputs, the input files themselves, and the command are
-   * available in the remote cache, such that the tree can be reassembled and executed on another
-   * machine given the root digest.
-   *
-   * <p>The cache may check whether files or parts of the tree structure are already present, and do
-   * not need to be uploaded again.
-   *
-   * <p>Note that this method is only required for remote execution, not for caching itself.
-   * However, remote execution uses a cache to store input files, and that may be a separate
-   * end-point from the executor itself, so the functionality lives here. A pure remote caching
-   * implementation that does not support remote execution may choose not to implement this
-   * function, and throw {@link UnsupportedOperationException} instead. If so, it should be clearly
-   * documented that it cannot be used for remote execution.
-   */
-  public abstract void ensureInputsPresent(
-      TreeNodeRepository repository, Path execRoot, TreeNode root, Action action, Command command)
-      throws IOException, InterruptedException;
 
   /**
    * Attempts to look up the given action in the remote cache and return its result, if present.
@@ -109,25 +118,141 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
    *
    * @throws IOException if the remote cache is unavailable.
    */
-  abstract @Nullable ActionResult getCachedActionResult(DigestUtil.ActionKey actionKey)
+  @Nullable
+  abstract ActionResult getCachedActionResult(ActionKey actionKey)
+      throws IOException, InterruptedException;
+
+  protected abstract void setCachedActionResult(ActionKey actionKey, ActionResult action)
       throws IOException, InterruptedException;
 
   /**
-   * Upload the result of a locally executed action to the cache by uploading any necessary files,
-   * stdin / stdout, as well as adding an entry for the given action key to the cache if
-   * uploadAction is true.
+   * Uploads a file
    *
-   * @throws IOException if the remote cache is unavailable.
+   * <p>Any errors are being propagated via the returned future. If the future completes without
+   * errors the upload was successful.
+   *
+   * @param digest the digest of the file.
+   * @param file the file to upload.
    */
-  abstract void upload(
-      DigestUtil.ActionKey actionKey,
+  protected abstract ListenableFuture<Void> uploadFile(Digest digest, Path file);
+
+  /**
+   * Uploads a BLOB.
+   *
+   * <p>Any errors are being propagated via the returned future. If the future completes without
+   * errors the upload was successful
+   *
+   * @param digest the digest of the blob.
+   * @param data the blob to upload.
+   */
+  protected abstract ListenableFuture<Void> uploadBlob(Digest digest, ByteString data);
+
+  /**
+   * Upload the result of a locally executed action to the remote cache.
+   *
+   * @throws IOException if there was an error uploading to the remote cache
+   * @throws ExecException if uploading any of the action outputs is not supported
+   */
+  public ActionResult upload(
+      ActionKey actionKey,
       Action action,
       Command command,
       Path execRoot,
+      Collection<Path> outputs,
+      FileOutErr outErr,
+      int exitCode)
+      throws ExecException, IOException, InterruptedException {
+    ActionResult.Builder resultBuilder = ActionResult.newBuilder();
+    uploadOutputs(execRoot, actionKey, action, command, outputs, outErr, resultBuilder);
+    resultBuilder.setExitCode(exitCode);
+    ActionResult result = resultBuilder.build();
+    if (exitCode == 0 && !action.getDoNotCache()) {
+      setCachedActionResult(actionKey, result);
+    }
+    return result;
+  }
+
+  public ActionResult upload(
+      ActionKey actionKey,
+      Action action,
+      Command command,
+      Path execRoot,
+      Collection<Path> outputs,
+      FileOutErr outErr)
+      throws ExecException, IOException, InterruptedException {
+    return upload(actionKey, action, command, execRoot, outputs, outErr, /* exitCode= */ 0);
+  }
+
+  private void uploadOutputs(
+      Path execRoot,
+      ActionKey actionKey,
+      Action action,
+      Command command,
       Collection<Path> files,
       FileOutErr outErr,
-      boolean uploadAction)
-      throws ExecException, IOException, InterruptedException;
+      ActionResult.Builder result)
+      throws ExecException, IOException, InterruptedException {
+    UploadManifest manifest =
+        new UploadManifest(
+            digestUtil,
+            result,
+            execRoot,
+            options.incompatibleRemoteSymlinks,
+            options.allowSymlinkUpload);
+    manifest.addFiles(files);
+    manifest.setStdoutStderr(outErr);
+    manifest.addAction(actionKey, action, command);
+
+    Map<Digest, Path> digestToFile = manifest.getDigestToFile();
+    Map<Digest, ByteString> digestToBlobs = manifest.getDigestToBlobs();
+    Collection<Digest> digests = new ArrayList<>();
+    digests.addAll(digestToFile.keySet());
+    digests.addAll(digestToBlobs.keySet());
+
+    ImmutableSet<Digest> digestsToUpload = Utils.getFromFuture(findMissingDigests(digests));
+    ImmutableList.Builder<ListenableFuture<Void>> uploads = ImmutableList.builder();
+    for (Digest digest : digestsToUpload) {
+      Path file = digestToFile.get(digest);
+      if (file != null) {
+        uploads.add(uploadFile(digest, file));
+      } else {
+        ByteString blob = digestToBlobs.get(digest);
+        if (blob == null) {
+          String message = "FindMissingBlobs call returned an unknown digest: " + digest;
+          throw new IOException(message);
+        }
+        uploads.add(uploadBlob(digest, blob));
+      }
+    }
+
+    waitForUploads(uploads.build());
+
+    if (manifest.getStderrDigest() != null) {
+      result.setStderrDigest(manifest.getStderrDigest());
+    }
+    if (manifest.getStdoutDigest() != null) {
+      result.setStdoutDigest(manifest.getStdoutDigest());
+    }
+  }
+
+  private static void waitForUploads(List<ListenableFuture<Void>> uploads)
+      throws IOException, InterruptedException {
+    try {
+      for (ListenableFuture<Void> upload : uploads) {
+        upload.get();
+      }
+    } catch (ExecutionException e) {
+      // TODO(buchgr): Add support for cancellation and factor this method out to be shared
+      // between ByteStreamUploader as well.
+      Throwable cause = e.getCause();
+      Throwables.throwIfInstanceOf(cause, IOException.class);
+      Throwables.throwIfInstanceOf(cause, InterruptedException.class);
+      if (cause != null) {
+        throw new IOException(cause);
+      }
+      throw new IOException(e);
+    }
+  }
 
   /**
    * Downloads a blob with a content hash {@code digest} to {@code out}.
@@ -161,8 +286,12 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
             outerF.setException(t);
           }
         },
-        MoreExecutors.directExecutor());
+        directExecutor());
     return outerF;
+  }
+
+  private static Path toTmpDownloadPath(Path actualPath) {
+    return actualPath.getParentDirectory().getRelative(actualPath.getBaseName() + ".tmp");
   }
 
   /**
@@ -171,56 +300,35 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
    *
    * <p>In case of failure, this method deletes any output files it might have already created.
    *
+   * @param outputFilesLocker ensures that we are the only ones writing to the output files when
+   *     using the dynamic spawn strategy.
    * @throws IOException in case of a cache miss or if the remote cache is unavailable.
    * @throws ExecException in case clean up after a failed download failed.
    */
-  // TODO(olaola): will need to amend to include the TreeNodeRepository for updating.
-  public void download(ActionResult result, Path execRoot, FileOutErr outErr)
+  public void download(
+      ActionResult result,
+      Path execRoot,
+      FileOutErr origOutErr,
+      OutputFilesLocker outputFilesLocker)
       throws ExecException, IOException, InterruptedException {
-    Context ctx = Context.current();
-    List<FuturePathBooleanTuple> fileDownloads =
-        Collections.synchronizedList(
-            new ArrayList<>(result.getOutputFilesCount() + result.getOutputDirectoriesCount()));
-    for (OutputFile file : result.getOutputFilesList()) {
-      Path path = execRoot.getRelative(file.getPath());
-      ListenableFuture<Void> download =
-          retrier.executeAsync(
-              () -> ctx.call(() -> downloadFile(path, file.getDigest())));
-      fileDownloads.add(new FuturePathBooleanTuple(download, path, file.getIsExecutable()));
-    }
+    ActionResultMetadata metadata = parseActionResultMetadata(result, execRoot);
 
-    List<ListenableFuture<Void>> dirDownloads = new ArrayList<>(result.getOutputDirectoriesCount());
-    for (OutputDirectory dir : result.getOutputDirectoriesList()) {
-      SettableFuture<Void> dirDownload = SettableFuture.create();
-      ListenableFuture<byte[]> protoDownload =
-          retrier.executeAsync(() -> ctx.call(() -> downloadBlob(dir.getTreeDigest())));
-      Futures.addCallback(
-          protoDownload,
-          new FutureCallback<byte[]>() {
-            @Override
-            public void onSuccess(byte[] b) {
-              try {
-                Tree tree = Tree.parseFrom(b);
-                Map<Digest, Directory> childrenMap = new HashMap<>();
-                for (Directory child : tree.getChildrenList()) {
-                  childrenMap.put(digestUtil.compute(child), child);
-                }
-                Path path = execRoot.getRelative(dir.getPath());
-                fileDownloads.addAll(downloadDirectory(path, tree.getRoot(), childrenMap, ctx));
-                dirDownload.set(null);
-              } catch (IOException e) {
-                dirDownload.setException(e);
-              }
-            }
-
-            @Override
-            public void onFailure(Throwable t) {
-              dirDownload.setException(t);
-            }
-          },
-          MoreExecutors.directExecutor());
-      dirDownloads.add(dirDownload);
-    }
+    List<ListenableFuture<FileMetadata>> downloads =
+        Stream.concat(
+                metadata.files().stream(),
+                metadata.directories().stream()
+                    .flatMap((entry) -> entry.getValue().files().stream()))
+            .map(
+                (file) -> {
+                  try {
+                    ListenableFuture<Void> download =
+                        downloadFile(toTmpDownloadPath(file.path()), file.digest());
+                    return Futures.transform(download, (d) -> file, directExecutor());
+                  } catch (IOException e) {
+                    return Futures.<FileMetadata>immediateFailedFuture(e);
+                  }
+                })
+            .collect(Collectors.toList());
 
     // Subsequently we need to wait for *every* download to finish, even if we already know that
     // one failed. That's so that when exiting this method we can be sure that all downloads have
@@ -228,132 +336,147 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     // TODO(buchgr): Look into cancellation.
 
     IOException downloadException = null;
+    InterruptedException interruptedException = null;
+    FileOutErr tmpOutErr = null;
     try {
-      fileDownloads.addAll(downloadOutErr(result, outErr, ctx));
+      if (origOutErr != null) {
+        tmpOutErr = origOutErr.childOutErr();
+      }
+      downloads.addAll(downloadOutErr(result, tmpOutErr));
     } catch (IOException e) {
       downloadException = e;
     }
-    for (ListenableFuture<Void> dirDownload : dirDownloads) {
-      // Block on all directory download futures, so that we can be sure that we have discovered
-      // all file downloads and can subsequently safely iterate over the list of file downloads.
+
+    for (ListenableFuture<FileMetadata> download : downloads) {
       try {
-        getFromFuture(dirDownload);
+        // Wait for all downloads to finish.
+        getFromFuture(download);
       } catch (IOException e) {
-        downloadException = downloadException == null ? e : downloadException;
+        if (downloadException == null) {
+          downloadException = e;
+        } else if (e != downloadException) {
+          downloadException.addSuppressed(e);
+        }
+      } catch (InterruptedException e) {
+        if (interruptedException == null) {
+          interruptedException = e;
+        } else if (e != interruptedException) {
+          interruptedException.addSuppressed(e);
+        }
       }
     }
 
-    for (FuturePathBooleanTuple download : fileDownloads) {
+    if (downloadException != null || interruptedException != null) {
       try {
-        getFromFuture(download.getFuture());
-        if (download.getPath() != null) {
-          download.getPath().setExecutable(download.isExecutable());
+        // Delete any (partially) downloaded output files.
+        for (OutputFile file : result.getOutputFilesList()) {
+          toTmpDownloadPath(execRoot.getRelative(file.getPath())).delete();
+        }
+        for (OutputDirectory directory : result.getOutputDirectoriesList()) {
+          // Only delete the directories below the output directories because the output
+          // directories will not be re-created
+          execRoot.getRelative(directory.getPath()).deleteTreesBelow();
+        }
+        if (tmpOutErr != null) {
+          tmpOutErr.clearOut();
+          tmpOutErr.clearErr();
         }
       } catch (IOException e) {
-        downloadException = downloadException == null ? e : downloadException;
+        if (downloadException != null && e != downloadException) {
+          e.addSuppressed(downloadException);
+        }
+        if (interruptedException != null) {
+          e.addSuppressed(interruptedException);
+        }
+
+        // If deleting of output files failed, we abort the build with a decent error message as
+        // any subsequent local execution failure would likely be incomprehensible.
+        throw new EnvironmentalExecException(
+            "Failed to delete output files after incomplete download", e);
       }
+    }
+
+    if (interruptedException != null) {
+      throw interruptedException;
     }
 
     if (downloadException != null) {
-      try {
-        // Delete any (partially) downloaded output files, since any subsequent local execution
-        // of this action may expect none of the output files to exist.
-        for (OutputFile file : result.getOutputFilesList()) {
-          execRoot.getRelative(file.getPath()).delete();
-        }
-        for (OutputDirectory directory : result.getOutputDirectoriesList()) {
-          FileSystemUtils.deleteTree(execRoot.getRelative(directory.getPath()));
-        }
-        if (outErr != null) {
-          outErr.getOutputPath().delete();
-          outErr.getErrorPath().delete();
-        }
-      } catch (IOException e) {
-        // If deleting of output files failed, we abort the build with a decent error message as
-        // any subsequent local execution failure would likely be incomprehensible.
-
-        // We don't propagate the downloadException, as this is a recoverable error and the cause
-        // of the build failure is really that we couldn't delete output files.
-        throw new EnvironmentalExecException(
-            "Failed to delete output files after incomplete "
-                + "download. Cannot continue with local execution.",
-            e,
-            true);
-      }
       throw downloadException;
     }
-  }
 
-  @VisibleForTesting
-  protected <T> T getFromFuture(ListenableFuture<T> f) throws IOException, InterruptedException {
-    return Utils.getFromFuture(f);
-  }
-
-  /** Tuple of {@code ListenableFuture, Path, boolean}. */
-  private static class FuturePathBooleanTuple {
-    private final ListenableFuture<?> future;
-    private final Path path;
-    private final boolean isExecutable;
-
-    public FuturePathBooleanTuple(ListenableFuture<?> future, Path path, boolean isExecutable) {
-      this.future = future;
-      this.path = path;
-      this.isExecutable = isExecutable;
+    if (tmpOutErr != null) {
+      FileOutErr.dump(tmpOutErr, origOutErr);
+      tmpOutErr.clearOut();
+      tmpOutErr.clearErr();
     }
 
-    public ListenableFuture<?> getFuture() {
-      return future;
+    // Ensure that we are the only ones writing to the output files when using the dynamic spawn
+    // strategy.
+    outputFilesLocker.lock();
+
+    moveOutputsToFinalLocation(downloads);
+
+    List<SymlinkMetadata> symlinksInDirectories = new ArrayList<>();
+    for (Entry<Path, DirectoryMetadata> entry : metadata.directories()) {
+      entry.getKey().createDirectoryAndParents();
+      symlinksInDirectories.addAll(entry.getValue().symlinks());
     }
 
-    public Path getPath() {
-      return path;
-    }
+    Iterable<SymlinkMetadata> symlinks =
+        Iterables.concat(metadata.symlinks(), symlinksInDirectories);
 
-    public boolean isExecutable() {
-      return isExecutable;
-    }
+    // Create the symbolic links after all downloads are finished, because dangling symlinks
+    // might not be supported on all platforms
+    createSymlinks(symlinks);
   }
 
   /**
-   * Download a directory recursively. The directory is represented by a {@link Directory} protobuf
-   * message, and the descendant directories are in {@code childrenMap}, accessible through their
-   * digest.
+   * Copies moves the downloaded outputs from their download location to their declared location.
    */
-  private List<FuturePathBooleanTuple> downloadDirectory(
-      Path path, Directory dir, Map<Digest, Directory> childrenMap, Context ctx)
-      throws IOException {
-    // Ensure that the directory is created here even though the directory might be empty
-    path.createDirectoryAndParents();
-
-    List<FuturePathBooleanTuple> downloads = new ArrayList<>(dir.getFilesCount());
-    for (FileNode child : dir.getFilesList()) {
-      Path childPath = path.getRelative(child.getName());
-      downloads.add(
-          new FuturePathBooleanTuple(
-              retrier.executeAsync(
-                  () -> ctx.call(() -> downloadFile(childPath, child.getDigest()))),
-              childPath,
-              child.getIsExecutable()));
-    }
-
-    for (DirectoryNode child : dir.getDirectoriesList()) {
-      Path childPath = path.getRelative(child.getName());
-      Digest childDigest = child.getDigest();
-      Directory childDir = childrenMap.get(childDigest);
-      if (childDir == null) {
-        throw new IOException(
-            "could not find subdirectory "
-                + child.getName()
-                + " of directory "
-                + path
-                + " for download: digest "
-                + childDigest
-                + "not found");
+  private void moveOutputsToFinalLocation(List<ListenableFuture<FileMetadata>> downloads)
+      throws IOException, InterruptedException {
+    List<FileMetadata> finishedDownloads = new ArrayList<>(downloads.size());
+    for (ListenableFuture<FileMetadata> finishedDownload : downloads) {
+      FileMetadata outputFile = getFromFuture(finishedDownload);
+      if (outputFile != null) {
+        finishedDownloads.add(outputFile);
       }
-      downloads.addAll(downloadDirectory(childPath, childDir, childrenMap, ctx));
     }
+    /*
+     * Sort the list lexicographically based on its temporary download path in order to avoid
+     * filename clashes when moving the files:
+     *
+     * Consider an action that produces two outputs foo and foo.tmp. These outputs would initially
+     * be downloaded to foo.tmp and foo.tmp.tmp. When renaming them to foo and foo.tmp we need to
+     * ensure that rename(foo.tmp, foo) happens before rename(foo.tmp.tmp, foo.tmp). We ensure this
+     * by doing the renames in lexicographical order of the download names.
+     */
+    Collections.sort(finishedDownloads, Comparator.comparing(f -> toTmpDownloadPath(f.path())));
 
-    return downloads;
+    // Move the output files from their temporary name to the actual output file name.
+    for (FileMetadata outputFile : finishedDownloads) {
+      FileSystemUtils.moveFile(toTmpDownloadPath(outputFile.path()), outputFile.path());
+      outputFile.path().setExecutable(outputFile.isExecutable());
+    }
+  }
+
+  private void createSymlinks(Iterable<SymlinkMetadata> symlinks) throws IOException {
+    for (SymlinkMetadata symlink : symlinks) {
+      if (symlink.target().isAbsolute()) {
+        // We do not support absolute symlinks as outputs.
+        throw new IOException(
+            String.format(
+                "Action output %s is a symbolic link to an absolute path %s. "
+                    + "Symlinks to absolute paths in action outputs are not supported.",
+                symlink.path(), symlink.target()));
+      }
+      Preconditions.checkNotNull(
+              symlink.path().getParentDirectory(),
+              "Failed creating directory and parents for %s",
+              symlink.path())
+          .createDirectoryAndParents();
+      symlink.path().createSymbolicLink(symlink.target());
+    }
   }
 
   /** Download a file (that is not a directory). The content is fetched from the digest. */
@@ -383,49 +506,257 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
 
           @Override
           public void onFailure(Throwable t) {
-            outerF.setException(t);
             try {
               out.close();
             } catch (IOException e) {
-              // Intentionally left empty. The download already failed, so we can ignore
-              // the error on close().
+              if (t != e) {
+                t.addSuppressed(e);
+              }
+            } finally {
+              outerF.setException(t);
             }
           }
         },
-        MoreExecutors.directExecutor());
+        directExecutor());
     return outerF;
   }
 
-  private List<FuturePathBooleanTuple> downloadOutErr(
-      ActionResult result, FileOutErr outErr, Context ctx) throws IOException {
-    List<FuturePathBooleanTuple> downloads = new ArrayList<>();
+  private List<ListenableFuture<FileMetadata>> downloadOutErr(ActionResult result, OutErr outErr)
+      throws IOException {
+    List<ListenableFuture<FileMetadata>> downloads = new ArrayList<>();
     if (!result.getStdoutRaw().isEmpty()) {
       result.getStdoutRaw().writeTo(outErr.getOutputStream());
       outErr.getOutputStream().flush();
     } else if (result.hasStdoutDigest()) {
       downloads.add(
-          new FuturePathBooleanTuple(
-              retrier.executeAsync(
-                  () ->
-                      ctx.call(
-                          () -> downloadBlob(result.getStdoutDigest(), outErr.getOutputStream()))),
-              null,
-              false));
+          Futures.transform(
+              downloadBlob(result.getStdoutDigest(), outErr.getOutputStream()),
+              (d) -> null,
+              directExecutor()));
     }
     if (!result.getStderrRaw().isEmpty()) {
       result.getStderrRaw().writeTo(outErr.getErrorStream());
       outErr.getErrorStream().flush();
     } else if (result.hasStderrDigest()) {
       downloads.add(
-          new FuturePathBooleanTuple(
-              retrier.executeAsync(
-                  () ->
-                      ctx.call(
-                          () -> downloadBlob(result.getStderrDigest(), outErr.getErrorStream()))),
-              null,
-              false));
+          Futures.transform(
+              downloadBlob(result.getStderrDigest(), outErr.getErrorStream()),
+              (d) -> null,
+              directExecutor()));
     }
     return downloads;
+  }
+
+  /**
+   * Avoids downloading the majority of action outputs but injects their metadata using {@link
+   * MetadataInjector} instead.
+   *
+   * <p>This method only downloads output directory metadata, stdout and stderr as well as the
+   * contents of {@code inMemoryOutputPath} if specified.
+   *
+   * @param result the action result metadata of a successfully executed action (exit code = 0).
+   * @param outputs the action's declared output files
+   * @param inMemoryOutputPath the path of an output file whose contents should be returned in
+   *     memory by this method.
+   * @param outErr stdout and stderr of this action
+   * @param execRoot the execution root
+   * @param metadataInjector the action's metadata injector that allows this method to inject
+   *     metadata about an action output instead of downloading the output
+   * @param outputFilesLocker ensures that we are the only ones writing to the output files when
+   *     using the dynamic spawn strategy.
+   * @throws IOException in case of failure
+   * @throws InterruptedException in case of receiving an interrupt
+   */
+  @Nullable
+  public InMemoryOutput downloadMinimal(
+      ActionResult result,
+      Collection<? extends ActionInput> outputs,
+      @Nullable PathFragment inMemoryOutputPath,
+      OutErr outErr,
+      Path execRoot,
+      MetadataInjector metadataInjector,
+      OutputFilesLocker outputFilesLocker)
+      throws IOException, InterruptedException {
+    Preconditions.checkState(
+        result.getExitCode() == 0,
+        "injecting remote metadata is only supported for successful actions (exit code 0).");
+
+    ActionResultMetadata metadata;
+    try (SilentCloseable c = Profiler.instance().profile("Remote.parseActionResultMetadata")) {
+      metadata = parseActionResultMetadata(result, execRoot);
+    }
+
+    if (!metadata.symlinks().isEmpty()) {
+      throw new IOException(
+          "Symlinks in action outputs are not yet supported by "
+              + "--experimental_remote_download_outputs=minimal");
+    }
+
+    // Ensure that when using dynamic spawn strategy that we are the only ones writing to the
+    // output files.
+    outputFilesLocker.lock();
+
+    ActionInput inMemoryOutput = null;
+    Digest inMemoryOutputDigest = null;
+    for (ActionInput output : outputs) {
+      if (inMemoryOutputPath != null && output.getExecPath().equals(inMemoryOutputPath)) {
+        Path p = execRoot.getRelative(output.getExecPath());
+        FileMetadata m = Preconditions.checkNotNull(metadata.file(p), "inMemoryOutputMetadata");
+        inMemoryOutputDigest = m.digest();
+        inMemoryOutput = output;
+      }
+      if (output instanceof Artifact) {
+        injectRemoteArtifact((Artifact) output, metadata, execRoot, metadataInjector);
+      }
+    }
+
+    try (SilentCloseable c = Profiler.instance().profile("Remote.download")) {
+      ListenableFuture<byte[]> inMemoryOutputDownload = null;
+      if (inMemoryOutput != null) {
+        inMemoryOutputDownload = downloadBlob(inMemoryOutputDigest);
+      }
+      for (ListenableFuture<FileMetadata> download : downloadOutErr(result, outErr)) {
+        getFromFuture(download);
+      }
+      if (inMemoryOutputDownload != null) {
+        byte[] data = getFromFuture(inMemoryOutputDownload);
+        return new InMemoryOutput(inMemoryOutput, ByteString.copyFrom(data));
+      }
+    }
+    return null;
+  }
+
+  private void injectRemoteArtifact(
+      Artifact output,
+      ActionResultMetadata metadata,
+      Path execRoot,
+      MetadataInjector metadataInjector)
+      throws IOException {
+    if (output.isTreeArtifact()) {
+      DirectoryMetadata directory =
+          metadata.directory(execRoot.getRelative(output.getExecPathString()));
+      if (directory == null) {
+        // A declared output wasn't created. It might have been an optional output and if not
+        // SkyFrame will make sure to fail.
+        return;
+      }
+      if (!directory.symlinks().isEmpty()) {
+        throw new IOException(
+            "Symlinks in action outputs are not yet supported by "
+                + "--experimental_remote_download_outputs=minimal");
+      }
+      ImmutableMap.Builder<PathFragment, RemoteFileArtifactValue> childMetadata =
+          ImmutableMap.builder();
+      for (FileMetadata file : directory.files()) {
+        PathFragment p = file.path().relativeTo(output.getPath());
+        RemoteFileArtifactValue r =
+            new RemoteFileArtifactValue(
+                DigestUtil.toBinaryDigest(file.digest()),
+                file.digest().getSizeBytes(),
+                /* locationIndex= */ 1);
+        childMetadata.put(p, r);
+      }
+      metadataInjector.injectRemoteDirectory(
+          (Artifact.SpecialArtifact) output, childMetadata.build());
+    } else {
+      FileMetadata outputMetadata = metadata.file(execRoot.getRelative(output.getExecPathString()));
+      if (outputMetadata == null) {
+        // A declared output wasn't created. It might have been an optional output and if not
+        // SkyFrame will make sure to fail.
+        return;
+      }
+      metadataInjector.injectRemoteFile(
+          output,
+          DigestUtil.toBinaryDigest(outputMetadata.digest()),
+          outputMetadata.digest().getSizeBytes(),
+          /* locationIndex= */ 1);
+    }
+  }
+
+  private DirectoryMetadata parseDirectory(
+      Path parent, Directory dir, Map<Digest, Directory> childDirectoriesMap) {
+    ImmutableList.Builder<FileMetadata> filesBuilder = ImmutableList.builder();
+    for (FileNode file : dir.getFilesList()) {
+      filesBuilder.add(
+          new FileMetadata(
+              parent.getRelative(file.getName()), file.getDigest(), file.getIsExecutable()));
+    }
+
+    ImmutableList.Builder<SymlinkMetadata> symlinksBuilder = ImmutableList.builder();
+    for (SymlinkNode symlink : dir.getSymlinksList()) {
+      symlinksBuilder.add(
+          new SymlinkMetadata(
+              parent.getRelative(symlink.getName()), PathFragment.create(symlink.getTarget())));
+    }
+
+    for (DirectoryNode directoryNode : dir.getDirectoriesList()) {
+      Path childPath = parent.getRelative(directoryNode.getName());
+      Directory childDir =
+          Preconditions.checkNotNull(childDirectoriesMap.get(directoryNode.getDigest()));
+      DirectoryMetadata childMetadata = parseDirectory(childPath, childDir, childDirectoriesMap);
+      filesBuilder.addAll(childMetadata.files());
+      symlinksBuilder.addAll(childMetadata.symlinks());
+    }
+
+    return new DirectoryMetadata(filesBuilder.build(), symlinksBuilder.build());
+  }
+
+  private ActionResultMetadata parseActionResultMetadata(ActionResult actionResult, Path execRoot)
+      throws IOException, InterruptedException {
+    Preconditions.checkNotNull(actionResult, "actionResult");
+    Map<Path, ListenableFuture<Tree>> dirMetadataDownloads =
+        Maps.newHashMapWithExpectedSize(actionResult.getOutputDirectoriesCount());
+    for (OutputDirectory dir : actionResult.getOutputDirectoriesList()) {
+      dirMetadataDownloads.put(
+          execRoot.getRelative(dir.getPath()),
+          Futures.transform(
+              downloadBlob(dir.getTreeDigest()),
+              (treeBytes) -> {
+                try {
+                  return Tree.parseFrom(treeBytes);
+                } catch (InvalidProtocolBufferException e) {
+                  throw new RuntimeException(e);
+                }
+              },
+              directExecutor()));
+    }
+
+    ImmutableMap.Builder<Path, DirectoryMetadata> directories = ImmutableMap.builder();
+    for (Map.Entry<Path, ListenableFuture<Tree>> metadataDownload :
+        dirMetadataDownloads.entrySet()) {
+      Path path = metadataDownload.getKey();
+      Tree directoryTree = getFromFuture(metadataDownload.getValue());
+      Map<Digest, Directory> childrenMap = new HashMap<>();
+      for (Directory childDir : directoryTree.getChildrenList()) {
+        childrenMap.put(digestUtil.compute(childDir), childDir);
+      }
+
+      directories.put(path, parseDirectory(path, directoryTree.getRoot(), childrenMap));
+    }
+
+    ImmutableMap.Builder<Path, FileMetadata> files = ImmutableMap.builder();
+    for (OutputFile outputFile : actionResult.getOutputFilesList()) {
+      files.put(
+          execRoot.getRelative(outputFile.getPath()),
+          new FileMetadata(
+              execRoot.getRelative(outputFile.getPath()),
+              outputFile.getDigest(),
+              outputFile.getIsExecutable()));
+    }
+
+    ImmutableMap.Builder<Path, SymlinkMetadata> symlinks = ImmutableMap.builder();
+    Iterable<OutputSymlink> outputSymlinks =
+        Iterables.concat(
+            actionResult.getOutputFileSymlinksList(),
+            actionResult.getOutputDirectorySymlinksList());
+    for (OutputSymlink symlink : outputSymlinks) {
+      symlinks.put(
+          execRoot.getRelative(symlink.getPath()),
+          new SymlinkMetadata(
+              execRoot.getRelative(symlink.getPath()), PathFragment.create(symlink.getTarget())));
+    }
+
+    return new ActionResultMetadata(files.build(), symlinks.build(), directories.build());
   }
 
   /** UploadManifest adds output metadata to a {@link ActionResult}. */
@@ -434,22 +765,38 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     private final ActionResult.Builder result;
     private final Path execRoot;
     private final boolean allowSymlinks;
-    private final Map<Digest, Path> digestToFile;
-    private final Map<Digest, Chunker> digestToChunkers;
+    private final boolean uploadSymlinks;
+    private final Map<Digest, Path> digestToFile = new HashMap<>();
+    private final Map<Digest, ByteString> digestToBlobs = new HashMap<>();
+    private Digest stderrDigest;
+    private Digest stdoutDigest;
 
     /**
      * Create an UploadManifest from an ActionResult builder and an exec root. The ActionResult
      * builder is populated through a call to {@link #addFile(Digest, Path)}.
      */
     public UploadManifest(
-        DigestUtil digestUtil, ActionResult.Builder result, Path execRoot, boolean allowSymlinks) {
+        DigestUtil digestUtil,
+        ActionResult.Builder result,
+        Path execRoot,
+        boolean uploadSymlinks,
+        boolean allowSymlinks) {
       this.digestUtil = digestUtil;
       this.result = result;
       this.execRoot = execRoot;
+      this.uploadSymlinks = uploadSymlinks;
       this.allowSymlinks = allowSymlinks;
+    }
 
-      this.digestToFile = new HashMap<>();
-      this.digestToChunkers = new HashMap<>();
+    public void setStdoutStderr(FileOutErr outErr) throws IOException {
+      if (outErr.getErrorPath().exists()) {
+        stderrDigest = digestUtil.compute(outErr.getErrorPath());
+        digestToFile.put(stderrDigest, outErr.getErrorPath());
+      }
+      if (outErr.getOutputPath().exists()) {
+        stdoutDigest = digestUtil.compute(outErr.getOutputPath());
+        digestToFile.put(stdoutDigest, outErr.getOutputPath());
+      }
     }
 
     /**
@@ -457,26 +804,49 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
      * effect of 1) uploading a {@link Tree} protobuf message from which the whole structure of the
      * directory, including the descendants, can be reconstructed and 2) uploading all the
      * non-directory descendant files.
-     *
-     * <p>Attempting to a upload symlink results in a {@link
-     * com.google.build.lib.actions.ExecException}, since cachable actions shouldn't emit symlinks.
      */
     public void addFiles(Collection<Path> files) throws ExecException, IOException {
       for (Path file : files) {
         // TODO(ulfjack): Maybe pass in a SpawnResult here, add a list of output files to that, and
         // rely on the local spawn runner to stat the files, instead of statting here.
         FileStatus stat = file.statIfFound(Symlinks.NOFOLLOW);
+        // TODO(#6547): handle the case where the parent directory of the output file is an
+        // output symlink.
         if (stat == null) {
           // We ignore requested results that have not been generated by the action.
           continue;
         }
         if (stat.isDirectory()) {
           addDirectory(file);
-        } else if (stat.isFile()) {
+        } else if (stat.isFile() && !stat.isSpecialFile()) {
           Digest digest = digestUtil.compute(file, stat.getSize());
           addFile(digest, file);
-        } else if (allowSymlinks && stat.isSymbolicLink()) {
-          addFile(digestUtil.compute(file), file);
+        } else if (stat.isSymbolicLink() && allowSymlinks) {
+          PathFragment target = file.readSymbolicLink();
+          // Need to resolve the symbolic link to know what to add, file or directory.
+          FileStatus statFollow = file.statIfFound(Symlinks.FOLLOW);
+          if (statFollow == null) {
+            throw new IOException(
+                String.format("Action output %s is a dangling symbolic link to %s ", file, target));
+          }
+          if (statFollow.isSpecialFile()) {
+            illegalOutput(file);
+          }
+          Preconditions.checkState(
+              statFollow.isFile() || statFollow.isDirectory(), "Unknown stat type for %s", file);
+          if (uploadSymlinks && !target.isAbsolute()) {
+            if (statFollow.isFile()) {
+              addFileSymbolicLink(file, target);
+            } else {
+              addDirectorySymbolicLink(file, target);
+            }
+          } else {
+            if (statFollow.isFile()) {
+              addFile(digestUtil.compute(file), file);
+            } else {
+              addDirectory(file);
+            }
+          }
         } else {
           illegalOutput(file);
         }
@@ -487,13 +857,9 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
      * Adds an action and command protos to upload. They need to be uploaded as part of the action
      * result.
      */
-    public void addAction(Action action, Command command) throws IOException {
-      for (byte[] blob : new byte[][]{action.toByteArray(), command.toByteArray()}) {
-        Digest digest = digestUtil.compute(blob);
-        Chunker chunker =
-            Chunker.builder(digestUtil).setInput(digest, blob).setChunkSize(blob.length).build();
-        digestToChunkers.put(digest, chunker);
-      }
+    public void addAction(SimpleBlobStore.ActionKey actionKey, Action action, Command command) {
+      digestToBlobs.put(actionKey.getDigest(), action.toByteString());
+      digestToBlobs.put(action.getCommandDigest(), command.toByteString());
     }
 
     /** Map of digests to file paths to upload. */
@@ -504,10 +870,34 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     /**
      * Map of digests to chunkers to upload. When the file is a regular, non-directory file it is
      * transmitted through {@link #getDigestToFile()}. When it is a directory, it is transmitted as
-     * a {@link Tree} protobuf message through {@link #getDigestToChunkers()}.
+     * a {@link Tree} protobuf message through {@link #getDigestToBlobs()}.
      */
-    public Map<Digest, Chunker> getDigestToChunkers() {
-      return digestToChunkers;
+    public Map<Digest, ByteString> getDigestToBlobs() {
+      return digestToBlobs;
+    }
+
+    @Nullable
+    public Digest getStdoutDigest() {
+      return stdoutDigest;
+    }
+
+    @Nullable
+    public Digest getStderrDigest() {
+      return stderrDigest;
+    }
+
+    private void addFileSymbolicLink(Path file, PathFragment target) throws IOException {
+      result
+          .addOutputFileSymlinksBuilder()
+          .setPath(file.relativeTo(execRoot).getPathString())
+          .setTarget(target.toString());
+    }
+
+    private void addDirectorySymbolicLink(Path file, PathFragment target) throws IOException {
+      result
+          .addOutputDirectorySymlinksBuilder()
+          .setPath(file.relativeTo(execRoot).getPathString())
+          .setTarget(target.toString());
     }
 
     private void addFile(Digest digest, Path file) throws IOException {
@@ -525,10 +915,8 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
       Directory root = computeDirectory(dir, tree);
       tree.setRoot(root);
 
-      byte[] blob = tree.build().toByteArray();
-      Digest digest = digestUtil.compute(blob);
-      Chunker chunker =
-          Chunker.builder(digestUtil).setInput(digest, blob).setChunkSize(blob.length).build();
+      ByteString data = tree.build().toByteString();
+      Digest digest = digestUtil.compute(data.toByteArray());
 
       if (result != null) {
         result
@@ -537,14 +925,14 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
             .setTreeDigest(digest);
       }
 
-      digestToChunkers.put(chunker.digest(), chunker);
+      digestToBlobs.put(digest, data);
     }
 
     private Directory computeDirectory(Path path, Tree.Builder tree)
         throws ExecException, IOException {
       Directory.Builder b = Directory.newBuilder();
 
-      List<Dirent> sortedDirent = new ArrayList<>(path.readdir(TreeNodeRepository.SYMLINK_POLICY));
+      List<Dirent> sortedDirent = new ArrayList<>(path.readdir(Symlinks.NOFOLLOW));
       sortedDirent.sort(Comparator.comparing(Dirent::getName));
 
       for (Dirent dirent : sortedDirent) {
@@ -554,8 +942,35 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
           Directory dir = computeDirectory(child, tree);
           b.addDirectoriesBuilder().setName(name).setDigest(digestUtil.compute(dir));
           tree.addChildren(dir);
-        } else if (dirent.getType() == Dirent.Type.FILE
-            || (dirent.getType() == Dirent.Type.SYMLINK && allowSymlinks)) {
+        } else if (dirent.getType() == Dirent.Type.SYMLINK && allowSymlinks) {
+          PathFragment target = child.readSymbolicLink();
+          if (uploadSymlinks && !target.isAbsolute()) {
+            // Whether it is dangling or not, we're passing it on.
+            b.addSymlinksBuilder().setName(name).setTarget(target.toString());
+            continue;
+          }
+          // Need to resolve the symbolic link now to know whether to upload a file or a directory.
+          FileStatus statFollow = child.statIfFound(Symlinks.FOLLOW);
+          if (statFollow == null) {
+            throw new IOException(
+                String.format(
+                    "Action output %s is a dangling symbolic link to %s ", child, target));
+          }
+          if (statFollow.isFile() && !statFollow.isSpecialFile()) {
+            Digest digest = digestUtil.compute(child);
+            b.addFilesBuilder()
+                .setName(name)
+                .setDigest(digest)
+                .setIsExecutable(child.isExecutable());
+            digestToFile.put(digest, child);
+          } else if (statFollow.isDirectory()) {
+            Directory dir = computeDirectory(child, tree);
+            b.addDirectoriesBuilder().setName(name).setDigest(digestUtil.compute(dir));
+            tree.addChildren(dir);
+          } else {
+            illegalOutput(child);
+          }
+        } else if (dirent.getType() == Dirent.Type.FILE) {
           Digest digest = digestUtil.compute(child);
           b.addFilesBuilder().setName(name).setDigest(digest).setIsExecutable(child.isExecutable());
           digestToFile.put(digest, child);
@@ -567,7 +982,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
       return b.build();
     }
 
-    private void illegalOutput(Path what) throws ExecException, IOException {
+    private void illegalOutput(Path what) throws ExecException {
       String kind = what.isSymbolicLink() ? "symbolic link" : "special file";
       throw new UserExecException(
           String.format(
@@ -575,6 +990,17 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
                   + "uploaded to a remote cache. "
                   + "Change the file type or use --remote_allow_symlink_upload.",
               what.relativeTo(execRoot), kind));
+    }
+  }
+
+  protected void verifyContents(String expectedHash, String actualHash) throws IOException {
+    if (!expectedHash.equals(actualHash)) {
+      String msg =
+          String.format(
+              "An output download failed, because the expected hash"
+                  + "'%s' did not match the received hash '%s'.",
+              expectedHash, actualHash);
+      throw new IOException(msg);
     }
   }
 
@@ -631,5 +1057,110 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
         out = path.getOutputStream();
       }
     }
+  }
+
+  /** In-memory representation of action result metadata. */
+  static class ActionResultMetadata {
+
+    static class SymlinkMetadata {
+      private final Path path;
+      private final PathFragment target;
+
+      private SymlinkMetadata(Path path, PathFragment target) {
+        this.path = path;
+        this.target = target;
+      }
+
+      public Path path() {
+        return path;
+      }
+
+      public PathFragment target() {
+        return target;
+      }
+    }
+
+    static class FileMetadata {
+      private final Path path;
+      private final Digest digest;
+      private final boolean isExecutable;
+
+      private FileMetadata(Path path, Digest digest, boolean isExecutable) {
+        this.path = path;
+        this.digest = digest;
+        this.isExecutable = isExecutable;
+      }
+
+      public Path path() {
+        return path;
+      }
+
+      public Digest digest() {
+        return digest;
+      }
+
+      public boolean isExecutable() {
+        return isExecutable;
+      }
+    }
+
+    static class DirectoryMetadata {
+      private final ImmutableList<FileMetadata> files;
+      private final ImmutableList<SymlinkMetadata> symlinks;
+
+      private DirectoryMetadata(
+          ImmutableList<FileMetadata> files, ImmutableList<SymlinkMetadata> symlinks) {
+        this.files = files;
+        this.symlinks = symlinks;
+      }
+
+      public ImmutableList<FileMetadata> files() {
+        return files;
+      }
+
+      public ImmutableList<SymlinkMetadata> symlinks() {
+        return symlinks;
+      }
+    }
+
+    private final ImmutableMap<Path, FileMetadata> files;
+    private final ImmutableMap<Path, SymlinkMetadata> symlinks;
+    private final ImmutableMap<Path, DirectoryMetadata> directories;
+
+    private ActionResultMetadata(
+        ImmutableMap<Path, FileMetadata> files,
+        ImmutableMap<Path, SymlinkMetadata> symlinks,
+        ImmutableMap<Path, DirectoryMetadata> directories) {
+      this.files = files;
+      this.symlinks = symlinks;
+      this.directories = directories;
+    }
+
+    @Nullable
+    public FileMetadata file(Path path) {
+      return files.get(path);
+    }
+
+    @Nullable
+    public DirectoryMetadata directory(Path path) {
+      return directories.get(path);
+    }
+
+    public Collection<FileMetadata> files() {
+      return files.values();
+    }
+
+    public ImmutableSet<Entry<Path, DirectoryMetadata>> directories() {
+      return directories.entrySet();
+    }
+
+    public Collection<SymlinkMetadata> symlinks() {
+      return symlinks.values();
+    }
+  }
+
+  @VisibleForTesting
+  protected <T> T getFromFuture(ListenableFuture<T> f) throws IOException, InterruptedException {
+    return Utils.getFromFuture(f);
   }
 }

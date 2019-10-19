@@ -22,8 +22,6 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
 import java.io.PrintStream;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
 /**
@@ -48,28 +46,7 @@ public interface MemoizingEvaluator {
    * missing.
    */
   <T extends SkyValue> EvaluationResult<T> evaluate(
-      Iterable<? extends SkyKey> roots,
-      Version version,
-      boolean keepGoing,
-      int numThreads,
-      ExtendedEventHandler reporter)
-      throws InterruptedException;
-
-  /**
-   * Computes the transitive closure of a given set of values at the given {@link Version}. See
-   * {@link EagerInvalidator#invalidate}.
-   *
-   * <p>The returned EvaluationResult is guaranteed to contain a result for at least one root if
-   * keepGoing is false. It will contain a result for every root if keepGoing is true, <i>unless</i>
-   * the evaluation failed with a "catastrophic" error. In that case, some or all results may be
-   * missing.
-   */
-  <T extends SkyValue> EvaluationResult<T> evaluate(
-      Iterable<? extends SkyKey> roots,
-      Version version,
-      boolean keepGoing,
-      Supplier<ExecutorService> executorService,
-      ExtendedEventHandler reporter)
+      Iterable<? extends SkyKey> roots, Version version, EvaluationContext evaluationContext)
       throws InterruptedException;
 
   /**
@@ -112,10 +89,10 @@ public interface MemoizingEvaluator {
 
   /**
    * Returns the node entries in the graph. Should only be called between evaluations. The returned
-   * map is mutable, but do not mutate it unless you know what you are doing! Naively deleting an
-   * entry will break graph invariants and cause a crash.
+   * iterable is mutable, but do not mutate it unless you know what you are doing! Naively deleting
+   * an entry will break graph invariants and cause a crash.
    */
-  Map<SkyKey, ? extends NodeEntry> getGraphMap();
+  Iterable<? extends Map.Entry<SkyKey, ? extends NodeEntry>> getGraphEntries();
 
   /**
    * Informs the evaluator that a sequence of evaluations at the same version has finished.
@@ -123,7 +100,17 @@ public interface MemoizingEvaluator {
    * the same version. A call of this method tells the evaluator that the next evaluation is not
    * guaranteed to be at the same version.
    */
-  default void noteEvaluationsAtSameVersionMayBeFinished() throws InterruptedException {}
+  default void noteEvaluationsAtSameVersionMayBeFinished(ExtendedEventHandler eventHandler)
+      throws InterruptedException {
+    postLoggingStats(eventHandler);
+  }
+
+  /**
+   * Tells the evaluator to post any logging statistics that it may have accumulated over the last
+   * sequence of evaluations. Normally called internally by {@link
+   * #noteEvaluationsAtSameVersionMayBeFinished}.
+   */
+  default void postLoggingStats(ExtendedEventHandler eventHandler) {}
 
   /**
    * Returns the done (without error) values in the graph.

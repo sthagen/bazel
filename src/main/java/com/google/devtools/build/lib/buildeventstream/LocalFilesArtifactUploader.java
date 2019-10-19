@@ -13,40 +13,24 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildeventstream;
 
-import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent.LocalFile;
+import com.google.devtools.build.lib.buildeventstream.PathConverter.FileUriPathConverter;
 import com.google.devtools.build.lib.vfs.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.annotation.Nullable;
 
 /** An uploader that simply turns paths into local file URIs. */
-class LocalFilesArtifactUploader implements BuildEventArtifactUploader {
-  private final ListeningExecutorService uploadExecutor =
-      MoreExecutors.listeningDecorator(Executors.newCachedThreadPool());
+public class LocalFilesArtifactUploader implements BuildEventArtifactUploader {
+  private static final FileUriPathConverter FILE_URI_PATH_CONVERTER = new FileUriPathConverter();
+  private final ConcurrentHashMap<Path, Boolean> fileIsDirectory = new ConcurrentHashMap<>();
 
   @Override
   public ListenableFuture<PathConverter> upload(Map<Path, LocalFile> files) {
-    List<ListenableFuture<PathLookupResult>> lookups = new ArrayList<>();
-    for (Path path : files.keySet()) {
-      lookups.add(uploadExecutor.submit(() -> new PathLookupResult(path, path.isDirectory())));
-    }
-    return Futures.transform(
-        Futures.allAsList(lookups),
-        lookupList -> {
-          ImmutableMap.Builder<Path, PathLookupResult> pathLookups = ImmutableMap.builder();
-          for (PathLookupResult lookup : lookupList) {
-            pathLookups.put(lookup.path, lookup);
-          }
-          return new PathConverterImpl(pathLookups.build());
-        },
-        MoreExecutors.directExecutor());
+    return Futures.immediateFuture(new PathConverterImpl(files.keySet()));
   }
 
   @Override
@@ -54,36 +38,29 @@ class LocalFilesArtifactUploader implements BuildEventArtifactUploader {
     // Intentionally left empty
   }
 
-  private static class PathLookupResult {
-    final Path path;
-    final boolean isDirectory;
-
-    private PathLookupResult(Path path, boolean isDirectory) {
-      this.path = path;
-      this.isDirectory = isDirectory;
-    }
+  @Override
+  public boolean mayBeSlow() {
+    return false;
   }
 
-  private static class PathConverterImpl implements PathConverter {
-    private static final FileUriPathConverter FILE_URI_PATH_CONVERTER = new FileUriPathConverter();
-    private final Map<Path, PathLookupResult> pathLookups;
+  private class PathConverterImpl implements PathConverter {
+    private final Set<Path> paths;
 
-    private PathConverterImpl(Map<Path, PathLookupResult> pathLookups) {
-      this.pathLookups = pathLookups;
+    private PathConverterImpl(Set<Path> paths) {
+      this.paths = paths;
     }
 
     @Nullable
     @Override
     public String apply(Path path) {
-      PathLookupResult result = pathLookups.get(path);
-      if (result == null) {
+      if (!paths.contains(path)) {
         // We should throw here, the file wasn't declared in BuildEvent#referencedLocalFiles
         return null;
       }
-      if (result.isDirectory) {
+      if (fileIsDirectory.computeIfAbsent(path, Path::isDirectory)) {
         return null;
       }
-      return FILE_URI_PATH_CONVERTER.apply(result.path);
+      return FILE_URI_PATH_CONVERTER.apply(path);
     }
   }
 }

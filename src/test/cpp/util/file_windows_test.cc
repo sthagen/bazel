@@ -11,9 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 #include <stdio.h>
 #include <string.h>
-#include <windows.h>
 
 #include <algorithm>
 #include <memory>
@@ -43,9 +48,6 @@ using bazel::windows::CreateJunctionResult;
 using std::string;
 using std::unique_ptr;
 using std::wstring;
-
-// Methods defined in file_windows.cc that are only visible for testing.
-string NormalizeWindowsPath(string path);
 
 class FileWindowsTest : public ::testing::Test {
  public:
@@ -158,6 +160,10 @@ TEST_F(FileWindowsTest, TestIsDirectory) {
   string dir1(JoinPath(tmpdir, "dir1"));
   ASSERT_EQ(0, mkdir(dir1.c_str()));
   ASSERT_TRUE(IsDirectory(dir1));
+
+  wstring wtmpdir(GetTestTmpDirW());
+  EXPECT_TRUE(CreateDummyFile(wtmpdir + L"\\dummy.txt"));
+  ASSERT_FALSE(IsDirectory(tmpdir + "\\dummy.txt"));
 
   // Verify that IsDirectory works for a junction.
   string junc1(JoinPath(tmpdir, "junc1"));
@@ -299,30 +305,38 @@ TEST_F(FileWindowsTest, TestMakeCanonical) {
   ASSERT_NE(symcanon, "");
   ASSERT_EQ(symcanon.find(expected), symcanon.size() - expected.size());
   ASSERT_EQ(dircanon, symcanon);
+  // Assert the canonical path of "subdirectory" via the real path and via sym2.
+  // The latter contains at least two junction components, shortened paths, and
+  // mixed casing.
+  dircanon = MakeCanonical(dir2.c_str());
+  symcanon = MakeCanonical(sym2.c_str());
+  expected = "directory\\subdirectory";
+  ASSERT_NE(symcanon, "");
+  ASSERT_EQ(symcanon.find(expected), symcanon.size() - expected.size());
+  ASSERT_EQ(dircanon, symcanon);
 }
 
 TEST_F(FileWindowsTest, TestMtimeHandling) {
   const char* tempdir_cstr = getenv("TEST_TMPDIR");
   ASSERT_NE(tempdir_cstr, nullptr);
   ASSERT_NE(tempdir_cstr[0], 0);
-  string tempdir(tempdir_cstr);
+  Path tempdir(tempdir_cstr);
 
-  string target(JoinPath(tempdir, "target" TOSTRING(__LINE__)));
-  wstring wtarget;
-  EXPECT_TRUE(AsWindowsPath(target, &wtarget, nullptr));
-  EXPECT_TRUE(CreateDirectoryW(wtarget.c_str(), NULL));
+  Path target = tempdir.GetRelative("target" TOSTRING(__LINE__));
+  EXPECT_TRUE(CreateDirectoryW(target.AsNativePath().c_str(), NULL));
 
   std::unique_ptr<IFileMtime> mtime(CreateFileMtime());
   // Assert that a directory is always a good embedded binary. (We do not care
   // about directories' mtimes.)
   ASSERT_TRUE(mtime.get()->IsUntampered(target));
   // Assert that junctions whose target exists are "good" embedded binaries.
-  string sym(JoinPath(tempdir, "junc" TOSTRING(__LINE__)));
-  CREATE_JUNCTION(sym, target);
+  Path sym = tempdir.GetRelative("junc" TOSTRING(__LINE__));
+  EXPECT_EQ(CreateJunction(sym.AsNativePath(), target.AsNativePath(), nullptr),
+            CreateJunctionResult::kSuccess);
   ASSERT_TRUE(mtime.get()->IsUntampered(sym));
   // Assert that checking fails for non-existent directories and dangling
   // junctions.
-  EXPECT_TRUE(RemoveDirectoryW(wtarget.c_str()));
+  EXPECT_TRUE(RemoveDirectoryW(target.AsNativePath().c_str()));
   ASSERT_FALSE(mtime.get()->IsUntampered(target));
   ASSERT_FALSE(mtime.get()->IsUntampered(sym));
 }

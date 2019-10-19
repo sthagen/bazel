@@ -16,45 +16,80 @@ package com.google.devtools.build.lib.skylarkbuildapi.cpp;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.skylarkbuildapi.Bootstrap;
+import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
+import com.google.devtools.build.lib.skylarkbuildapi.SkylarkActionFactoryApi;
+import com.google.devtools.build.lib.skylarkbuildapi.SkylarkRuleContextApi;
+import com.google.devtools.build.lib.syntax.FlagGuardedValue;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 
 /**
  * {@link Bootstrap} for skylark objects related to cpp rules.
  */
 public class CcBootstrap implements Bootstrap {
-
-  private final BazelCcModuleApi<
-          ? extends CcToolchainProviderApi,
+  private final CcModuleApi<
+          ? extends SkylarkActionFactoryApi,
+          ? extends FileApi,
+          ? extends CcToolchainProviderApi<? extends FeatureConfigurationApi>,
           ? extends FeatureConfigurationApi,
-          ? extends CompilationInfoApi,
-          ? extends CcCompilationInfoApi,
-          ? extends CcCompilationOutputsApi,
-          ? extends LinkingInfoApi,
-          ? extends CcLinkingInfoApi,
+          ? extends CcCompilationContextApi,
+          ? extends CcLinkingContextApi<? extends FileApi>,
+          ? extends LibraryToLinkApi<? extends FileApi>,
           ? extends CcToolchainVariablesApi,
-          ? extends LibraryToLinkApi,
-          ? extends CcLinkParamsApi,
-          ? extends CcSkylarkInfoApi>
+          ? extends SkylarkRuleContextApi,
+          ? extends CcToolchainConfigInfoApi,
+          ? extends CcCompilationOutputsApi<? extends FileApi>>
       ccModule;
 
+  private final CcInfoApi.Provider ccInfoProvider;
+  private final CcToolchainConfigInfoApi.Provider ccToolchainConfigInfoProvider;
+  private final PyWrapCcHelperApi<?, ?, ?, ?, ?, ?, ?, ?> pyWrapCcHelper;
+  private final GoWrapCcHelperApi<?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?> goWrapCcHelper;
+  private final PyWrapCcInfoApi.Provider pyWrapCcInfoProvider;
+  private final PyCcLinkParamsProviderApi.Provider pyCcLinkInfoParamsInfoProvider;
+
   public CcBootstrap(
-      BazelCcModuleApi<
-              ? extends CcToolchainProviderApi,
+      CcModuleApi<
+              ? extends SkylarkActionFactoryApi,
+              ? extends FileApi,
+              ? extends CcToolchainProviderApi<? extends FeatureConfigurationApi>,
               ? extends FeatureConfigurationApi,
-              ? extends CompilationInfoApi,
-              ? extends CcCompilationInfoApi,
-              ? extends CcCompilationOutputsApi,
-              ? extends LinkingInfoApi,
-              ? extends CcLinkingInfoApi,
+              ? extends CcCompilationContextApi,
+              ? extends CcLinkingContextApi<? extends FileApi>,
+              ? extends LibraryToLinkApi<? extends FileApi>,
               ? extends CcToolchainVariablesApi,
-              ? extends LibraryToLinkApi,
-              ? extends CcLinkParamsApi,
-              ? extends CcSkylarkInfoApi>
-          ccModule) {
+              ? extends SkylarkRuleContextApi,
+              ? extends CcToolchainConfigInfoApi,
+              ? extends CcCompilationOutputsApi<? extends FileApi>>
+          ccModule,
+      CcInfoApi.Provider ccInfoProvider,
+      CcToolchainConfigInfoApi.Provider ccToolchainConfigInfoProvider,
+      PyWrapCcHelperApi<?, ?, ?, ?, ?, ?, ?, ?> pyWrapCcHelper,
+      GoWrapCcHelperApi<?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?> goWrapCcHelper,
+      PyWrapCcInfoApi.Provider pyWrapCcInfoProvider,
+      PyCcLinkParamsProviderApi.Provider pyCcLinkInfoParamsInfoProvider) {
     this.ccModule = ccModule;
+    this.ccInfoProvider = ccInfoProvider;
+    this.ccToolchainConfigInfoProvider = ccToolchainConfigInfoProvider;
+    this.pyWrapCcHelper = pyWrapCcHelper;
+    this.goWrapCcHelper = goWrapCcHelper;
+    this.pyWrapCcInfoProvider = pyWrapCcInfoProvider;
+    this.pyCcLinkInfoParamsInfoProvider = pyCcLinkInfoParamsInfoProvider;
   }
 
   @Override
   public void addBindingsToBuilder(ImmutableMap.Builder<String, Object> builder) {
     builder.put("cc_common", ccModule);
+    builder.put("CcInfo", ccInfoProvider);
+    builder.put("CcToolchainConfigInfo", ccToolchainConfigInfoProvider);
+    builder.put(
+        "py_wrap_cc_helper_do_not_use",
+        FlagGuardedValue.onlyWhenExperimentalFlagIsTrue(
+            FlagIdentifier.EXPERIMENTAL_GOOGLE_LEGACY_API, pyWrapCcHelper));
+    builder.put(
+        "go_wrap_cc_helper_do_not_use",
+        FlagGuardedValue.onlyWhenExperimentalFlagIsTrue(
+            FlagIdentifier.EXPERIMENTAL_GOOGLE_LEGACY_API, goWrapCcHelper));
+    builder.put("PyWrapCcInfo", pyWrapCcInfoProvider);
+    builder.put("PyCcLinkParamsProvider", pyCcLinkInfoParamsInfoProvider);
   }
 }

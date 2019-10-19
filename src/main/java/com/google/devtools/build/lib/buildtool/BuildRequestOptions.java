@@ -14,22 +14,24 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.actions.LocalHostCapacity;
 import com.google.devtools.build.lib.util.OptionsUtils;
+import com.google.devtools.build.lib.util.ResourceConverter;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Converters.RangeConverter;
 import com.google.devtools.common.options.Option;
+import com.google.devtools.common.options.OptionDefinition;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
 import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
+import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
-import java.util.ArrayList;
+import com.google.devtools.common.options.RegexPatternOption;
 import java.util.List;
 import java.util.logging.Logger;
-import java.util.regex.Pattern;
+import javax.annotation.Nullable;
 
 /**
  * Options interface for {@link BuildRequest}: can be used to parse command-line arguments.
@@ -38,33 +40,30 @@ import java.util.regex.Pattern;
  * difference between these two sets of options.
  */
 public class BuildRequestOptions extends OptionsBase {
+  public static final OptionDefinition EXPERIMENTAL_MULTI_CPU =
+      OptionsParser.getOptionDefinitionByName(BuildRequestOptions.class, "experimental_multi_cpu");
   private static final Logger logger = Logger.getLogger(BuildRequestOptions.class.getName());
-  private static final int JOBS_TOO_HIGH_WARNING = 1500;
-  @VisibleForTesting public static final int MAX_JOBS = 3000;
+  private static final int JOBS_TOO_HIGH_WARNING = 2500;
+  @VisibleForTesting public static final int MAX_JOBS = 5000;
 
   /* "Execution": options related to the execution of a build: */
 
   @Option(
-    name = "jobs",
-    abbrev = 'j',
-    defaultValue = "auto",
-    documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
-    effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS, OptionEffectTag.EXECUTION},
-    converter = JobsConverter.class,
-    help =
-        "The number of concurrent jobs to run. 0 means build sequentially."
-            + " \"auto\" means to use a reasonable value derived from the machine's hardware"
-            + " profile (e.g. the number of processors). Values above "
-            + MAX_JOBS
-            + " are not allowed, and values above "
-            + JOBS_TOO_HIGH_WARNING
-            + " may cause memory issues."
-  )
+      name = "jobs",
+      abbrev = 'j',
+      defaultValue = "auto",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS, OptionEffectTag.EXECUTION},
+      converter = JobsConverter.class,
+      help =
+          "The number of concurrent jobs to run. Takes {@value FLAG_SYNTAX}. Values must be"
+              + " between 1 and"
+              + MAX_JOBS
+              + " values above "
+              + JOBS_TOO_HIGH_WARNING
+              + " may cause memory issues. \"auto\" calculates a reasonable default based on"
+              + " host resources.")
   public int jobs;
-
-  public int getJobs() {
-    return jobs == 0 ? 1 : jobs; // Treat 0 jobs as a single task.
-  }
 
   @Option(
     name = "progress_report_interval",
@@ -102,103 +101,14 @@ public class BuildRequestOptions extends OptionsBase {
   public boolean verboseExplanations;
 
   @Option(
-    name = "output_filter",
-    converter = Converters.RegexPatternConverter.class,
-    defaultValue = "null",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help = "Only shows warnings for rules with a name matching the provided regular expression."
-  )
-  public Pattern outputFilter;
-
-  @Deprecated
-  @Option(
-    name = "dump_makefile",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "this flag has no effect."
-  )
-  public boolean dumpMakefile;
-
-  @Deprecated
-  @Option(
-    name = "dump_action_graph",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "this flag has no effect."
-  )
-  public boolean dumpActionGraph;
-
-  @Deprecated
-  @Option(
-    name = "dump_action_graph_for_package",
-    allowMultiple = true,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "this flag has no effect."
-  )
-  public List<String> dumpActionGraphForPackage = new ArrayList<>();
-
-  @Deprecated
-  @Option(
-    name = "dump_action_graph_with_middlemen",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "this flag has no effect."
-  )
-  public boolean dumpActionGraphWithMiddlemen;
-
-  @Deprecated
-  @Option(
-    name = "dump_providers",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "This is a no-op."
-  )
-  public boolean dumpProviders;
-
-  @Deprecated
-  @Option(
-    name = "dump_targets",
-    defaultValue = "null",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "this flag has no effect."
-  )
-  public String dumpTargets;
-
-  @Deprecated
-  @Option(
-    name = "dump_host_deps",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "Deprecated"
-  )
-  public boolean dumpHostDeps;
-
-  @Deprecated
-  @Option(
-    name = "dump_to_stdout",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.NO_OP},
-    metadataTags = {OptionMetadataTag.DEPRECATED},
-    help = "Deprecated"
-  )
-  public boolean dumpToStdout;
+      name = "output_filter",
+      converter = Converters.RegexPatternConverter.class,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help = "Only shows warnings for rules with a name matching the provided regular expression.")
+  @Nullable
+  public RegexPatternOption outputFilter;
 
   @Option(
     name = "analyze",
@@ -241,6 +151,14 @@ public class BuildRequestOptions extends OptionsBase {
   public List<String> outputGroups;
 
   @Option(
+      name = "experimental_run_validations",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+      effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.AFFECTS_OUTPUTS},
+      help = "Whether to run validation actions as part of the build.")
+  public boolean runValidationActions;
+
+  @Option(
     name = "show_result",
     defaultValue = "1",
     documentationCategory = OptionDocumentationCategory.LOGGING,
@@ -280,15 +198,15 @@ public class BuildRequestOptions extends OptionsBase {
   public boolean announce;
 
   @Option(
-    name = "symlink_prefix",
-    defaultValue = "null",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "The prefix that is prepended to any of the convenience symlinks that are created "
-            + "after a build. If '/' is passed, then no symlinks are created and no warning is "
-            + "emitted. If omitted, the default value is the name of the build tool."
-  )
+      name = "symlink_prefix",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "The prefix that is prepended to any of the convenience symlinks that are created "
+              + "after a build. If '/' is passed, then no symlinks are created and no warning is "
+              + "emitted. If omitted, the default value is the name of the build tool.")
+  @Nullable
   public String symlinkPrefix;
 
   @Option(
@@ -334,6 +252,8 @@ public class BuildRequestOptions extends OptionsBase {
             + "value from from a file tools/my_def.bzl"
   )
   public List<String> aspects;
+
+  public BuildRequestOptions() throws OptionsParsingException {}
 
   public String getSymlinkPrefix(String productName) {
     return symlinkPrefix == null ? productName + "-" : symlinkPrefix;
@@ -384,7 +304,6 @@ public class BuildRequestOptions extends OptionsBase {
   )
   public boolean printWorkspaceInOutputPathsIfNeeded;
 
-
   @Option(
     name = "use_action_cache",
     defaultValue = "true",
@@ -406,56 +325,73 @@ public class BuildRequestOptions extends OptionsBase {
       help = "This option is deprecated and has no effect.")
   public boolean discardActionsAfterExecution;
 
-  /** Converter for jobs: [0, MAX_JOBS] or "auto". */
-  public static class JobsConverter extends RangeConverter {
-    /**
-     * If not null, indicates the value to return when "auto" is selected. Useful for cases where
-     * the number of jobs is bound by another factor different than what we compute here.
-     */
-    private static Integer fixedAutoJobs;
+  @Option(
+      name = "experimental_async_execution",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      help =
+          "If set to true, Bazel is allowed to run aynchronously, i.e., without reserving a local "
+              + "thread. This only has an effect if the action implementation and the lower-level "
+              + "strategy support it. This setting effectively circumvents the implicit limit of "
+              + "number of concurrently running actions otherwise imposed by the --jobs flag. Use "
+              + "with caution.")
+  public boolean useAsyncExecution;
 
+  @Option(
+      name = "incompatible_skip_genfiles_symlink",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help =
+          "If set to true, the genfiles symlink will not be created. For more information, see "
+              + "https://github.com/bazelbuild/bazel/issues/8651")
+  public boolean incompatibleSkipGenfilesSymlink;
+
+  @Option(
+      name = "experimental_nested_set_as_skykey_threshold",
+      defaultValue = "0",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "If this flag is set with a non-zero value, NestedSets whose size exceeds the threshold"
+              + " will be evaluated as a unit on Skyframe.")
+  public int nestedSetAsSkyKeyThreshold;
+
+  /**
+   * Converter for jobs: Takes keyword ({@value #FLAG_SYNTAX}). Values must be between 1 and
+   * MAX_JOBS.
+   */
+  public static class JobsConverter extends ResourceConverter {
     public JobsConverter() {
-      super(0, MAX_JOBS);
+      super(
+          () -> (int) Math.ceil(LocalHostCapacity.getLocalHostCapacity().getCpuUsage()),
+          1,
+          MAX_JOBS);
     }
 
     @Override
-    public Integer convert(String input) throws OptionsParsingException {
-      if (input.equals("auto")) {
-        int jobs;
-        if (fixedAutoJobs == null) {
-          jobs = (int) Math.ceil(LocalHostCapacity.getLocalHostCapacity().getCpuUsage());
-          if (jobs > MAX_JOBS) {
-            logger.warning(
-                "Detected "
-                    + jobs
-                    + " processors, which exceed the maximum allowed number of jobs of "
-                    + MAX_JOBS
-                    + "; something seems wrong");
-            jobs = MAX_JOBS;
-          }
-        } else {
-          jobs = fixedAutoJobs;
-        }
-        logger.info("Flag \"jobs\" was set to \"auto\"; using " + jobs + " jobs");
-        return jobs;
-      } else {
-        return super.convert(input);
+    public int checkAndLimit(int value) throws OptionsParsingException {
+      if (value < minValue) {
+        throw new OptionsParsingException(
+            String.format("Value '(%d)' must be at least %d.", value, minValue));
       }
-    }
-
-    @Override
-    public String getTypeDescription() {
-      return "\"auto\" or " + super.getTypeDescription();
-    }
-
-    /**
-     * Sets the value to return by this converter when "auto" is selected.
-     *
-     * @param jobs the number of jobs to return, or null to reenable automated detection
-     */
-    public static void setFixedAutoJobs(Integer jobs) {
-      Preconditions.checkArgument(jobs == null || jobs <= MAX_JOBS);
-      fixedAutoJobs = jobs;
+      if (value > maxValue) {
+        logger.warning(
+            String.format(
+                "Flag remoteWorker \"jobs\" ('%d') was set too high. "
+                    + "This is a result of passing large values to --local_resources or --jobs. "
+                    + "Using '%d' jobs",
+                value, maxValue));
+        value = maxValue;
+      }
+      return value;
     }
   }
 

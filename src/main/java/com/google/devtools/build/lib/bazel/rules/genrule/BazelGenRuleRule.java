@@ -15,19 +15,13 @@ package com.google.devtools.build.lib.bazel.rules.genrule;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
-import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL;
-import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
+import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.rules.cpp.CcToolchain;
-import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.genrule.GenRuleBaseRule;
-import com.google.devtools.build.lib.rules.java.JavaConfiguration;
-import com.google.devtools.build.lib.rules.java.JavaRuntimeInfo;
-import com.google.devtools.build.lib.rules.java.JavaSemantics;
 
 /**
  * Rule definition for genrule for Bazel.
@@ -47,23 +41,11 @@ public final class BazelGenRuleRule implements RuleDefinition {
         .setOutputToGenfiles()
         .add(
             attr("$genrule_setup", LABEL)
-                .cfg(HostTransition.INSTANCE)
+                .cfg(HostTransition.createFactory())
                 .value(env.getToolsLabel(GENRULE_SETUP_LABEL)))
-        .requiresConfigurationFragments(CppConfiguration.class, JavaConfiguration.class)
 
         // TODO(bazel-team): stamping doesn't seem to work. Fix it or remove attribute.
         .add(attr("stamp", BOOLEAN).value(false))
-        .add(
-            attr(CcToolchain.CC_TOOLCHAIN_DEFAULT_ATTRIBUTE_NAME, LABEL)
-                .value(GenRuleBaseRule.ccToolchainAttribute(env)))
-        .add(
-            attr(CcToolchain.CC_TOOLCHAIN_TYPE_ATTRIBUTE_NAME, NODEP_LABEL)
-                .value(GenRuleBaseRule.ccToolchainTypeAttribute(env)))
-        .add(
-            attr(":host_jdk", LABEL)
-                .cfg(HostTransition.INSTANCE)
-                .value(JavaSemantics.hostJdkAttribute(env))
-                .mandatoryProviders(JavaRuntimeInfo.PROVIDER.id()))
         .build();
   }
 

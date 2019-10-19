@@ -14,8 +14,7 @@
 package com.google.devtools.build.lib.query2;
 
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.query2.engine.Callback;
-import com.google.devtools.build.lib.query2.engine.QueryException;
+import com.google.devtools.build.lib.query2.ParallelVisitorUtils.QueryVisitorFactory;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.AggregateAllCallback;
 import com.google.devtools.build.lib.query2.engine.Uniquifier;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -33,12 +32,16 @@ class UnfilteredSkyKeyTTVDTCVisitor extends AbstractUnfilteredTTVDTCVisitor<SkyK
     super(
         env,
         uniquifier,
-        ParallelSkyQueryUtils.VISIT_BATCH_SIZE,
         processResultsBatchSize,
         aggregateAllCallback);
   }
 
-  static class Factory implements ParallelVisitor.Factory {
+  @Override
+  protected Iterable<SkyKey> outputKeysToOutputValues(Iterable<SkyKey> targetKeys) {
+    return targetKeys;
+  }
+
+  static class Factory implements QueryVisitorFactory<SkyKey, SkyKey, SkyKey> {
     private final SkyQueryEnvironment env;
     private final Uniquifier<SkyKey> uniquifier;
     private final AggregateAllCallback<SkyKey, ImmutableSet<SkyKey>> aggregateAllCallback;
@@ -56,16 +59,9 @@ class UnfilteredSkyKeyTTVDTCVisitor extends AbstractUnfilteredTTVDTCVisitor<SkyK
     }
 
     @Override
-    public ParallelVisitor<SkyKey, SkyKey> create() {
+    public UnfilteredSkyKeyTTVDTCVisitor create() {
       return new UnfilteredSkyKeyTTVDTCVisitor(
           env, uniquifier, processResultsBatchSize, aggregateAllCallback);
     }
-  }
-
-  @Override
-  protected void processPartialResults(
-      Iterable<SkyKey> keysToUseForResult, Callback<SkyKey> callback)
-      throws QueryException, InterruptedException {
-    callback.process(keysToUseForResult);
   }
 }

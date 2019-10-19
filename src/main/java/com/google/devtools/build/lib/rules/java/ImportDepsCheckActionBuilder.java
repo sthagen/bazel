@@ -34,7 +34,6 @@ public final class ImportDepsCheckActionBuilder {
     return new ImportDepsCheckActionBuilder();
   }
 
-  private Artifact outputArtifact;
   private Artifact jdepsArtifact;
   private Label ruleLabel;
   private NestedSet<Artifact> jarsToCheck;
@@ -48,12 +47,6 @@ public final class ImportDepsCheckActionBuilder {
   public ImportDepsCheckActionBuilder checkJars(NestedSet<Artifact> jarsToCheck) {
     checkState(this.jarsToCheck == null);
     this.jarsToCheck = checkNotNull(jarsToCheck);
-    return this;
-  }
-
-  public ImportDepsCheckActionBuilder outputArtifact(Artifact outputArtifact) {
-    checkState(this.outputArtifact == null);
-    this.outputArtifact = checkNotNull(outputArtifact);
     return this;
   }
 
@@ -95,7 +88,6 @@ public final class ImportDepsCheckActionBuilder {
   }
 
   public void buildAndRegister(RuleContext ruleContext) {
-    checkNotNull(outputArtifact);
     checkNotNull(jarsToCheck);
     checkNotNull(bootclasspath);
     checkNotNull(declaredDeps);
@@ -112,14 +104,11 @@ public final class ImportDepsCheckActionBuilder {
             .addTransitiveInputs(declaredDeps)
             .addTransitiveInputs(transitiveDeps)
             .addTransitiveInputs(bootclasspath)
-            .addOutput(outputArtifact)
             .addOutput(jdepsArtifact)
             .setMnemonic("ImportDepsChecker")
             .setProgressMessage(
                 "Checking the completeness of the deps for %s",
-                jarsToCheck
-                    .toList()
-                    .stream()
+                jarsToCheck.toList().stream()
                     .map(Artifact::prettyPrint)
                     .collect(Collectors.joining(", ")))
             .addCommandLine(buildCommandLine())
@@ -128,7 +117,6 @@ public final class ImportDepsCheckActionBuilder {
 
   private CustomCommandLine buildCommandLine() {
     return CustomCommandLine.builder()
-        .addExecPath("--output", outputArtifact)
         .addExecPaths(VectorArg.addBefore("--input").each(jarsToCheck))
         .addExecPaths(VectorArg.addBefore("--directdep").each(declaredDeps))
         .addExecPaths(VectorArg.addBefore("--classpath_entry").each(transitiveDeps))

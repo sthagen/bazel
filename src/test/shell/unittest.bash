@@ -47,7 +47,7 @@
 # via other assertions such as expect_log().  run_suite must be called
 # at the very end.
 #
-# A test function may redefine functions "set_up" and/or "tear_down";
+# A test suite may redefine functions "set_up" and/or "tear_down";
 # these functions are executed before and after each test function,
 # respectively.  Similarly, "cleanup" and "timeout" may be redefined,
 # and these function are called upon exit (of any kind) or a timeout.
@@ -278,8 +278,14 @@ if [ $# -gt 0 ]; then
   # test with that framework (use Bazel's environment variable instead).
   TESTS=($(for i in $@; do echo $i; done | grep ^test_ || true))
   if (( ${#TESTS[@]} == 0 )); then
-    echo "WARNING: Arguments do not specifies tests!" >&2
+    echo "WARNING: Arguments do not specify tests!" >&2
   fi
+fi
+# TESTBRIDGE_TEST_ONLY contains the value of --test_filter, if any. We want to
+# preferentially use that instead of $@ to determine which tests to run.
+if [[ ${TESTBRIDGE_TEST_ONLY:-} != "" ]]; then
+  # Split TESTBRIDGE_TEST_ONLY on comma and put the results into an array.
+  IFS=',' read -r -a TESTS <<< "$TESTBRIDGE_TEST_ONLY"
 fi
 
 TEST_verbose="true"             # Whether or not to be verbose.  A
@@ -346,6 +352,18 @@ function timeout() {
     :
 }
 
+# Usage: testenv_set_up
+# Called prior to set_up. For use by testenv.sh.
+function testenv_set_up() {
+    :
+}
+
+# Usage: testenv_tear_down
+# Called after tear_down. For use by testenv.sh.
+function testenv_tear_down() {
+    :
+}
+
 # Usage: fail <message> [<message> ...]
 # Print failure message with context information, and mark the test as
 # a failure.  The context includes a stacktrace including the longest sequence
@@ -360,6 +378,7 @@ function fail() {
     __show_stack
     # Cleanup as we are leaving the subshell now
     tear_down
+    testenv_tear_down
     exit 1
 }
 
@@ -648,6 +667,7 @@ function __test_terminated_err() {
     # to run tests, so we shouldn't call tear_down.
     if [[ ! -z "$TEST_name" ]]; then
       tear_down
+      testenv_tear_down
     fi
     exit 1
 }
@@ -783,9 +803,11 @@ function run_suite() {
         __trap_with_arg __test_terminated INT KILL PIPE TERM ABRT FPE ILL QUIT SEGV
         (
           timestamp >$TEST_TMPDIR/__ts_start
+          testenv_set_up
           set_up
           eval $TEST_name
           tear_down
+          testenv_tear_down
           timestamp >$TEST_TMPDIR/__ts_end
           test $TEST_passed == "true"
         ) 2>&1 | tee $TEST_TMPDIR/__log

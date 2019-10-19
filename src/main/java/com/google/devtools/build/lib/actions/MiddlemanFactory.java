@@ -108,7 +108,8 @@ public final class MiddlemanFactory {
   }
 
   /**
-   * Creates a {@link MiddlemanType#ERROR_PROPAGATING_MIDDLEMAN error-propagating} middleman.
+   * Creates a {@link MiddlemanType#SCHEDULING_DEPENDENCY_MIDDLEMAN scheduling dependency}
+   * middleman.
    *
    * @param owner the owner of the action that will be created. May not be null.
    * @param middlemanName a unique file name for the middleman artifact in the {@code middlemanDir};
@@ -123,7 +124,7 @@ public final class MiddlemanFactory {
    *     propagates errors, but is ignored by the dependency checker
    * @throws IllegalArgumentException if {@code inputs} is null or empty
    */
-  public Artifact createErrorPropagatingMiddleman(
+  public Artifact createSchedulingDependencyMiddleman(
       ActionOwner owner,
       String middlemanName,
       String purpose,
@@ -132,17 +133,14 @@ public final class MiddlemanFactory {
     Preconditions.checkArgument(inputs != null);
     Preconditions.checkArgument(!Iterables.isEmpty(inputs));
     // We must always create this middleman even if there is only one input.
-    return createMiddleman(owner, middlemanName, purpose, inputs, middlemanDir,
-        MiddlemanType.ERROR_PROPAGATING_MIDDLEMAN).getFirst();
-  }
-
-  /**
-   * Returns the same artifact as {@code createErrorPropagatingMiddleman} would return, but doesn't
-   * create any action.
-   */
-  public Artifact getErrorPropagatingMiddlemanArtifact(
-      String middlemanName, String purpose, ArtifactRoot middlemanDir) {
-    return getStampFileArtifact(middlemanName, purpose, middlemanDir);
+    return createMiddleman(
+            owner,
+            middlemanName,
+            purpose,
+            inputs,
+            middlemanDir,
+            MiddlemanType.SCHEDULING_DEPENDENCY_MIDDLEMAN)
+        .getFirst();
   }
 
   /**
@@ -181,7 +179,7 @@ public final class MiddlemanFactory {
    * <p>Note: there's no need to synchronize this method; the only use of a field is via a call to
    * another synchronized method (getArtifact()).
    */
-  public Artifact createMiddlemanAllowMultiple(
+  public Artifact.DerivedArtifact createMiddlemanAllowMultiple(
       ActionRegistry registry,
       ActionOwner owner,
       PathFragment packageDirectory,
@@ -192,19 +190,19 @@ public final class MiddlemanFactory {
     PathFragment stampName =
         PathFragment.create("_middlemen/" + (purpose.startsWith(escapedPackageDirectory)
                              ? purpose : (escapedPackageDirectory + purpose)));
-    Artifact stampFile = artifactFactory.getDerivedArtifact(stampName, middlemanDir,
-        actionRegistry.getOwner());
+    Artifact.DerivedArtifact stampFile =
+        artifactFactory.getDerivedArtifact(stampName, middlemanDir, actionRegistry.getOwner());
     MiddlemanAction.create(
         registry, owner, inputs, stampFile, purpose, MiddlemanType.AGGREGATING_MIDDLEMAN);
     return stampFile;
   }
 
-  private Artifact getStampFileArtifact(
+  private Artifact.DerivedArtifact getStampFileArtifact(
       String middlemanName, String purpose, ArtifactRoot middlemanDir) {
     String escapedFilename = Actions.escapedPath(middlemanName);
     PathFragment stampName = PathFragment.create("_middlemen/" + escapedFilename + "-" + purpose);
-    Artifact stampFile = artifactFactory.getDerivedArtifact(stampName, middlemanDir,
-        actionRegistry.getOwner());
+    Artifact.DerivedArtifact stampFile =
+        artifactFactory.getDerivedArtifact(stampName, middlemanDir, actionRegistry.getOwner());
     return stampFile;
   }
 }

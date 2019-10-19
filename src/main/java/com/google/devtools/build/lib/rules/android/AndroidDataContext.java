@@ -13,17 +13,24 @@
 // limitations under the License
 package com.google.devtools.build.lib.rules.android;
 
+import static com.google.devtools.build.lib.analysis.config.CompilationMode.OPT;
+
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.Whitelist;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
+import com.google.devtools.build.lib.packages.RuleErrorConsumer;
+import com.google.devtools.build.lib.packages.TriState;
 import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidDataContextApi;
+import com.google.devtools.build.lib.vfs.PathFragment;
 
 /**
  * Wraps common tools and settings used for working with Android assets, resources, and manifests.
@@ -37,47 +44,88 @@ import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidDataContextA
  * are used in BusyBox actions.
  */
 public class AndroidDataContext implements AndroidDataContextApi {
-  private final Label label;
-  private final ActionConstructionContext actionConstructionContext;
+
+  // Feature which would cause AndroidCompiledResourceMerger actions to pass a flag with the same
+  // name to ResourceProcessorBusyBox.
+  private static final String ANNOTATE_R_FIELDS_FROM_TRANSITIVE_DEPS =
+      "annotate_r_fields_from_transitive_deps";
+
+  // If specified, omit resources from transitive dependencies when generating Android R classes.
+  private static final String OMIT_TRANSITIVE_RESOURCES_FROM_ANDROID_R_CLASSES =
+      "android_resources_strict_deps";
+
+  private final RuleContext ruleContext;
   private final FilesToRunProvider busybox;
   private final AndroidSdkProvider sdk;
   private final boolean persistentBusyboxToolsEnabled;
+  private final boolean compatibleForResourcePathShortening;
+  private final boolean compatibleForResourceNameObfuscation;
+  private final boolean throwOnProguardApplyDictionary;
+  private final boolean throwOnProguardApplyMapping;
+  private final boolean throwOnResourceConflict;
+  private final boolean useDataBindingV2;
 
   public static AndroidDataContext forNative(RuleContext ruleContext) {
     return makeContext(ruleContext);
   }
 
   public static AndroidDataContext makeContext(RuleContext ruleContext) {
+    AndroidConfiguration androidConfig =
+        ruleContext.getConfiguration().getFragment(AndroidConfiguration.class);
+
     return new AndroidDataContext(
-        ruleContext.getLabel(),
         ruleContext,
         ruleContext.getExecutablePrerequisite("$android_resources_busybox", Mode.HOST),
-        ruleContext
-            .getConfiguration()
-            .getFragment(AndroidConfiguration.class)
-            .persistentBusyboxTools(),
-        AndroidSdkProvider.fromRuleContext(ruleContext));
+        androidConfig.persistentBusyboxTools(),
+        AndroidSdkProvider.fromRuleContext(ruleContext),
+        lacksAllowlistExemptions(ruleContext, "allow_raw_access_to_resource_paths", true),
+        lacksAllowlistExemptions(ruleContext, "allow_resource_name_obfuscation_opt_out", true),
+        lacksAllowlistExemptions(ruleContext, "allow_proguard_apply_dictionary", false),
+        lacksAllowlistExemptions(ruleContext, "allow_proguard_apply_mapping", false),
+        lacksAllowlistExemptions(ruleContext, "allow_resource_conflicts", false),
+        androidConfig.useDataBindingV2());
+  }
+
+  private static boolean lacksAllowlistExemptions(
+      RuleContext ruleContext, String whitelistName, boolean valueIfNoWhitelist) {
+    return Whitelist.hasWhitelist(ruleContext, whitelistName)
+        ? !Whitelist.isAvailable(ruleContext, whitelistName)
+        : valueIfNoWhitelist;
   }
 
   protected AndroidDataContext(
-      Label label,
-      ActionConstructionContext actionConstructionContext,
+      RuleContext ruleContext,
       FilesToRunProvider busybox,
       boolean persistentBusyboxToolsEnabled,
-      AndroidSdkProvider sdk) {
-    this.label = label;
+      AndroidSdkProvider sdk,
+      boolean compatibleForResourcePathShortening,
+      boolean compatibleForResourceNameObfuscation,
+      boolean throwOnProguardApplyDictionary,
+      boolean throwOnProguardApplyMapping,
+      boolean throwOnResourceConflict,
+      boolean useDataBindingV2) {
     this.persistentBusyboxToolsEnabled = persistentBusyboxToolsEnabled;
-    this.actionConstructionContext = actionConstructionContext;
+    this.ruleContext = ruleContext;
     this.busybox = busybox;
     this.sdk = sdk;
+    this.compatibleForResourcePathShortening = compatibleForResourcePathShortening;
+    this.compatibleForResourceNameObfuscation = compatibleForResourceNameObfuscation;
+    this.throwOnProguardApplyDictionary = throwOnProguardApplyDictionary;
+    this.throwOnProguardApplyMapping = throwOnProguardApplyMapping;
+    this.throwOnResourceConflict = throwOnResourceConflict;
+    this.useDataBindingV2 = useDataBindingV2;
   }
 
   public Label getLabel() {
-    return label;
+    return ruleContext.getLabel();
   }
 
   public ActionConstructionContext getActionConstructionContext() {
-    return actionConstructionContext;
+    return ruleContext;
+  }
+
+  public RuleErrorConsumer getRuleErrorConsumer() {
+    return ruleContext;
   }
 
   public FilesToRunProvider getBusybox() {
@@ -94,34 +142,124 @@ public class AndroidDataContext implements AndroidDataContextApi {
 
   /** Builds and registers a {@link SpawnAction.Builder}. */
   public void registerAction(SpawnAction.Builder spawnActionBuilder) {
-    registerAction(spawnActionBuilder.build(actionConstructionContext));
+    registerAction(spawnActionBuilder.build(ruleContext));
   }
 
   /** Registers one or more actions. */
   public void registerAction(ActionAnalysisMetadata... actions) {
-    actionConstructionContext.registerAction(actions);
+    ruleContext.registerAction(actions);
   }
 
   public Artifact createOutputArtifact(SafeImplicitOutputsFunction function)
       throws InterruptedException {
-    return actionConstructionContext.getImplicitOutputArtifact(function);
+    return ruleContext.getImplicitOutputArtifact(function);
   }
 
   public Artifact getUniqueDirectoryArtifact(String uniqueDirectorySuffix, String relative) {
-    return actionConstructionContext.getUniqueDirectoryArtifact(uniqueDirectorySuffix, relative);
+    return ruleContext.getUniqueDirectoryArtifact(uniqueDirectorySuffix, relative);
+  }
+
+  public Artifact getUniqueDirectoryArtifact(String uniqueDirectorySuffix, PathFragment relative) {
+    return ruleContext.getUniqueDirectoryArtifact(uniqueDirectorySuffix, relative);
+  }
+
+  public PathFragment getUniqueDirectory(PathFragment fragment) {
+    return ruleContext.getUniqueDirectory(fragment);
+  }
+
+  public ArtifactRoot getBinOrGenfilesDirectory() {
+    return ruleContext.getBinOrGenfilesDirectory();
+  }
+
+  public PathFragment getPackageDirectory() {
+    return ruleContext.getPackageDirectory();
   }
 
   public AndroidConfiguration getAndroidConfig() {
-    return actionConstructionContext.getConfiguration().getFragment(AndroidConfiguration.class);
+    return ruleContext.getConfiguration().getFragment(AndroidConfiguration.class);
   }
 
   /** Indicates whether Busybox actions should be passed the "--debug" flag */
   public boolean useDebug() {
-    return getActionConstructionContext().getConfiguration().getCompilationMode()
-        != CompilationMode.OPT;
+    return getActionConstructionContext().getConfiguration().getCompilationMode() != OPT;
   }
 
   public boolean isPersistentBusyboxToolsEnabled() {
     return persistentBusyboxToolsEnabled;
+  }
+
+  public boolean compatibleForResourcePathShortening() {
+    return compatibleForResourcePathShortening;
+  }
+
+  public boolean compatibleForResourceNameObfuscation() {
+    return compatibleForResourceNameObfuscation;
+  }
+
+  public boolean throwOnProguardApplyDictionary() {
+    return throwOnProguardApplyDictionary;
+  }
+
+  public boolean throwOnProguardApplyMapping() {
+    return throwOnProguardApplyMapping;
+  }
+
+  public boolean throwOnResourceConflict() {
+    return throwOnResourceConflict;
+  }
+
+  public boolean useDataBindingV2() {
+    return useDataBindingV2;
+  }
+
+  public boolean annotateRFieldsFromTransitiveDeps() {
+    return ruleContext.getFeatures().contains(ANNOTATE_R_FIELDS_FROM_TRANSITIVE_DEPS);
+  }
+
+  boolean omitTransitiveResourcesFromAndroidRClasses() {
+    return ruleContext.getFeatures().contains(OMIT_TRANSITIVE_RESOURCES_FROM_ANDROID_R_CLASSES);
+  }
+
+  /** Returns true if the context dictates that resource shrinking should be performed. */
+  boolean useResourceShrinking(boolean hasProguardSpecs) {
+    return isResourceShrinkingEnabled() && hasProguardSpecs;
+  }
+
+  /**
+   * Returns true if the context dictates that resource shrinking is enabled. This doesn't
+   * necessarily mean that shrinking should be performed - for that, use {@link
+   * #useResourceShrinking(boolean)}, which calls this.
+   */
+  boolean isResourceShrinkingEnabled() {
+    if (!ruleContext.attributes().has("shrink_resources")) {
+      return false;
+    }
+
+    TriState state = ruleContext.attributes().get("shrink_resources", BuildType.TRISTATE);
+    if (state == TriState.AUTO) {
+      state = getAndroidConfig().useAndroidResourceShrinking() ? TriState.YES : TriState.NO;
+    }
+
+    return state == TriState.YES;
+  }
+
+  boolean useResourcePathShortening() {
+    // Use resource path shortening iff:
+    //   1) --experimental_android_resource_path_shortening
+    //   2) -c opt
+    //   3) Not on allowlist exempting from compatibleForResourcePathShortening
+    return getAndroidConfig().useAndroidResourcePathShortening()
+        && getActionConstructionContext().getConfiguration().getCompilationMode() == OPT
+        && compatibleForResourcePathShortening;
+  }
+
+  boolean useResourceNameObfuscation(boolean hasProguardSpecs) {
+    // Use resource name obfuscation iff:
+    //   1) --experimental_android_resource_name_obfuscation
+    //   2) resource shrinking is on (implying proguard specs are present)
+    //   3) Not on allowlist exempting from compatibleForResourceNameObfuscation
+    return getAndroidConfig().useAndroidResourceNameObfuscation()
+        && useResourceShrinking(hasProguardSpecs)
+        && compatibleForResourceNameObfuscation;
   }
 }

@@ -140,15 +140,9 @@ public class ProxyHelper {
       try {
         port = Integer.parseInt(portRaw);
       } catch (NumberFormatException e) {
-        throw new IOException("Error parsing proxy port: " + cleanProxyAddress);
+        throw new IOException("Error parsing proxy port: " + cleanProxyAddress, e);
       }
     }
-
-    // We need to set both of these because jgit uses whichever the resource dictates
-    System.setProperty("https.proxyHost", hostname);
-    System.setProperty("https.proxyPort", Integer.toString(port));
-    System.setProperty("http.proxyHost", hostname);
-    System.setProperty("http.proxyPort", Integer.toString(port));
 
     if (username != null) {
       if (password == null) {
@@ -158,11 +152,6 @@ public class ProxyHelper {
       // We need to make sure the proxy password is not url encoded; some special characters in
       // proxy passwords require url encoding for shells and other tools to properly consume.
       final String decodedPassword = URLDecoder.decode(password, "UTF-8");
-      System.setProperty("http.proxyUser", username);
-      System.setProperty("http.proxyPassword", decodedPassword);
-      System.setProperty("https.proxyUser", username);
-      System.setProperty("https.proxyPassword", decodedPassword);
-
       Authenticator.setDefault(
           new Authenticator() {
             @Override

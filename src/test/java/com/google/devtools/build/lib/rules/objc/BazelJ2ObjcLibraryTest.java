@@ -32,22 +32,21 @@ import com.google.devtools.build.lib.actions.ActionTemplate.ActionTemplateExpans
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.CommandAction;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
-import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform.PlatformType;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.cpp.CppCompileActionTemplate;
 import com.google.devtools.build.lib.rules.cpp.CppModuleMapAction;
 import com.google.devtools.build.lib.rules.cpp.UmbrellaHeaderAction;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -159,6 +158,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     scratch.file("java/com/google/dummy/test/proto/test.proto");
     scratch.file(
         "java/com/google/dummy/test/proto/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
         "package(default_visibility=['//visibility:public'])",
         "proto_library(",
         "    name = 'test_proto',",
@@ -243,6 +243,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     scratch.file("java/com/google/dummy/test/proto/test.proto");
     scratch.file(
         "java/com/google/dummy/test/proto/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
         "package(default_visibility=['//visibility:public'])",
         "proto_library(",
         "    name = 'test_proto',",
@@ -275,6 +276,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
   public void testJavaProtoLibraryWithProtoLibrary() throws Exception {
     scratch.file(
         "x/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
         "proto_library(",
         "    name = 'test_proto',",
         "    srcs = ['test.proto'],",
@@ -309,6 +311,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     // Create the rule '@bla//foo:test_proto'.
     scratch.file(
         "/bla/foo/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
         "package(default_visibility=['//visibility:public'])",
         "proto_library(",
         "    name = 'test_proto',",
@@ -470,7 +473,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     assertThat(sources.isTreeArtifact()).isTrue();
 
     SpawnAction j2objcAction = (SpawnAction) getGeneratingAction(headers);
-    assertThat(j2objcAction.getOutputs()).containsAllOf(headers, sources);
+    assertThat(j2objcAction.getOutputs()).containsAtLeast(headers, sources);
 
     assertContainsSublist(
         ImmutableList.copyOf(paramFileArgsForAction(j2objcAction)),
@@ -511,7 +514,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     String execPath =
         getConfiguration(target).getBinDirectory(RepositoryName.MAIN).getExecPath() + "/";
     assertThat(Artifact.toRootRelativePaths(headerMappingAction.getInputs()))
-        .containsAllOf(
+        .containsAtLeast(
             "java/com/google/transpile/libOne.java", "java/com/google/transpile/jar.srcjar");
     assertThat(headerMappingAction.getArguments())
         .containsExactly(
@@ -530,7 +533,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
       throws Exception {
     CommandAction compileAction = getObjcCompileAction(archiveFile, objFileName);
     assertThat(Artifact.toRootRelativePaths(compileAction.getPossibleInputsForTesting()))
-        .containsAllIn(compilationInputExecPaths);
+        .containsAtLeastElementsIn(compilationInputExecPaths);
   }
 
   protected CommandAction getObjcCompileAction(Artifact archiveFile, String objFileName)
@@ -723,7 +726,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     String binDir =
         getConfiguration(target).getBinDirectory(RepositoryName.MAIN).getExecPathString();
     assertThat(paramFileArgsForAction(linkAction))
-        .containsAllOf(
+        .containsAtLeast(
             binDir + "/java/c/y/libylib_j2objc.a",
             // All jre libraries mus appear after java libraries in the link order.
             binDir
@@ -791,6 +794,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
             actionKeyContext,
             null,
             null,
+            null,
             ImmutableMap.<String, String>of(),
             ImmutableMap.of(),
             DUMMY_ARTIFACT_EXPANDER,
@@ -843,7 +847,8 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
             actionKeyContext,
             null,
             null,
-            ImmutableMap.<String, String>of(),
+            null,
+            ImmutableMap.of(),
             ImmutableMap.of(),
             DUMMY_ARTIFACT_EXPANDER,
             null,
@@ -881,11 +886,12 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     Artifact archive = j2objcArchive("//java/com/google/dummy/test:transpile", "test");
     CommandAction compileAction = getObjcCompileAction(archive, "test.o");
     assertThat(Artifact.toRootRelativePaths(compileAction.getPossibleInputsForTesting()))
-        .containsAllOf(
+        .containsAtLeast(
             TestConstants.TOOLS_REPOSITORY_PATH_PREFIX + "third_party/java/j2objc/jre_core.h",
             "java/com/google/dummy/test/_j2objc/test/java/com/google/dummy/test/test.h",
             "java/com/google/dummy/test/_j2objc/test/java/com/google/dummy/test/test.m");
-    assertThat(compileAction.getArguments()).containsAllOf("-fno-objc-arc", "-fno-strict-overflow");
+    assertThat(compileAction.getArguments())
+        .containsAtLeast("-fno-objc-arc", "-fno-strict-overflow");
   }
 
   @Test
@@ -949,7 +955,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "examples/fake_rule.bzl",
         "def _fake_rule_impl(ctx):",
         "  myProvider = ctx.attr.deps[0][JavaInfo]",
-        "  return struct(providers = [myProvider])",
+        "  return myProvider",
         "",
         "fake_rule = rule(",
         "  implementation = _fake_rule_impl,",
@@ -1026,6 +1032,8 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     scratch.overwriteFile(
         "tools/j2objc/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
+        TestConstants.LOAD_PROTO_LANG_TOOLCHAIN,
         "package(default_visibility=['//visibility:public'])",
         "exports_files(['j2objc_deploy.jar'])",
         "filegroup(",
@@ -1065,6 +1073,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     scratch.file("java/com/google/dummy/test/proto/test.proto");
     scratch.file(
         "java/com/google/dummy/test/proto/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
         "package(default_visibility=['//visibility:public'])",
         "proto_library(",
         "    name = 'test_proto',",
@@ -1165,13 +1174,13 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     return ImmutableList.<CommandAction>builder()
         .addAll(
             template.generateActionForInputArtifacts(
-                ImmutableList.of(treeFileArtifact), ArtifactOwner.NullArtifactOwner.INSTANCE))
+                ImmutableList.of(treeFileArtifact), ActionsTestUtil.NULL_ARTIFACT_OWNER))
         .build();
   }
 
   @Test
   public void testCompileActionTemplateFromGenJar() throws Exception {
-    useConfiguration("--cpu=ios_i386", "--ios_minimum_os=1.0");
+    useConfiguration("--apple_platform_type=ios", "--cpu=ios_i386", "--ios_minimum_os=1.0");
     addSimpleJ2ObjcLibraryWithJavaPlugin();
     Artifact archive = j2objcArchive("//java/com/google/app/test:transpile", "test");
     CommandAction archiveAction = (CommandAction) getGeneratingAction(archive);
@@ -1209,8 +1218,6 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     String genfilesFragment =
         getConfiguration(j2objcLibraryTarget).getGenfilesFragment().toString();
     String binFragment = getConfiguration(j2objcLibraryTarget).getBinFragment().toString();
-    AppleConfiguration appleConfiguration =
-        getConfiguration(j2objcLibraryTarget).getFragment(AppleConfiguration.class);
 
     String commandLine = Joiner.on(" ").join(compileAction.getArguments());
     ImmutableList<String> expectedArgs =
@@ -1225,10 +1232,6 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
             .add("-arch", "i386")
             .add("-isysroot")
             .add(AppleToolchain.sdkDir())
-            .add("-F")
-            .add(AppleToolchain.sdkDir() + "/Developer/Library/Frameworks")
-            .add("-F")
-            .add(AppleToolchain.platformDeveloperFrameworkDir(appleConfiguration))
             .add("-O0")
             .add("-DDEBUG=1")
             .add("-iquote")
@@ -1313,7 +1316,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     // building a transitive provider from the target-to-build's deps. We duplicate that behavior
     // here to make sure we're testing the provider set that the eventual target library would see.
     ObjcProvider newProvider =
-        new ObjcProvider.Builder(SkylarkSemantics.DEFAULT_SEMANTICS)
+        new ObjcProvider.Builder(StarlarkSemantics.DEFAULT_SEMANTICS)
             .addTransitiveAndPropagate(ImmutableList.of(provider))
             .build();
     return getFirstArtifactEndingWith(newProvider.get(ObjcProvider.MODULE_MAP), nameSuffix);

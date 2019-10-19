@@ -6,7 +6,7 @@ title: Troubleshooting Bazel Remote Execution with Docker Sandbox
 
 # Troubleshooting Bazel Remote Execution with Docker Sandbox
 
-Contents
+## Contents
 
 *  [Overview](#overview)
 *  [Prerequisites](#prerequisites)
@@ -24,7 +24,7 @@ Contents
 
 Bazel builds that succeed locally may fail when executed remotely due to
 restrictions and requirements that do not affect local builds. The most common
-causes of such failures are described in [Adapting Bazel Rules for Remote Execution](https://docs.bazel.build/versions/master/remote-execution-rules.html).
+causes of such failures are described in [Adapting Bazel Rules for Remote Execution](remote-execution-rules.html).
 
 This document describes how to identify and resolve the most common issues that
 arise with remote execution using the Docker sandbox feature, which imposes
@@ -74,15 +74,19 @@ Before you begin troubleshooting, do the following if you have not already done 
 *   Add the [bazel-toolchains](https://releases.bazel.build/bazel-toolchains.html)
     repo, pinned to the latest release version, to your build's `WORKSPACE` file
     as described [here](https://releases.bazel.build/bazel-toolchains.html).
-*   Add the following lines to your `.bazelrc` file. Create the file in the root
-    directory of your Bazel project if it does not exist.
+*   Add flags to your `.bazelrc` file to enable the feature. Create the file in
+    the root directory of your Bazel project if it does not exist. Flags below
+    are a reference sample. Please see the latest
+    [`.bazelrc`](https://github.com/bazelbuild/bazel-toolchains/tree/master/bazelrc)
+    file in the bazel-toolchains repo and copy the values of the flags defined
+    there for config `docker-sandbox`.
 
 ```
 # Docker Sandbox Mode
-build:docker-sandbox --host_javabase=@bazel_toolchains//configs/ubuntu16_04_clang/1.0:jdk8
-build:docker-sandbox --javabase=@bazel_toolchains//configs/ubuntu16_04_clang/1.0:jdk8
-build:docker-sandbox --crosstool_top=@bazel_toolchains//configs/ubuntu16_04_clang/1.0/bazel_0.13.0/default:toolchain
-build:docker-sandbox --experimental_docker_image=gcr.io/cloud-marketplace/google/rbe-ubuntu16-04@sha256:59bf0e191a6b5cc1ab62c2224c810681d1326bad5a27b1d36c9f40113e79da7f
+build:docker-sandbox --host_javabase=<...>
+build:docker-sandbox --javabase=<...>
+build:docker-sandbox --crosstool_top=<...>
+build:docker-sandbox --experimental_docker_image=<...>
 build:docker-sandbox --spawn_strategy=docker --strategy=Javac=docker --genrule_strategy=docker
 build:docker-sandbox --define=EXECUTOR=remote
 build:docker-sandbox --experimental_docker_verbose
@@ -90,7 +94,7 @@ build:docker-sandbox --experimental_enable_docker_sandbox
 ```
 
 **Note:** The flags referenced in the `.bazelrc` file shown above are configured
-to run within the [rbe-ubuntu16-04](https://console.cloud.google.com/launcher/details/google/rbe-ubuntu16-04?_ga=2.231599325.-396882850.1508873814)
+to run within the [`rbe-ubuntu16-04`](https://console.cloud.google.com/launcher/details/google/rbe-ubuntu16-04)
 container.
 
 If your rules require additional tools, do the following:
@@ -110,7 +114,7 @@ machine and is a reliable way to confirm whether your build will succeed when
 executed remotely.
 
 However, with this method, locally installed tools, binaries, and data may leak
-into into your build, especially if it uses [configure-style WORKSPACE rules](https://docs.bazel.build/versions/master/remote-execution-rules.html#managing-configure-style-workspace-rules).
+into into your build, especially if it uses [configure-style WORKSPACE rules](remote-execution-rules.html#managing-configure-style-workspace-rules).
 Such leaks will cause problems with remote execution; to detect them, [troubleshoot in a Docker container](#troubleshooting-in-a-docker-container)
 in addition to troubleshooting natively.
 
@@ -161,7 +165,7 @@ The following are the most commonly encountered issues and their workarounds.
 
 *  **A file from `@local-jdk` is missing or causing errors.** The Java binaries
    on your local machine are leaking into the build while being incompatible with
-   it. Use [`java_toolchain`](https://docs.bazel.build/versions/master/be/java.html#java_toolchain)
+   it. Use [`java_toolchain`](be/java.html#java_toolchain)
    in your rules and targets instead of `@local_jdk`. Contact [bazel-discuss@google.com](mailto:bazel-discuss@google.com) if you need further help.
 
 *  **Other errors.** Contact [bazel-discuss@google.com](mailto:bazel-discuss@google.com) for help.
@@ -197,7 +201,7 @@ For other bases, modify them as necessary.
 
     RUN apt-get update && apt-get install -y docker-ce
 
-    RUN wget https://releases.bazel.build/0.14.1/release/bazel-0.14.1-installer-linux-x86_64.sh -O ./bazel-installer.sh && chmod 755 ./bazel-installer.sh
+    RUN wget https://releases.bazel.build/<latest Bazel version>/release/bazel-<latest Bazel version>-installer-linux-x86_64.sh -O ./bazel-installer.sh && chmod 755 ./bazel-installer.sh
 
     RUN ./bazel-installer.sh
     ```
@@ -266,7 +270,7 @@ You can resolve build failures as follows:
 
 *   If the build fails during the analysis or loading phases, one or more of
     your build rules declared in the WORKSPACE file are not compatible with
-    remote execution. See [Adapting Bazel Rules for Remote Execution](https://docs.bazel.build/versions/master/remote-execution-rules.html)
+    remote execution. See [Adapting Bazel Rules for Remote Execution](remote-execution-rules.html)
     for possible causes and workarounds.
 
 *   If the build fails for any other reason, see the troubleshooting steps in [Step 2: Resolve detected issues](#step-2-resolve-detected-issues).

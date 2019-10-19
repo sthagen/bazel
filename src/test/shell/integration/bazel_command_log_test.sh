@@ -39,7 +39,7 @@ function strip_lines_from_bazel_cc() {
     -e '/^\$TEST_TMPDIR defined: output root default is/d' \
     -e '/^OpenJDK 64-Bit Server VM warning: ignoring option UseSeparateVSpacesInYoungGen; support was removed in 8.0/d' \
     -e '/^Starting local B[azel]* server and connecting to it\.\.\.\.*$/d' \
-    -e '/^\.\.\. still trying to connect to local B[azel]* server after \d+ seconds \.\.\.\.*$/d' \
+    -e '/^\.\.\. still trying to connect to local B[azel]* server after [1-9][0-9]* seconds \.\.\.\.*$/d' \
     -e '/^Killed non-responsive server process/d' \
     -e '/server needs to be killed, because the startup options are different/d' \
     -e '/^WARNING: Waiting for server process to terminate (waited 5 seconds, waiting at most 60)$/d' \
@@ -79,13 +79,10 @@ function test_batch_mode() {
 }
 
 function test_batch_mode_with_logging_flag() {
-  LOG_FILE="$(bazel info output_base)/java.log"
-  if [ ! -f $LOG_FILE ]; then
-    mkdir -p log_out || fail "Could not create log_out"
-    GOOGLE_LOG_DIR=$(pwd)/log_out
-    LOG_FILE="log_out/blaze.INFO"
-  fi
   bazel --batch info --logging 6 >&$TEST_log || fail "Expected success"
+  LOG_FILE="$(grep -E "^server_log: .*" "${TEST_log}" \
+      | sed -e "s/server_log: //")" \
+      || fail "grep for server_log path failed"
 
   # strip extra lines printed by bazel.cc
   strip_lines_from_bazel_cc

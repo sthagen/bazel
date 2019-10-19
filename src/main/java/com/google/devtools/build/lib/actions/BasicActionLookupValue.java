@@ -17,8 +17,8 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.MoreObjects.ToStringHelper;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import java.math.BigInteger;
+import javax.annotation.Nullable;
 
 /**
  * Basic implementation of {@link ActionLookupValue} where the value itself owns and maintains
@@ -26,37 +26,26 @@ import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.
  */
 public class BasicActionLookupValue extends ActionLookupValue {
   protected final ImmutableList<ActionAnalysisMetadata> actions;
-  @VisibleForSerialization protected final ImmutableMap<Artifact, Integer> generatingActionIndex;
-
-  protected BasicActionLookupValue(ActionAnalysisMetadata action) {
-    this(Actions.GeneratingActions.fromSingleAction(action));
-  }
 
   protected BasicActionLookupValue(
       ImmutableList<ActionAnalysisMetadata> actions,
-      ImmutableMap<Artifact, Integer> generatingActionIndex) {
+      @Nullable BigInteger nonceVersion) {
+    super(nonceVersion);
     this.actions = actions;
-    this.generatingActionIndex = generatingActionIndex;
   }
 
   @VisibleForTesting
-  public BasicActionLookupValue(Actions.GeneratingActions generatingActions) {
-    this(generatingActions.getActions(), generatingActions.getGeneratingActionIndex());
+  public BasicActionLookupValue(
+      Actions.GeneratingActions generatingActions, @Nullable BigInteger nonceVersion) {
+    this(generatingActions.getActions(), nonceVersion);
   }
 
   @Override
-  protected ImmutableList<ActionAnalysisMetadata> getActions() {
+  public ImmutableList<ActionAnalysisMetadata> getActions() {
     return actions;
   }
 
-  @Override
-  protected ImmutableMap<Artifact, Integer> getGeneratingActionIndex() {
-    return generatingActionIndex;
-  }
-
   protected ToStringHelper getStringHelper() {
-    return MoreObjects.toStringHelper(this)
-        .add("actions", actions)
-        .add("generatingActionIndex", generatingActionIndex);
+    return MoreObjects.toStringHelper(this).add("actions", actions);
   }
 }

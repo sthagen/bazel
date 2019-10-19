@@ -65,6 +65,11 @@ public class ObjectCodecs {
     return serializeToByteString(subject, this::serializeMemoized);
   }
 
+  public void serializeMemoized(Object subject, CodedOutputStream codedOut)
+      throws SerializationException {
+    serializeImpl(subject, codedOut, serializationContext.getMemoizingContext());
+  }
+
   public SerializationResult<ByteString> serializeMemoizedAndBlocking(Object subject)
       throws SerializationException {
     SerializationContext memoizingContext =
@@ -73,11 +78,6 @@ public class ObjectCodecs {
         serializeToByteString(
             subject, (subj, codedOut) -> serializeImpl(subj, codedOut, memoizingContext));
     return SerializationResult.create(byteString, memoizingContext.createFutureToBlockWritingOn());
-  }
-
-  public void serializeMemoized(Object subject, CodedOutputStream codedOut)
-      throws SerializationException {
-    serializeImpl(subject, codedOut, serializationContext.getMemoizingContext());
   }
 
   public Object deserialize(ByteString data) throws SerializationException {
@@ -110,15 +110,24 @@ public class ObjectCodecs {
       throws SerializationException {
     // Allows access to buffer without copying (although this means buffer may be pinned in memory).
     codedIn.enableAliasing(true);
+    Object result;
     try {
-      if (memoize) {
-        return deserializationContext.getMemoizingContext().deserialize(codedIn);
-      } else {
-        return deserializationContext.deserialize(codedIn);
-      }
+      result =
+          memoize
+              ? deserializationContext.getMemoizingContext().deserialize(codedIn)
+              : deserializationContext.deserialize(codedIn);
     } catch (IOException e) {
       throw new SerializationException("Failed to deserialize data", e);
     }
+    try {
+      if (!codedIn.isAtEnd()) {
+        throw new SerializationException(
+            "input stream not exhausted after deserializing " + result);
+      }
+    } catch (IOException e) {
+      throw new SerializationException("Error checking for end of stream with " + result, e);
+    }
+    return result;
   }
 
   @FunctionalInterface

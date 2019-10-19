@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import static java.util.Comparator.comparing;
-
 import com.sun.tools.javac.api.JavacTool;
 import com.sun.tools.javac.util.Context;
 import java.io.BufferedOutputStream;
@@ -22,19 +20,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
-import java.net.URI;
-import java.nio.file.FileSystems;
-import java.nio.file.FileVisitResult;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.GregorianCalendar;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
@@ -43,115 +41,106 @@ import java.util.zip.ZipEntry;
 import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
 import javax.tools.JavaFileObject.Kind;
+import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 
 /**
  * Output a jar file containing all classes on the platform classpath of the given JDK release.
  *
- * <p>usage: DumpPlatformClassPath <release version> <output jar>
+ * <p>usage: DumpPlatformClassPath <release version> <output jar> <path to target JDK>?
  */
 public class DumpPlatformClassPath {
 
   public static void main(String[] args) throws Exception {
     if (args.length != 2) {
-      System.err.println("usage: DumpPlatformClassPath <release version> <output jar>");
+      System.err.println("usage: DumpPlatformClassPath <output jar> <path to target JDK>");
       System.exit(1);
     }
-    int release = Integer.parseInt(args[0]);
-    Path output = Paths.get(args[1]);
+    Path output = Paths.get(args[0]);
+    Path targetJavabase = Paths.get(args[1]);
 
-    Map<String, byte[]> entries = new HashMap<>();
-
-    // Legacy JDK 8 bootclasspath handling.
-    // TODO(cushon): make sure this has test coverage.
-    Path javaHome = Paths.get(System.getProperty("java.home"));
-    if (javaHome.endsWith("jre")) {
-      javaHome = javaHome.getParent();
-    }
-    for (String jar :
-        Arrays.asList("rt.jar", "resources.jar", "jsse.jar", "jce.jar", "charsets.jar")) {
-      Path path = javaHome.resolve("jre/lib").resolve(jar);
-      if (!Files.exists(path)) {
-        continue;
-      }
-      try (JarFile jf = new JarFile(path.toFile())) {
-        jf.stream()
-            .forEachOrdered(
-                entry -> {
-                  try {
-                    entries.put(entry.getName(), toByteArray(jf.getInputStream(entry)));
-                  } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                  }
-                });
-      }
-    }
-
-    if (!entries.isEmpty()) {
-      // If we found a JDK 8 bootclasspath (rt.jar, etc.) then we're done.
-      //
-      // However JDK 8 only contains bootclasspath API information for the current release,
-      // so we're always going to get a JDK 8 API level regardless of what the user requested.
-      // Emit a warning if they wanted to target a different version.
-      if (release != 8) {
-        System.err.printf(
-            "warning: ignoring release %s on --host_javabase=%s\n",
-            release, System.getProperty("java.version"));
-      }
+    int hostMajorVersion = hostMajorVersion();
+    boolean ok;
+    if (hostMajorVersion == 8) {
+      ok = dumpJDK8BootClassPath(output, targetJavabase);
     } else {
-      // JDK > 8 --host_javabase bootclasspath handling.
-      // The default --host_javabase is currently JDK 10.
+      ok = dumpJDK9AndNewerBootClassPath(hostMajorVersion, output, targetJavabase);
+    }
+    System.exit(ok ? 0 : 1);
+  }
 
-      // Set up a compilation with --release to initialize a filemanager
-      Context context = new Context();
-      JavacTool.create()
-          .getTask(
-              /* out = */ null,
-              /* fileManager = */ null,
-              /* diagnosticListener = */ null,
-              /* options = */ Arrays.asList("--release", String.valueOf(release)),
-              /* classes = */ null,
-              /* compilationUnits = */ null,
-              context);
-      JavaFileManager fileManager = context.get(JavaFileManager.class);
+  // JDK 8 bootclasspath handling.
+  // * JDK 8 represents a bootclasspath as a search path of jars (rt.jar, etc.).
+  // * It does not support --release or --system.
+  static boolean dumpJDK8BootClassPath(Path output, Path targetJavabase) throws IOException {
+    List<Path> bootClassPathJars = getBootClassPathJars(targetJavabase);
+    writeClassPathJars(output, bootClassPathJars);
+    return true;
+  }
 
-      for (JavaFileObject fileObject :
-          fileManager.list(
-              StandardLocation.PLATFORM_CLASS_PATH,
-              "",
-              EnumSet.of(Kind.CLASS),
-              /* recurse= */ true)) {
-        String binaryName =
-            fileManager.inferBinaryName(StandardLocation.PLATFORM_CLASS_PATH, fileObject);
-        entries.put(
-            binaryName.replace('.', '/') + ".class", toByteArray(fileObject.openInputStream()));
-      }
+  // JDK > 8 --host_javabase bootclasspath handling.
+  // (The default --host_javabase is currently JDK 9.)
+  static boolean dumpJDK9AndNewerBootClassPath(
+      int hostMajorVersion, Path output, Path targetJavabase) throws IOException {
 
-      // Include the jdk.unsupported module for compatibility with JDK 8.
-      // (see: https://bugs.openjdk.java.net/browse/JDK-8206937)
-      // `--release 8` only provides access to supported APIs, which excludes e.g. sun.misc.Unsafe.
-      Path module =
-          FileSystems.getFileSystem(URI.create("jrt:/")).getPath("modules/jdk.unsupported");
-      Files.walkFileTree(
-          module,
-          new SimpleFileVisitor<Path>() {
-            @Override
-            public FileVisitResult visitFile(Path path, BasicFileAttributes attrs)
-                throws IOException {
-              String name = path.getFileName().toString();
-              if (name.endsWith(".class") && !name.equals("module-info.class")) {
-                entries.put(module.relativize(path).toString(), Files.readAllBytes(path));
-              }
-              return super.visitFile(path, attrs);
-            }
-          });
+    // JDK 9 and newer support cross-compiling to older platform versions using the --system
+    // and --release flags.
+    // * --system takes the path to a JDK root for JDK 9 and up, and causes the compilation
+    //     to target the APIs from that JDK.
+    // * --release takes a language level (e.g. '9') and uses the API information baked in to
+    //     the host JDK (in lib/ct.sym).
+
+    // Since --system only supports JDK >= 9, first check of the target JDK defines a JDK 8
+    // bootclasspath.
+    List<Path> bootClassPathJars = getBootClassPathJars(targetJavabase);
+    if (!bootClassPathJars.isEmpty()) {
+      writeClassPathJars(output, bootClassPathJars);
+      return true;
     }
 
+    // Initialize a FileManager to process the --system argument, and then read the
+    // initialized bootclasspath data back out.
+
+    Context context = new Context();
+    JavacTool.create()
+        .getTask(
+            /* out = */ null,
+            /* fileManager = */ null,
+            /* diagnosticListener = */ null,
+            /* options = */ Arrays.asList("--system", String.valueOf(targetJavabase)),
+            /* classes = */ null,
+            /* compilationUnits = */ null,
+            context);
+    StandardJavaFileManager fileManager =
+        (StandardJavaFileManager) context.get(JavaFileManager.class);
+
+    SortedMap<String, InputStream> entries = new TreeMap<>();
+    for (JavaFileObject fileObject :
+        fileManager.list(
+            StandardLocation.PLATFORM_CLASS_PATH,
+            "",
+            EnumSet.of(Kind.CLASS),
+            /* recurse= */ true)) {
+      String binaryName =
+          fileManager.inferBinaryName(StandardLocation.PLATFORM_CLASS_PATH, fileObject);
+      entries.put(binaryName.replace('.', '/') + ".class", fileObject.openInputStream());
+    }
+    writeEntries(output, entries);
+    return true;
+  }
+
+  /** Writes the given entry names and data to a jar archive at the given path. */
+  private static void writeEntries(Path output, Map<String, InputStream> entries)
+      throws IOException {
+    if (!entries.containsKey("java/lang/Object.class")) {
+      throw new AssertionError(
+          "\nCould not find java.lang.Object on bootclasspath; something has gone terribly wrong.\n"
+              + "Please file a bug: https://github.com/bazelbuild/bazel/issues");
+    }
     try (OutputStream os = Files.newOutputStream(output);
         BufferedOutputStream bos = new BufferedOutputStream(os, 65536);
         JarOutputStream jos = new JarOutputStream(bos)) {
       entries.entrySet().stream()
-          .sorted(comparing(Map.Entry::getKey))
           .forEachOrdered(
               entry -> {
                 try {
@@ -163,14 +152,69 @@ public class DumpPlatformClassPath {
     }
   }
 
+  /** Collects the entries of the given jar files into a map from jar entry names to their data. */
+  private static void writeClassPathJars(Path output, Collection<Path> paths) throws IOException {
+    List<JarFile> jars = new ArrayList<>();
+    for (Path path : paths) {
+      jars.add(new JarFile(path.toFile()));
+    }
+    SortedMap<String, InputStream> entries = new TreeMap<>();
+    for (JarFile jar : jars) {
+      jar.stream()
+          .filter(p -> p.getName().endsWith(".class"))
+          .forEachOrdered(
+              entry -> {
+                try {
+                  entries.put(entry.getName(), jar.getInputStream(entry));
+                } catch (IOException e) {
+                  throw new UncheckedIOException(e);
+                }
+              });
+    }
+    writeEntries(output, entries);
+    for (JarFile jar : jars) {
+      jar.close();
+    }
+  }
+
+  /** Returns paths to the entries of a JDK 8-style bootclasspath. */
+  private static List<Path> getBootClassPathJars(Path javaHome) throws IOException {
+    List<Path> jars = new ArrayList<>();
+    Path extDir = javaHome.resolve("jre/lib/ext");
+    if (Files.exists(extDir)) {
+      for (Path extJar : Files.newDirectoryStream(extDir, "*.jar")) {
+        jars.add(extJar);
+      }
+    }
+    for (String jar :
+        Arrays.asList("rt.jar", "resources.jar", "jsse.jar", "jce.jar", "charsets.jar")) {
+      Path path = javaHome.resolve("jre/lib").resolve(jar);
+      if (Files.exists(path)) {
+        jars.add(path);
+      }
+    }
+    return jars;
+  }
+
   // Use a fixed timestamp for deterministic jar output.
   private static final long FIXED_TIMESTAMP =
       new GregorianCalendar(2010, 0, 1, 0, 0, 0).getTimeInMillis();
 
-  private static void addEntry(JarOutputStream jos, String name, byte[] bytes) throws IOException {
+  /**
+   * Add a jar entry to the given {@link JarOutputStream}, normalizing the entry timestamps to
+   * ensure deterministic build output.
+   */
+  private static void addEntry(JarOutputStream jos, String name, InputStream input)
+      throws IOException {
     JarEntry je = new JarEntry(name);
     je.setTime(FIXED_TIMESTAMP);
     je.setMethod(ZipEntry.STORED);
+    byte[] bytes = toByteArray(input);
+    // When targeting JDK >= 10, patch the major version so it will be accepted by javac 9
+    // TODO(cushon): remove this after updating javac
+    if (bytes[7] > 53) {
+      bytes[7] = 53;
+    }
     je.setSize(bytes.length);
     CRC32 crc = new CRC32();
     crc.update(bytes);
@@ -190,5 +234,26 @@ public class DumpPlatformClassPath {
       boas.write(buffer, 0, r);
     }
     return boas.toByteArray();
+  }
+
+  /**
+   * Returns the major version of the host Java runtime (e.g. '8' for JDK 8), using {@link
+   * Runtime#version} if it is available, and otherwise falling back to the {@code
+   * java.class.version} system. property.
+   */
+  static int hostMajorVersion() {
+    try {
+      Method versionMethod = Runtime.class.getMethod("version");
+      Object version = versionMethod.invoke(null);
+      return (int) version.getClass().getMethod("major").invoke(version);
+    } catch (ReflectiveOperationException e) {
+      // Runtime.version() isn't available on JDK 8; continue below
+    }
+    int version = (int) Double.parseDouble(System.getProperty("java.class.version"));
+    if (49 <= version && version <= 52) {
+      return version - (49 - 5);
+    }
+    throw new IllegalStateException(
+        "Unknown Java version: " + System.getProperty("java.specification.version"));
   }
 }

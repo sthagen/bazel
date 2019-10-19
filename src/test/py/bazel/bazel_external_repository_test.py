@@ -61,13 +61,14 @@ class BazelExternalRepositoryTest(test_base.TestBase):
   def testNewHttpArchive(self):
     ip, port = self._http_server.server_address
     rule_definition = [
-        'new_http_archive(',
+        'load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")',
+        'http_archive(',
         '    name = "six_archive",',
         '    urls = ["http://%s:%s/six-1.10.0.tar.gz"],' % (ip, port),
         '    sha256 = '
         '"105f8d68616f8248e24bf0e9372ef04d3cc10104f1980f54d57b2ce73a5ad56a",',
         '    strip_prefix = "six-1.10.0",',
-        '    build_file = "//third_party:six.BUILD",',
+        '    build_file = "@//third_party:six.BUILD",',
         ')',
     ]
     build_file = [
@@ -76,20 +77,16 @@ class BazelExternalRepositoryTest(test_base.TestBase):
         '  srcs = ["six.py"],',
         ')',
     ]
+    rule_definition.extend(self.GetDefaultRepoRules())
     self.ScratchFile('WORKSPACE', rule_definition)
     self.ScratchFile('BUILD')
     self.ScratchFile('third_party/BUILD')
     self.ScratchFile('third_party/six.BUILD', build_file)
 
-    exit_code, _, stderr = self.RunBazel(['build', '@six_archive//...'])
-    self.assertEqual(exit_code, 0, os.linesep.join(stderr))
-
-    # Test specifying build_file as path
-    # TODO(pcloudy):
-    # Remove this after specifying build_file as path is no longer supported.
-    rule_definition[-2] = 'build_file = "third_party/six.BUILD"'
-    self.ScratchFile('WORKSPACE', rule_definition)
-    exit_code, _, stderr = self.RunBazel(['build', '@six_archive//...'])
+    exit_code, _, stderr = self.RunBazel([
+        'build', '--noincompatible_disallow_unverified_http_downloads',
+        '@six_archive//...'
+    ])
     self.assertEqual(exit_code, 0, os.linesep.join(stderr))
 
     fetching_disabled_msg = 'fetching is disabled'
@@ -116,13 +113,16 @@ class BazelExternalRepositoryTest(test_base.TestBase):
 
   def testNewHttpArchiveWithSymlinks(self):
     ip, port = self._http_server.server_address
-    self.ScratchFile('WORKSPACE', [
-        'new_http_archive(',
+    rule_definition = [
+        'load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")',
+        'http_archive(',
         '    name = "archive_with_symlink",',
         '    urls = ["http://%s:%s/archive_with_symlink.zip"],' % (ip, port),
-        '    build_file = "archive_with_symlink.BUILD",',
+        '    build_file = "@//:archive_with_symlink.BUILD",',
         ')',
-    ])
+    ]
+    rule_definition.extend(self.GetDefaultRepoRules())
+    self.ScratchFile('WORKSPACE', rule_definition)
     # In the archive, A is a symlink pointing to B
     self.ScratchFile('archive_with_symlink.BUILD', [
         'filegroup(',
@@ -133,9 +133,90 @@ class BazelExternalRepositoryTest(test_base.TestBase):
     self.ScratchFile('BUILD')
     exit_code, _, stderr = self.RunBazel([
         'build',
+        '--noincompatible_disallow_unverified_http_downloads',
         '@archive_with_symlink//:file-A',
     ])
     self.assertEqual(exit_code, 0, os.linesep.join(stderr))
+
+  def _CreatePyWritingStarlarkRule(self, print_string):
+    self.ScratchFile('repo/foo.bzl', [
+        'def _impl(ctx):',
+        '  ctx.actions.write(',
+        '      output = ctx.outputs.out,',
+        '      content = """from __future__ import print_function',
+        'print("%s")""",' % print_string,
+        '  )',
+        '  return [DefaultInfo(files = depset(direct = [ctx.outputs.out]))]',
+        '',
+        'gen_py = rule(',
+        '    implementation = _impl,',
+        "    outputs = {'out': '%{name}.py'},",
+        ')',
+    ])
+
+  def testNewLocalRepositoryNoticesFileChangeInRepoRoot(self):
+    """Regression test for https://github.com/bazelbuild/bazel/issues/7063."""
+    rule_definition = [
+        'load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")',
+        'new_local_repository(',
+        '    name = "r",',
+        '    path = "./repo",',
+        '    build_file_content = "exports_files([\'foo.bzl\'])",',
+        ')',
+    ]
+    rule_definition.extend(self.GetDefaultRepoRules())
+    self.ScratchFile('WORKSPACE', rule_definition)
+    self.CreateWorkspaceWithDefaultRepos('repo/WORKSPACE')
+    self._CreatePyWritingStarlarkRule('hello!')
+    self.ScratchFile('BUILD', [
+        'load("@r//:foo.bzl", "gen_py")',
+        'gen_py(name = "gen")',
+        'py_binary(name = "bin", srcs = [":gen"], main = "gen.py")',
+    ])
+
+    exit_code, stdout, stderr = self.RunBazel(['run', '//:bin'])
+    self.assertEqual(exit_code, 0, os.linesep.join(stderr))
+    self.assertIn('hello!', os.linesep.join(stdout))
+
+    # Modify the definition of the Starlark rule in the external repository.
+    # The py_binary rule should notice this and rebuild.
+    self._CreatePyWritingStarlarkRule('world')
+    exit_code, stdout, stderr = self.RunBazel(['run', '//:bin'])
+    self.assertEqual(exit_code, 0, os.linesep.join(stderr))
+    self.assertNotIn('hello!', os.linesep.join(stdout))
+    self.assertIn('world', os.linesep.join(stdout))
+
+  def testDeletedPackagesOnExternalRepo(self):
+    self.ScratchFile('other_repo/WORKSPACE')
+    self.ScratchFile('other_repo/pkg/BUILD', [
+        'filegroup(',
+        '  name = "file",',
+        '  srcs = ["ignore/file"],',
+        ')',
+    ])
+    self.ScratchFile('other_repo/pkg/ignore/BUILD', [
+        'Bad BUILD file',
+    ])
+    self.ScratchFile('other_repo/pkg/ignore/file')
+    work_dir = self.ScratchDir('my_repo')
+    self.ScratchFile('my_repo/WORKSPACE', [
+        "local_repository(name = 'other_repo', path='../other_repo')",
+    ])
+
+    exit_code, _, stderr = self.RunBazel(
+        args=['build', '@other_repo//pkg:file'], cwd=work_dir)
+    self.AssertExitCode(exit_code, 1, stderr)
+    self.assertIn('\'@other_repo//pkg/ignore\' is a subpackage',
+                  ''.join(stderr))
+
+    exit_code, _, stderr = self.RunBazel(
+        args=[
+            'build', '@other_repo//pkg:file',
+            '--deleted_packages=@other_repo//pkg/ignore'
+        ],
+        cwd=work_dir)
+    self.AssertExitCode(exit_code, 0, stderr)
+
 
 if __name__ == '__main__':
   unittest.main()

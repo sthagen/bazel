@@ -25,13 +25,10 @@ import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTa
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * An implementation for the {@code py_library} rule.
- */
+/** Base implementation of {@code py_library}. */
 public abstract class PyLibrary implements RuleConfiguredTargetFactory {
 
   /**
@@ -41,11 +38,10 @@ public abstract class PyLibrary implements RuleConfiguredTargetFactory {
   protected abstract PythonSemantics createSemantics();
 
   @Override
-  public ConfiguredTarget create(final RuleContext ruleContext)
+  public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
     PythonSemantics semantics = createSemantics();
-    PyCommon common = new PyCommon(ruleContext);
-    common.initCommon(common.getDefaultPythonVersion());
+    PyCommon common = new PyCommon(ruleContext, semantics);
     common.validatePackageName();
     semantics.validate(ruleContext, common);
 
@@ -60,11 +56,6 @@ public abstract class PyLibrary implements RuleConfiguredTargetFactory {
         NestedSetBuilder.wrap(Order.STABLE_ORDER, allOutputs);
     common.addPyExtraActionPseudoAction();
 
-    NestedSet<PathFragment> imports = common.collectImports(ruleContext, semantics);
-    if (ruleContext.hasErrors()) {
-      return null;
-    }
-
     Runfiles.Builder runfilesBuilder = new Runfiles.Builder(
         ruleContext.getWorkspaceName(), ruleContext.getConfiguration().legacyExternalRunfiles());
     if (common.getConvertedFiles() != null) {
@@ -76,14 +67,14 @@ public abstract class PyLibrary implements RuleConfiguredTargetFactory {
     runfilesBuilder.addRunfiles(ruleContext, RunfilesProvider.DEFAULT_RUNFILES);
 
     RuleConfiguredTargetBuilder builder = new RuleConfiguredTargetBuilder(ruleContext);
-    common.addCommonTransitiveInfoProviders(builder, semantics, filesToBuild);
+    common.addCommonTransitiveInfoProviders(builder, filesToBuild);
 
     return builder
         .setFilesToBuild(filesToBuild)
         .addNativeDeclaredProvider(
-            semantics.buildCcLinkingInfoProvider(ruleContext.getPrerequisites("deps", Mode.TARGET)))
+            new PyCcLinkParamsProvider(
+                semantics.buildCcInfoProvider(ruleContext.getPrerequisites("deps", Mode.TARGET))))
         .add(RunfilesProvider.class, RunfilesProvider.simple(runfilesBuilder.build()))
-        .add(PythonImportsProvider.class, new PythonImportsProvider(imports))
         .build();
   }
 }

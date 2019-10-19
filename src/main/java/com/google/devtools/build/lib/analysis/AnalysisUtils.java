@@ -19,16 +19,15 @@ import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
-import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver;
+import com.google.devtools.build.lib.analysis.config.ConfigurationResolver.TopLevelTargetsAndConfigsResult;
+import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.TransitionResolver;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
+import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.collect.nestedset.NestedSet;
-import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
@@ -40,7 +39,6 @@ import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 import java.util.LinkedHashSet;
-import java.util.List;
 
 /**
  * Utility functions for use during analysis.
@@ -138,6 +136,11 @@ public final class AnalysisUtils {
     return Iterables.filter(prerequisites, target -> target.get(provider) != null);
   }
 
+  /** Returns the iterable of collections that have the specified provider. */
+  public static <S extends TransitiveInfoCollection, C extends InfoInterface>
+      Iterable<S> filterByProvider(Iterable<S> prerequisites, final BuiltinProvider<C> provider) {
+    return Iterables.filter(prerequisites, target -> target.get(provider) != null);
+  }
 
   /**
    * Returns the path of the associated manifest file for the path of a Fileset. Works for both
@@ -147,22 +150,6 @@ public final class AnalysisUtils {
     PathFragment manifestDir = filesetDir.replaceName("_" + filesetDir.getBaseName());
     PathFragment outputManifestFrag = manifestDir.getRelative("MANIFEST");
     return outputManifestFrag;
-  }
-
-  /**
-   * Returns the middleman artifact on the specified attribute of the specified rule for the
-   * specified mode, or an empty set if it does not exist.
-   */
-  public static NestedSet<Artifact> getMiddlemanFor(RuleContext rule, String attribute, Mode mode) {
-    TransitiveInfoCollection prereq = rule.getPrerequisite(attribute, mode);
-    if (prereq == null) {
-      return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
-    }
-    MiddlemanProvider provider = prereq.getProvider(MiddlemanProvider.class);
-    if (provider == null) {
-      return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
-    }
-    return provider.getMiddlemanArtifact();
   }
 
   /**
@@ -197,18 +184,19 @@ public final class AnalysisUtils {
    * <p>Preserves the original input ordering.
    */
   // Keep this in sync with PrepareAnalysisPhaseFunction.
-  public static List<TargetAndConfiguration> getTargetsWithConfigs(
+  public static TopLevelTargetsAndConfigsResult getTargetsWithConfigs(
       BuildConfigurationCollection configurations,
       Collection<Target> targets,
       ExtendedEventHandler eventHandler,
       ConfiguredRuleClassProvider ruleClassProvider,
-      SkyframeExecutor skyframeExecutor) {
+      SkyframeExecutor skyframeExecutor)
+      throws InvalidConfigurationException {
     // We use a hash set here to remove duplicate nodes; this can happen for input files and package
     // groups.
     LinkedHashSet<TargetAndConfiguration> nodes = new LinkedHashSet<>(targets.size());
     for (BuildConfiguration config : configurations.getTargetConfigurations()) {
       for (Target target : targets) {
-        nodes.add(new TargetAndConfiguration(target, target.isConfigurable() ? config : null));
+        nodes.add(new TargetAndConfiguration(target, config));
       }
     }
 
@@ -218,9 +206,8 @@ public final class AnalysisUtils {
     Multimap<BuildConfiguration, Dependency> asDeps =
         AnalysisUtils.targetsToDeps(nodes, ruleClassProvider);
 
-    return ImmutableList.copyOf(
-        ConfigurationResolver.getConfigurationsFromExecutor(
-            nodes, asDeps, eventHandler, skyframeExecutor));
+    return ConfigurationResolver.getConfigurationsFromExecutor(
+        nodes, asDeps, eventHandler, skyframeExecutor);
   }
 
   @VisibleForTesting
@@ -229,13 +216,18 @@ public final class AnalysisUtils {
     Multimap<BuildConfiguration, Dependency> asDeps =
         ArrayListMultimap.<BuildConfiguration, Dependency>create();
     for (TargetAndConfiguration targetAndConfig : nodes) {
+      ConfigurationTransition transition =
+          TransitionResolver.evaluateTransition(
+              targetAndConfig.getConfiguration(),
+              NoTransition.INSTANCE,
+              targetAndConfig.getTarget(),
+              ruleClassProvider.getTrimmingTransitionFactory());
       if (targetAndConfig.getConfiguration() != null) {
         asDeps.put(
             targetAndConfig.getConfiguration(),
             Dependency.withTransitionAndAspects(
                 targetAndConfig.getLabel(),
-                TransitionResolver.evaluateTopLevelTransition(
-                    targetAndConfig, ruleClassProvider.getTrimmingTransitionFactory()),
+                transition,
                 // TODO(bazel-team): support top-level aspects
                 AspectCollection.EMPTY));
       }

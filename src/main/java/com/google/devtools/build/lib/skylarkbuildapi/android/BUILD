@@ -6,6 +6,8 @@
 #   those which contain pure-Skylark concepts, such as the interpreter or
 #   annotation interfaces).
 
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 licenses(["notice"])  # Apache 2.0
@@ -28,6 +30,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/cpp",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/java",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

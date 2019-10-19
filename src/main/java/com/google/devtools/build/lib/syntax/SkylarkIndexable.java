@@ -21,8 +21,6 @@ import com.google.devtools.build.lib.events.Location;
  */
 public interface SkylarkIndexable extends SkylarkQueryable {
 
-  /**
-   * Returns the value associated with the given key.
-   */
+  /** Returns the value associated with the given key. */
   Object getIndex(Object key, Location loc) throws EvalException;
 }

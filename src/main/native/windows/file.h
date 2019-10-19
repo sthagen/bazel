@@ -14,6 +14,10 @@
 #ifndef BAZEL_SRC_MAIN_NATIVE_WINDOWS_FILE_H_
 #define BAZEL_SRC_MAIN_NATIVE_WINDOWS_FILE_H_
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include <windows.h>
 
 #include <memory>
@@ -34,11 +38,35 @@ bool HasUncPrefix(const char_type* path) {
          path[3] == '\\';
 }
 
+template <typename char_type>
+bool IsDevNull(const char_type* path) {
+  return (path[0] == 'N' || path[0] == 'n') &&
+         (path[1] == 'U' || path[1] == 'u') &&
+         (path[2] == 'L' || path[2] == 'l');
+}
+
+template <typename char_type>
+bool HasDriveSpecifierPrefix(const char_type* p) {
+  if (HasUncPrefix(p)) {
+    return iswalpha(p[4]) && p[5] == ':' && (p[6] == '\\' || p[6] == '/');
+  } else {
+    return iswalpha(p[0]) && p[1] == ':' && (p[2] == '\\' || p[2] == '/');
+  }
+}
+
+std::wstring AddUncPrefixMaybe(const std::wstring& path);
+
+std::wstring RemoveUncPrefixMaybe(const std::wstring& path);
+
+bool IsAbsoluteNormalizedWindowsPath(const std::wstring& p);
+
 // Keep in sync with j.c.g.devtools.build.lib.windows.WindowsFileOperations
-enum {
-  IS_JUNCTION_YES = 0,
-  IS_JUNCTION_NO = 1,
-  IS_JUNCTION_ERROR = 2,
+struct IsSymlinkOrJunctionResult {
+  enum {
+    kSuccess = 0,
+    kError = 1,
+    kDoesNotExist = 2,
+  };
 };
 
 // Keep in sync with j.c.g.devtools.build.lib.windows.WindowsFileOperations
@@ -52,6 +80,7 @@ struct DeletePathResult {
   };
 };
 
+// Keep in sync with j.c.g.devtools.build.lib.windows.WindowsFileOperations
 struct CreateJunctionResult {
   enum {
     kSuccess = 0,
@@ -64,6 +93,18 @@ struct CreateJunctionResult {
   };
 };
 
+// Keep in sync with j.c.g.devtools.build.lib.windows.WindowsFileOperations
+struct ReadSymlinkOrJunctionResult {
+  enum {
+    kSuccess = 0,
+    kError = 1,
+    kAccessDenied = 2,
+    kDoesNotExist = 3,
+    kNotALink = 4,
+    kUnknownLinkType = 5,
+  };
+};
+
 // Determines whether `path` is a junction (or directory symlink).
 //
 // `path` should be an absolute, normalized, Windows-style path, with "\\?\"
@@ -71,16 +112,7 @@ struct CreateJunctionResult {
 //
 // To read about differences between junctions and directory symlinks,
 // see http://superuser.com/a/343079. In Bazel we only ever create junctions.
-//
-// Returns:
-// - IS_JUNCTION_YES, if `path` exists and is either a directory junction or a
-//   directory symlink
-// - IS_JUNCTION_NO, if `path` exists but is neither a directory junction nor a
-//   directory symlink; also when `path` is a symlink to a directory but it was
-//   created using "mklink" instead of "mklink /d", as such symlinks don't
-//   behave the same way as directories (e.g. they can't be listed)
-// - IS_JUNCTION_ERROR, if `path` doesn't exist or some error occurred
-int IsJunctionOrDirectorySymlink(const WCHAR* path);
+int IsSymlinkOrJunction(const WCHAR* path, bool* result, wstring* error);
 
 // Computes the long version of `path` if it has any 8dot3 style components.
 // Returns the empty string upon success, or a human-readable error message upon
@@ -92,12 +124,6 @@ int IsJunctionOrDirectorySymlink(const WCHAR* path);
 // TODO(laszlocsomor): update GetLongPath so it succeeds even if the path does
 // not (fully) exist.
 wstring GetLongPath(const WCHAR* path, unique_ptr<WCHAR[]>* result);
-
-// Opens a directory using CreateFileW.
-// `path` must be a valid Windows path, with "\\?\" prefix if it's long.
-// If `read_write` is true then the directory is opened for reading and writing,
-// otherwise only for reading.
-HANDLE OpenDirectory(const WCHAR* path, bool read_write);
 
 // Creates a junction at `name`, pointing to `target`.
 // Returns CreateJunctionResult::kSuccess if it could create the junction, or if
@@ -117,6 +143,12 @@ HANDLE OpenDirectory(const WCHAR* path, bool read_write);
 int CreateJunction(const wstring& junction_name, const wstring& junction_target,
                    wstring* error);
 
+// Reads the symlink or junction into 'result'.
+// Returns a value from 'ReadSymlinkOrJunctionResult'.
+// When the method returns 'ReadSymlinkOrJunctionResult::kError' and 'error' is
+// non-null then 'error' receives an error message.
+int ReadSymlinkOrJunction(const wstring& path, wstring* result, wstring* error);
+
 // Deletes the file, junction, or empty directory at `path`.
 // Returns DELETE_PATH_SUCCESS if it successfully deleted the path, otherwise
 // returns one of the other DELETE_PATH_* constants (e.g. when the directory is
@@ -124,6 +156,61 @@ int CreateJunction(const wstring& junction_name, const wstring& junction_target,
 // Returns DELETE_PATH_ERROR for unexpected errors. If `error` is not null, the
 // function writes an error message into it.
 int DeletePath(const wstring& path, wstring* error);
+
+// Returns a normalized form of the input `path`.
+//
+// Normalization:
+//   Normalization means removing "." references, resolving ".." references,
+//   and deduplicating "/" characters while converting them to "\\".  For
+//   example if `path` is "foo/../bar/.//qux", the result is "bar\\qux".
+//
+//   Uplevel references ("..") that cannot go any higher in the directory tree
+//   are preserved if the path is relative, and ignored if the path is
+//   absolute, e.g. "../../foo" is normalized to "..\\..\\foo" but "c:/.." is
+//   normalized to "c:\\".
+//
+//   This method does not check the semantics of the `path` beyond checking if
+//   it starts with a directory separator. Illegal paths such as one with a
+//   drive specifier in the middle (e.g. "foo/c:/bar") are accepted -- it's the
+//   caller's responsibility to pass a path that, when normalized, will be
+//   semantically correct.
+//
+//   Current directory references (".") are preserved if and only if they are
+//   the only path segment, so "./" becomes "." but "./foo" becomes "foo".
+//
+// Arguments:
+//   `path` must be a relative or absolute Windows path, it may use "/" instead
+//   of "\\". The path should not start with "/" or "\\".
+//
+// Result:
+//   Returns false if and only if the path starts with a directory separator.
+//
+//   The result won't have a UNC prefix, even if `path` did. The result won't
+//   have a trailing "\\" except when and only when the path is normalized to
+//   just a drive specifier (e.g. when `path` is "c:/" or "c:/foo/.."). The
+//   result will preserve the casing of the input, so "D:/Bar" becomes
+//   "D:\\Bar".
+std::string Normalize(const std::string& p);
+std::wstring Normalize(const std::wstring& p);
+
+bool GetCwd(std::wstring* result, DWORD* err_code);
+
+// Normalizes and corrects the casing of 'abs_path'.
+//
+// 'abs_path' must be absolute, and start with a Windows drive prefix.
+// It may have an UNC prefix, may not be normalized, may use '\' and '/' as
+// directory separators.
+//
+// The result is normalized, uses '\' separators, has no trailing '\', and is
+// case-corrected up to the last existing segment. Non-existent tail segments
+// are kept in their casing, but normalized.
+//
+// For example if C:\Foo\Bar exists, then
+// GetCorrectCasing("\\\\?\\c:/FOO/./bar\\") returns "C:\Foo\Bar" and
+// GetCorrectCasing("c:/foo/qux//../bar/BAZ/quX") returns "C:\Foo\Bar\BAZ\quX".
+//
+// If 'abs_path' is null or empty or not absolute, the result is empty.
+std::wstring GetCorrectCasing(const std::wstring& abs_path);
 
 }  // namespace windows
 }  // namespace bazel

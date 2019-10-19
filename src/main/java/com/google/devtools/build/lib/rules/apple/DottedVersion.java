@@ -36,7 +36,7 @@ import javax.annotation.Nullable;
  * {@code 5.0.1beta2}. Components must start with a non-negative integer and at least one component
  * must be present.
  *
- * <p>Specifically, the format of a component is {@code \d+([a-z]+\d*)?}.
+ * <p>Specifically, the format of a component is {@code \d+([a-z0-9]*?)?(\d+)?}.
  *
  * <p>Dotted versions are ordered using natural integer sorting on components in order from first to
  * last where any missing element is considered to have the value 0 if they don't contain any
@@ -73,21 +73,93 @@ import javax.annotation.Nullable;
 @Immutable
 @AutoCodec
 public final class DottedVersion implements DottedVersionApi<DottedVersion> {
+  /** Wrapper class for {@link DottedVersion} whose {@link #equals(Object)} method is string
+   * equality.
+   *
+   * <p>This is necessary because Bazel assumes that
+   * {@link com.google.devtools.build.lib.analysis.config.FragmentOptions} that are equal yield
+   * fragments that are the same. However, this does not hold if the options hold a
+   * {@link DottedVersion} because trailing zeroes are not considered significant when comparing
+   * them, but they do matter in configuration fragments (for example, they end up in output
+   * directory names)</p>
+   * */
+  @Immutable
+  public static final class Option {
+    private final DottedVersion version;
+
+    private Option(DottedVersion version) {
+      this.version = Preconditions.checkNotNull(version);
+    }
+
+    public DottedVersion get() {
+      return version;
+    }
+
+    @Override
+    public int hashCode() {
+      return version.stringRepresentation.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+
+      if (!(o instanceof Option)) {
+        return false;
+      }
+
+      return version.stringRepresentation.equals(((Option) o).version.stringRepresentation);
+    }
+  }
+
+  public static DottedVersion maybeUnwrap(DottedVersion.Option option) {
+    return option != null ? option.get() : null;
+  }
+
+  public static Option option(DottedVersion version) {
+    return version == null ? null : new Option(version);
+  }
   private static final Splitter DOT_SPLITTER = Splitter.on('.');
-  private static final Pattern COMPONENT_PATTERN = Pattern.compile("(\\d+)(?:([a-z]+)(\\d*))?");
+  private static final Pattern COMPONENT_PATTERN =
+      Pattern.compile("(\\d+)([a-z0-9]*?)?(\\d+)?", Pattern.CASE_INSENSITIVE);
   private static final String ILLEGAL_VERSION =
-      "Dotted version components must all be of the form \\d+([a-z]+\\d*)? but got %s";
+      "Dotted version components must all be of the form \\d+([a-z0-9]*?)?(\\d+)? but got %s";
   private static final String NO_ALPHA_SEQUENCE = null;
   private static final Component ZERO_COMPONENT = new Component(0, NO_ALPHA_SEQUENCE, 0, "0");
+
+  /** Exception thrown when parsing an invalid dotted version. */
+  public static class InvalidDottedVersionException extends Exception {
+    InvalidDottedVersionException(String msg) {
+      super(msg);
+    }
+
+    InvalidDottedVersionException(String msg, Throwable cause) {
+      super(msg, cause);
+    }
+  }
+
+  /**
+   * Create a dotted version by parsing the given version string. Throws an unchecked exception if
+   * the argument is malformed.
+   */
+  public static DottedVersion fromStringUnchecked(String version) {
+    try {
+      return fromString(version);
+    } catch (InvalidDottedVersionException e) {
+      throw new IllegalArgumentException(e);
+    }
+  }
 
   /**
    * Generates a new dotted version from the given version string.
    *
-   * @throws IllegalArgumentException if the passed string is not a valid dotted version
+   * @throws InvalidDottedVersionException if the passed string is not a valid dotted version
    */
-  public static DottedVersion fromString(String version) {
+  public static DottedVersion fromString(String version) throws InvalidDottedVersionException {
     if (Strings.isNullOrEmpty(version)) {
-      throw new IllegalArgumentException(String.format(ILLEGAL_VERSION, version));
+      throw new InvalidDottedVersionException(String.format(ILLEGAL_VERSION, version));
     }
     ArrayList<Component> components = new ArrayList<>();
     for (String component : DOT_SPLITTER.split(version)) {
@@ -96,20 +168,24 @@ public final class DottedVersion implements DottedVersionApi<DottedVersion> {
 
     int numOriginalComponents = components.size();
 
-    // Remove trailing (but not the first) zero components for easier comparison and hashcoding.
+    // Remove trailing (but not the first or middle) zero components for easier comparison and
+    // hashcoding.
     for (int i = components.size() - 1; i > 0; i--) {
       if (components.get(i).equals(ZERO_COMPONENT)) {
         components.remove(i);
+      } else {
+        break;
       }
     }
 
     return new DottedVersion(ImmutableList.copyOf(components), version, numOriginalComponents);
   }
 
-  private static Component toComponent(String component, String version) {
+  private static Component toComponent(String component, String version)
+      throws InvalidDottedVersionException {
     Matcher parsedComponent = COMPONENT_PATTERN.matcher(component);
     if (!parsedComponent.matches()) {
-      throw new IllegalArgumentException(String.format(ILLEGAL_VERSION, version));
+      throw new InvalidDottedVersionException(String.format(ILLEGAL_VERSION, version));
     }
 
     int firstNumber;
@@ -117,7 +193,7 @@ public final class DottedVersion implements DottedVersionApi<DottedVersion> {
     int secondNumber = 0;
     firstNumber = parseNumber(parsedComponent, 1, version);
 
-    if (parsedComponent.group(2) != null) {
+    if (!Strings.isNullOrEmpty(parsedComponent.group(2))) {
       alphaSequence = parsedComponent.group(2);
     }
 
@@ -128,12 +204,13 @@ public final class DottedVersion implements DottedVersionApi<DottedVersion> {
     return new Component(firstNumber, alphaSequence, secondNumber, component);
   }
 
-  private static int parseNumber(Matcher parsedComponent, int group, String version) {
+  private static int parseNumber(Matcher parsedComponent, int group, String version)
+      throws InvalidDottedVersionException {
     int firstNumber;
     try {
       firstNumber = Integer.parseInt(parsedComponent.group(group));
     } catch (NumberFormatException e) {
-      throw new IllegalArgumentException(String.format(ILLEGAL_VERSION, version));
+      throw new InvalidDottedVersionException(String.format(ILLEGAL_VERSION, version), e);
     }
     return firstNumber;
   }

@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 filegroup(
@@ -9,20 +11,20 @@ filegroup(
 java_library(
     name = "query2",
     srcs = glob(
-        ["*.java"],
+        [
+            "*.java",
+            "aquery/*.java",
+            "cquery/*.java",
+            "query/*.java",
+        ],
         exclude = [
             "AbstractBlazeQueryEnvironment.java",
             "FakeLoadTarget.java",
         ],
     ),
     deps = [
-        ":abstract-blaze-query-env",
-        ":aspect-resolver",
-        ":common-query-options",
-        ":fake-load-target",
-        ":query-engine",
-        ":query-output",
         "//src/main/java/com/google/devtools/build/lib:build-base",
+        "//src/main/java/com/google/devtools/build/lib:command-utils",
         "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
         "//src/main/java/com/google/devtools/build/lib:util",
@@ -35,6 +37,13 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/graph",
         "//src/main/java/com/google/devtools/build/lib/profiler",
+        "//src/main/java/com/google/devtools/build/lib/query2/common:abstract-blaze-query-env",
+        "//src/main/java/com/google/devtools/build/lib/query2/common:options",
+        "//src/main/java/com/google/devtools/build/lib/query2/compat:fake-load-target",
+        "//src/main/java/com/google/devtools/build/lib/query2/engine",
+        "//src/main/java/com/google/devtools/build/lib/query2/query/aspectresolvers",
+        "//src/main/java/com/google/devtools/build/lib/query2/query/output",
+        "//src/main/java/com/google/devtools/build/lib/supplier",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
@@ -43,112 +52,19 @@ java_library(
         "//src/main/protobuf:build_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",
+        "//third_party/protobuf:protobuf_java",
     ],
 )
 
 java_library(
-    name = "query-output",
-    srcs = glob(
-        ["output/*.java"],
-        exclude = [
-            "output/AspectResolver.java",
-            "output/PresciseAspectResolver.java",
-            "output/ConservativeAspectResolver.java",
-            "output/NullAspectResolver.java",
-        ],
-    ),
-    deps = [
-        ":abstract-blaze-query-env",
-        ":aspect-resolver",
-        ":common-query-options",
-        ":fake-load-target",
-        ":query-engine",
-        "//src/main/java/com/google/devtools/build/lib:events",
-        "//src/main/java/com/google/devtools/build/lib:packages-internal",
-        "//src/main/java/com/google/devtools/build/lib:util",
-        "//src/main/java/com/google/devtools/build/lib/collect",
-        "//src/main/java/com/google/devtools/build/lib/collect/compacthashset",
-        "//src/main/java/com/google/devtools/build/lib/graph",
-        "//src/main/java/com/google/devtools/common/options",
-        "//src/main/protobuf:build_java_proto",
-        "//third_party:guava",
-        "//third_party:jsr305",
-    ],
-)
-
-java_library(
-    name = "abstract-blaze-query-env",
+    name = "aquery-utils",
     srcs = [
-        "AbstractBlazeQueryEnvironment.java",
+        "aquery/AqueryActionFilter.java",
+        "aquery/AqueryUtils.java",
     ],
     deps = [
-        ":query-engine",
-        "//src/main/java/com/google/devtools/build/lib:events",
-        "//src/main/java/com/google/devtools/build/lib:packages-internal",
-        "//src/main/java/com/google/devtools/build/lib:util",
+        "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/query2/engine",
         "//third_party:guava",
-        "//third_party:jsr305",
-    ],
-)
-
-java_library(
-    name = "common-query-options",
-    srcs = [
-        "CommonQueryOptions.java",
-    ],
-    deps = [
-        ":aspect-resolver",
-        ":query-engine",
-        "//src/main/java/com/google/devtools/build/lib:packages-internal",
-        "//src/main/java/com/google/devtools/build/lib:util",
-        "//src/main/java/com/google/devtools/common/options",
-        "//src/main/protobuf:build_java_proto",
-        "//third_party:guava",
-        "//third_party:jsr305",
-    ],
-)
-
-java_library(
-    name = "aspect-resolver",
-    srcs = [
-        "output/AspectResolver.java",
-        "output/ConservativeAspectResolver.java",
-        "output/NullAspectResolver.java",
-        "output/PreciseAspectResolver.java",
-    ],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib:events",
-        "//src/main/java/com/google/devtools/build/lib:packages-internal",
-        "//src/main/java/com/google/devtools/build/lib:util",
-        "//third_party:guava",
-        "//third_party:jsr305",
-    ],
-)
-
-java_library(
-    name = "fake-load-target",
-    srcs = [
-        "FakeLoadTarget.java",
-    ],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib:events",
-        "//src/main/java/com/google/devtools/build/lib:packages-internal",
-        "//src/main/java/com/google/devtools/build/lib:util",
-        "//third_party:guava",
-        "//third_party:jsr305",
-    ],
-)
-
-# Query library.
-java_library(
-    name = "query-engine",
-    srcs = glob(["engine/*.java"]),
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib:util",
-        "//src/main/java/com/google/devtools/build/lib/collect/compacthashset",
-        "//src/main/java/com/google/devtools/build/lib/concurrent",
-        "//src/main/java/com/google/devtools/build/lib/graph",
-        "//third_party:guava",
-        "//third_party:jsr305",
     ],
 )

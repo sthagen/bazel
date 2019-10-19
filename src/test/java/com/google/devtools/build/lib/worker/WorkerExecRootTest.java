@@ -17,6 +17,8 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxInputs;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxOutputs;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -61,8 +63,10 @@ public class WorkerExecRootTest {
     WorkerExecRoot workerExecRoot =
         new WorkerExecRoot(
             execRoot,
-            ImmutableMap.of(PathFragment.create("worker.sh"), workerSh),
-            ImmutableSet.of(PathFragment.create("very/output.txt")),
+            new SandboxInputs(
+                ImmutableMap.of(PathFragment.create("worker.sh"), workerSh), ImmutableMap.of()),
+            SandboxOutputs.create(
+                ImmutableSet.of(PathFragment.create("very/output.txt")), ImmutableSet.of()),
             ImmutableSet.of(PathFragment.create("worker.sh")));
     workerExecRoot.createFileSystem();
 

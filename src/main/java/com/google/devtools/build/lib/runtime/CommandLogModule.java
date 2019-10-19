@@ -76,7 +76,7 @@ public class CommandLogModule extends BlazeModule {
   }
 
   @Override
-  public void afterCommand() {
+  public void commandComplete() {
     this.env = null;
     if (logOutputStream != null) {
       try {
@@ -95,8 +95,9 @@ public class CommandLogModule extends BlazeModule {
    */
   public static final class CommandLogInfoItem extends InfoItem {
     public CommandLogInfoItem() {
-      super("command_log",
-          "Location of the log containg the output from the build commands.",
+      super(
+          "command_log",
+          "Location of the log containing the output from the build commands.",
           false);
     }
 

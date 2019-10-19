@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.analysis;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
@@ -29,8 +30,8 @@ import java.util.Collection;
 import javax.annotation.Nullable;
 
 /**
- * This event is fired during the build, when it becomes known that the analysis of a target cannot
- * be completed because of an error in one of its dependencies.
+ * This event is fired during the build, when it becomes known that the analysis of a top-level
+ * target cannot be completed because of an error in one of its dependencies.
  */
 public class AnalysisFailureEvent implements BuildEvent {
   private final ConfiguredTargetKey failedTarget;
@@ -50,6 +51,11 @@ public class AnalysisFailureEvent implements BuildEvent {
 
   public ConfiguredTargetKey getFailedTarget() {
     return failedTarget;
+  }
+
+  @VisibleForTesting
+  BuildEventId getConfigurationId() {
+    return configuration;
   }
 
   /**

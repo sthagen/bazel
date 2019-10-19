@@ -168,11 +168,14 @@ EOF
   cat << 'EOF' >> examples/genrule/datafile
 this is a datafile
 EOF
-  cat << 'EOF' >> examples/genrule/tool.sh
+  # The workspace name is initialized in testenv.sh; use that var rather than
+  # hardcoding it here. The extra sed pass is so we can selectively expand that
+  # one var while keeping the rest of the heredoc literal.
+  cat | sed "s/{{WORKSPACE_NAME}}/$WORKSPACE_NAME/" >> examples/genrule/tool.sh << 'EOF'
 #!/bin/sh
 
 set -e
-cp $(dirname $0)/tool.runfiles/__main__/examples/genrule/datafile $1
+cp $(dirname $0)/tool.runfiles/{{WORKSPACE_NAME}}/examples/genrule/datafile $1
 echo "Tools work!"
 EOF
   chmod +x examples/genrule/tool.sh
@@ -191,7 +194,7 @@ def _skylark_breaks1_impl(ctx):
 skylark_breaks1 = rule(
   _skylark_breaks1_impl,
   attrs = {
-    "input": attr.label(mandatory=True, allow_files=True, single_file=True),
+    "input": attr.label(mandatory=True, allow_single_file=True),
     "output": attr.output(mandatory=True),
     "action_tags": attr.string_list(),
   },
@@ -220,19 +223,6 @@ function test_sandboxed_genrule_with_tools() {
     || fail "Hermetic genrule failed: examples/genrule:tools_work"
   [ -f "${BAZEL_GENFILES_DIR}/examples/genrule/tools.txt" ] \
     || fail "Genrule did not produce output: examples/genrule:tools_work"
-}
-
-# Make sure that sandboxed execution doesn't accumulate files in the
-# sandbox directory.
-function test_sandbox_cleanup() {
-  bazel --batch clean &> $TEST_log \
-    || fail "bazel clean failed"
-  bazel build examples/genrule:tools_work &> $TEST_log \
-    || fail "Hermetic genrule failed: examples/genrule:tools_work"
-  bazel shutdown &> $TEST_log || fail "bazel shutdown failed"
-  if [[ -n "$(ls -A "$(bazel info output_base)/sandbox")" ]]; then
-    fail "Build left files around afterwards"
-  fi
 }
 
 # Test for #400: Linux sandboxing and relative symbolic links.
@@ -607,101 +597,87 @@ EOF
   expect_log "/sandbox/"  # Part of the path to the sandbox location.
 }
 
-function test_sandbox_mount_customized_path () {
+function test_experimental_symlinked_sandbox_uses_expanded_tree_artifacts_in_runfiles_tree() {
+  create_workspace_with_default_repos WORKSPACE
 
-  if ! [ "${PLATFORM-}" = "linux" -a \
-    "$(cat /dev/null /etc/*release | grep 'DISTRIB_CODENAME=' | sed 's/^.*=//')" = "trusty" ]; then
-    echo "Skipping test: the toolchain used in this test is only supported on trusty."
-    return 0
-  fi
+  cat > def.bzl <<'EOF'
+def _mkdata_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.label.name + ".d")
+    script = "mkdir -p {out}; touch {out}/file; ln -s file {out}/link".format(out = out.path)
+    ctx.actions.run_shell(
+        outputs = [out],
+        command = script,
+    )
+    runfiles = ctx.runfiles(files = [out])
+    return [DefaultInfo(
+        files = depset([out]),
+        runfiles = runfiles,
+    )]
 
-  # Create BUILD file
+mkdata = rule(
+    _mkdata_impl,
+)
+EOF
+
+  cat > mkdata_test.sh <<'EOF'
+#!/bin/bash
+
+set -euo pipefail
+
+test_dir="$1"
+cd "$test_dir"
+ls -l | cut -f1,9 -d' ' >&2
+
+if [ ! -f file -o -L file ]; then
+  echo "'file' is not a regular file" >&2
+  exit 1
+fi
+EOF
+  chmod +x mkdata_test.sh
+
   cat > BUILD <<'EOF'
-package(default_visibility = ["//visibility:public"])
+load("//:def.bzl", "mkdata")
 
-cc_binary(
-    name = "hello-world",
-    srcs = ["hello-world.cc"],
+mkdata(name = "mkdata")
+
+sh_test(
+    name = "mkdata_test",
+    srcs = ["mkdata_test.sh"],
+    args = ["$(location :mkdata)"],
+    data = [":mkdata"],
 )
 EOF
 
-  # Create cc file
-  cat > hello-world.cc << 'EOF'
-#include <iostream>
-int main(int argc, char** argv) {
-  std::cout << "Hello, world!" << std::endl;
-  return 0;
+  bazel test --incompatible_symlinked_sandbox_expands_tree_artifacts_in_runfiles_tree \
+      --test_output=streamed :mkdata_test &>$TEST_log && fail "expected test to fail" || true
+
+  bazel test --noincompatible_symlinked_sandbox_expands_tree_artifacts_in_runfiles_tree \
+      --test_output=streamed :mkdata_test &>$TEST_log || fail "expected test to pass"
 }
+
+# regression test for https://github.com/bazelbuild/bazel/issues/6262
+function test_create_tree_artifact_inputs() {
+  create_workspace_with_default_repos WORKSPACE
+
+  cat > def.bzl <<'EOF'
+def _r(ctx):
+    d = ctx.actions.declare_directory("%s_dir" % ctx.label.name)
+    ctx.actions.run_shell(
+        outputs = [d],
+        command = "cd %s && pwd" % d.path,
+    )
+    return [DefaultInfo(files = depset([d]))]
+
+r = rule(implementation = _r)
 EOF
 
-  # Create WORKSPACE file
-  cat > WORKSPACE <<'EOF'
-local_repository(
-  name = 'x86_64_unknown_linux_gnu',
-  path = './downloaded_toolchain',
-)
+cat > BUILD <<'EOF'
+load(":def.bzl", "r")
+
+r(name = "a")
 EOF
 
-  # Define the mount source and target.
-  source="${TEST_TMPDIR}/workspace/downloaded_toolchain/x86_64-unknown-linux-gnu/sysroot/lib64/ld-2.19.so"
-  target_root="${TEST_SRCDIR}/mount_targets"
-  target_folder="${target_root}/x86_64-unknown-linux-gnu/sysroot/lib64"
-  target="${target_folder}/ld-2.19.so"
-
-  # Unpack the toolchain.
-  mkdir downloaded_toolchain
-  tar -xf ${TEST_SRCDIR}/mount_path_toolchain/file/mount_path_toolchain.tar.gz -C ./downloaded_toolchain
-  chmod -R 0755 downloaded_toolchain
-
-  # Create an empty WORKSPACE file for the local repository.
-  touch downloaded_toolchain/WORKSPACE
-
-  # Replace the target_root_placeholder with the actual target_root
-  sed -i "s|target_root_placeholder|$target_root|g" downloaded_toolchain/CROSSTOOL
-
-  # Prepare the bazel command flags
-  flags="--crosstool_top=@x86_64_unknown_linux_gnu//:toolchain --verbose_failures --spawn_strategy=sandboxed"
-  flags="${flags} --sandbox_add_mount_pair=${source}:${target}"
-
-  # Execute the bazel build command without creating the target. Should fail.
-  bazel clean --expunge &> $TEST_log
-  bazel build $flags //:hello-world &> $TEST_log && fail "Should fail"
-  expect_log "Bazel only supports bind mounting on top of existing files/directories."
-
-  # Create the mount target manually as Bazel does not create target paths
-  mkdir -p ${target_folder}
-  touch ${target}
-
-  # Execute bazel build command again. Should build.
-  bazel clean --expunge &> $TEST_log
-  bazel build $flags //:hello-world &> $TEST_log || fail "Should build"
-
-  # Remove the mount target folder as Bazel does not do the cleanup
-  rm -rf ${target_root}/x86_64-unknown-linux-gnu
-
-  # Assert that output binary exists
-  test -f bazel-bin/hello-world || fail "output not found"
-
-  # Use linux_sandbox binary to run bazel-bin/hello-world binary in the sandbox environment
-  # First, no path mounting. The execution should fail.
-  echo "Run the binary bazel-bin/hello-world without mounting the path"
-  $linux_sandbox -D -- bazel-bin/hello-world &> $TEST_log || code=$?
-  expect_log "child exited normally with exitcode 1"
-
-  # Second, with path mounting. The execution should succeed.
-  echo "Run the binary bazel-bin/hello-world with mounting the path"
-  # Create the mount target manually as sandbox binary does not create target paths
-  mkdir -p ${target_folder}
-  touch ${target}
-  $linux_sandbox -D \
-  -M ${source} \
-  -m ${target} \
-  -- bazel-bin/hello-world &> $TEST_log || code=$?
-  expect_log "Hello, world!"
-  expect_log "child exited normally with exitcode 0"
-
-  # Remove the mount target folder as sandbox binary does not do the cleanup
-  rm -rf ${target_root}/x86_64-unknown-linux-gnu
+  bazel build --test_output=streamed :a &>$TEST_log || fail "expected build to succeed"
 }
 
 # The test shouldn't fail if the environment doesn't support running it.

@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
 genrule(
     name = "copy_link_jni_md_header",
     srcs = select({
@@ -36,6 +38,17 @@ filegroup(
     }),
 )
 
+cc_library(
+    name = "latin1_jni_path",
+    srcs = [
+        "latin1_jni_path.cc",
+        ":jni.h",
+        ":jni_md.h",
+    ],
+    hdrs = ["latin1_jni_path.h"],
+    includes = ["."],  # For jni headers.
+)
+
 cc_binary(
     name = "libunix.so",
     srcs = [
@@ -60,6 +73,7 @@ cc_binary(
     linkshared = 1,
     visibility = ["//src:__subpackages__"],
     deps = [
+        ":latin1_jni_path",
         "//src/main/cpp/util",
         "//src/main/cpp/util:md5",
     ],

@@ -11,7 +11,17 @@ not already done so, first read the [Bazel Overview](bazel-overview.html).
 ## Installation
 
 To install Bazel, see [Installing Bazel](install.html).
+If you use Windows, please read also [Using Bazel on Windows](windows.html).
 
+You might also want to [integrate Bazel with your IDE](ide.html).
+
+## Bazel container
+
+To try out Bazel inside a [Docker](https://www.docker.com/) container, check out
+our public Ubuntu Linux (16.04) based Bazel container in
+[Google Cloud Marketplace](https://console.cloud.google.com/marketplace/details/google/bazel).
+
+To get started with the Bazel container, check out [Getting started with Bazel Docker Container](bazel-container.html).
 
 ## Tutorials
 
@@ -26,6 +36,11 @@ tutorial:
 
 *   [Tutorial: Build an iOS Application](tutorial/ios-app.html)
 
+If you find yourself unsure of how Workspace, Packages, Targets and Rules
+relate to each other, jump to the [Bazel Concepts](build-ref.html) page.
+
+Once you are familiar with the basics, you can try the rules for
+[other languages](rules.html).
 
 ## Migration
 
@@ -36,21 +51,6 @@ guide:
 
 *   [Migrating from Xcode to Bazel](migrate-xcode.html)
 
-
-## Language-specific resources
-
-Once you are familiar with Bazel, take a look at the language-specific
-resources, such as functions and build rules:
-
-*   [C++ and Bazel](bazel-and-cpp.html)
-
-*   [Java and Bazel](bazel-and-java.html)
-
-*   [Android and Bazel](bazel-and-android.html)
-
-*   [Apple apps and Bazel](bazel-and-apple.html)
-
-
 ## Reference
 
 To further explore Bazel, refer to the following resources:
@@ -59,4 +59,4 @@ To further explore Bazel, refer to the following resources:
 
 *   [Bazel User Manual](user-manual.html)
 
-*   [Build Encyclopedia](https://docs.bazel.build/versions/master/be/overview.html)
+*   [Rules](rules.html) for many languages

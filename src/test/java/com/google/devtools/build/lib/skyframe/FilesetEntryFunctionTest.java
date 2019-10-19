@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.FilesetTraversalParams;
 import com.google.devtools.build.lib.actions.FilesetTraversalParams.PackageBoundaryMode;
 import com.google.devtools.build.lib.actions.FilesetTraversalParamsFactory;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -49,6 +50,8 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
+import com.google.devtools.build.lib.vfs.UnixGlob;
+import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
@@ -56,13 +59,12 @@ import com.google.devtools.build.skyframe.RecordingDifferencer;
 import com.google.devtools.build.skyframe.SequencedRecordingDifferencer;
 import com.google.devtools.build.skyframe.SequentialBuildDriver;
 import com.google.devtools.build.skyframe.SkyFunction;
+import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -106,12 +108,15 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
     skyFunctions.put(
         FileStateValue.FILE_STATE,
         new FileStateFunction(
-            new AtomicReference<TimestampGranularityMonitor>(), externalFilesHelper));
+            new AtomicReference<TimestampGranularityMonitor>(),
+            new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS),
+            externalFilesHelper));
     skyFunctions.put(FileValue.FILE, new FileFunction(pkgLocator));
     skyFunctions.put(SkyFunctions.DIRECTORY_LISTING, new DirectoryListingFunction());
     skyFunctions.put(
         SkyFunctions.DIRECTORY_LISTING_STATE,
-        new DirectoryListingStateFunction(externalFilesHelper));
+        new DirectoryListingStateFunction(
+            externalFilesHelper, new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS)));
     skyFunctions.put(
         SkyFunctions.RECURSIVE_FILESYSTEM_TRAVERSAL, new RecursiveFilesystemTraversalFunction());
     skyFunctions.put(
@@ -124,7 +129,9 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
         new BlacklistedPackagePrefixesFunction(
             /*hardcodedBlacklistedPackagePrefixes=*/ ImmutableSet.of(),
             /*additionalBlacklistedPackagePrefixesFile=*/ PathFragment.EMPTY_FRAGMENT));
-    skyFunctions.put(SkyFunctions.FILESET_ENTRY, new FilesetEntryFunction());
+    skyFunctions.put(
+        SkyFunctions.FILESET_ENTRY, new FilesetEntryFunction((unused) -> rootDirectory));
+    skyFunctions.put(SkyFunctions.WORKSPACE_NAME, new TestWorkspaceNameFunction());
     skyFunctions.put(SkyFunctions.LOCAL_REPOSITORY_LOOKUP, new LocalRepositoryLookupFunction());
 
     differencer = new SequencedRecordingDifferencer();
@@ -135,8 +142,8 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
   }
 
   private Artifact getSourceArtifact(String path) throws Exception {
-    return new Artifact(
-        PathFragment.create(path), ArtifactRoot.asSourceRoot(Root.fromPath(rootDirectory)));
+    return ActionsTestUtil.createArtifact(
+        ArtifactRoot.asSourceRoot(Root.fromPath(rootDirectory)), path);
   }
 
   private Artifact createSourceArtifact(String path) throws Exception {
@@ -177,11 +184,13 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
   }
 
   private <T extends SkyValue> EvaluationResult<T> eval(SkyKey key) throws Exception {
-    return driver.evaluate(
-        ImmutableList.of(key),
-        false,
-        SkyframeExecutor.DEFAULT_THREAD_COUNT,
-        NullEventHandler.INSTANCE);
+    EvaluationContext evaluationContext =
+        EvaluationContext.newBuilder()
+            .setKeepGoing(false)
+            .setNumThreads(SkyframeExecutor.DEFAULT_THREAD_COUNT)
+            .setEventHander(NullEventHandler.INSTANCE)
+            .build();
+    return driver.evaluate(ImmutableList.of(key), evaluationContext);
   }
 
   private FilesetEntryValue evalFilesetTraversal(FilesetTraversalParams params) throws Exception {
@@ -191,31 +200,32 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
     return result.get(key);
   }
 
-  private static FilesetOutputSymlink symlink(String from, Artifact to) {
-    return FilesetOutputSymlink.createForTesting(
-        PathFragment.create(from), to.getPath().asFragment());
+  private FilesetOutputSymlink symlink(String from, Artifact to) {
+    return symlink(PathFragment.create(from), to.getPath().asFragment());
   }
 
-  private static FilesetOutputSymlink symlink(String from, String to) {
-    return FilesetOutputSymlink.createForTesting(
-        PathFragment.create(from), PathFragment.create(to));
+  private FilesetOutputSymlink symlink(String from, String to) {
+    return symlink(PathFragment.create(from), PathFragment.create(to));
   }
 
-  private static FilesetOutputSymlink symlink(String from, RootedPath to) {
-    return FilesetOutputSymlink.createForTesting(
-        PathFragment.create(from), to.asPath().asFragment());
+  private FilesetOutputSymlink symlink(String from, RootedPath to) {
+    return symlink(PathFragment.create(from), to.asPath().asFragment());
+  }
+
+  private FilesetOutputSymlink symlink(PathFragment from, PathFragment to) {
+    return FilesetOutputSymlink.createForTesting(from, to, rootDirectory.asFragment());
   }
 
   private void assertSymlinksCreatedInOrder(
       FilesetTraversalParams request, FilesetOutputSymlink... expectedSymlinks) throws Exception {
-    List<FilesetOutputSymlink> expected = Arrays.asList(expectedSymlinks);
     Collection<FilesetOutputSymlink> actual =
         Collections2.transform(
             evalFilesetTraversal(request).getSymlinks(),
             // Strip the metadata from the actual results.
             (input) ->
-                FilesetOutputSymlink.createForTesting(input.getName(), input.getTargetPath()));
-    assertThat(actual).containsExactlyElementsIn(expected).inOrder();
+                FilesetOutputSymlink.createAlreadyRelativizedForTesting(
+                    input.getName(), input.getTargetPath(), input.isRelativeToExecRoot()));
+    assertThat(actual).containsExactlyElementsIn(expectedSymlinks).inOrder();
   }
 
   private static Label label(String label) throws Exception {
@@ -950,5 +960,21 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
             (Set<String>) kwArgs.get("excludes"));
       }
     }.doTest();
+  }
+
+  private static class TestWorkspaceNameFunction implements SkyFunction {
+
+    @Nullable
+    @Override
+    public SkyValue compute(SkyKey skyKey, Environment env)
+        throws SkyFunctionException, InterruptedException {
+      return WorkspaceNameValue.withName("workspace");
+    }
+
+    @Nullable
+    @Override
+    public String extractTag(SkyKey skyKey) {
+      return null;
+    }
   }
 }

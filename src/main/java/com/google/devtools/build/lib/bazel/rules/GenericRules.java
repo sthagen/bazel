@@ -19,6 +19,8 @@ import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.RuleSe
 import com.google.devtools.build.lib.analysis.constraints.EnvironmentRule;
 import com.google.devtools.build.lib.bazel.rules.common.BazelFilegroupRule;
 import com.google.devtools.build.lib.rules.Alias.AliasRule;
+import com.google.devtools.build.lib.rules.LabelBuildSettings.LabelBuildFlagRule;
+import com.google.devtools.build.lib.rules.LabelBuildSettings.LabelBuildSettingRule;
 import com.google.devtools.build.lib.rules.core.CoreRules;
 import com.google.devtools.build.lib.rules.genquery.GenQueryRule;
 import com.google.devtools.build.lib.rules.test.TestSuiteRule;
@@ -42,7 +44,9 @@ public class GenericRules implements RuleSet {
     builder.addRuleDefinition(new AliasRule());
     builder.addRuleDefinition(new BazelFilegroupRule());
     builder.addRuleDefinition(new TestSuiteRule());
-    builder.addRuleDefinition(new GenQueryRule());
+    GenQueryRule.register(builder);
+    builder.addRuleDefinition(new LabelBuildSettingRule());
+    builder.addRuleDefinition(new LabelBuildFlagRule());
 
     try {
       builder.addWorkspaceFilePrefix(

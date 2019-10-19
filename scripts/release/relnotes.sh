@@ -124,8 +124,9 @@ function __format_release_notes() {
 # Create the release notes since commit $1 ($2...${[#]} are the cherry-picks,
 # so the commits to ignore.
 function __release_notes() {
+  local last_release=$1
   local i
-  local commits=$(__get_release_notes_commits $@)
+  local commits=$(__get_release_notes_commits $last_release)
   local length="${#RELNOTES_TYPES[@]}"
   __generate_release_notes "$commits"
   for (( i=0; $i < $length; i=$i+1 )); do
@@ -140,6 +141,26 @@ function __release_notes() {
       echo
     fi
   done
+
+  # Add a list of contributors to thank.
+  # Stages:
+  #   1. Get the list of authors from the last release til now, both name and
+  #     email.
+  #   2. Sort and uniqify.
+  #   3. Remove googlers. (This is why the email is needed)
+  #   4. Cut the email address, leaving only the name.
+  #   5-n. Remove trailing spaces and newlines, substituting with a comman and a
+  #     space, removing any trailing spaces again.
+  local external_authors=$(git log $last_release..HEAD --format="%aN <%aE>" \
+    | sort \
+    | uniq \
+    | grep -v "google.com" \
+    | cut -d'<' -f 1 \
+    | sed -e 's/[[:space:]]$//' \
+    | tr '\n' ',' \
+    | sed -e 's/,$/\n/' \
+    | sed -e 's/,/, /g')
+  echo "This release contains contributions from many people at Google, as well as ${external_authors}."
 }
 
 # A wrapper around all the previous function, using the CHANGELOG.md

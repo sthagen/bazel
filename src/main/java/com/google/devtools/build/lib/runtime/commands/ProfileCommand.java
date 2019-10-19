@@ -44,6 +44,7 @@ import com.google.devtools.common.options.OptionEffectTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingResult;
+import com.google.devtools.common.options.RegexPatternOption;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -153,15 +154,15 @@ public final class ProfileCommand implements BlazeCommand {
     public boolean htmlHistograms;
 
     @Option(
-      name = "task_tree",
-      defaultValue = "null",
-      converter = Converters.RegexPatternConverter.class,
-      documentationCategory = OptionDocumentationCategory.LOGGING,
-      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-      help =
-          "Print the tree of profiler tasks from all tasks matching the given regular expression."
-    )
-    public Pattern taskTree;
+        name = "task_tree",
+        defaultValue = "null",
+        converter = Converters.RegexPatternConverter.class,
+        documentationCategory = OptionDocumentationCategory.LOGGING,
+        effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+        help =
+            "Print the tree of profiler tasks from all tasks matching the given regular"
+                + " expression.")
+    public RegexPatternOption taskTree;
 
     @Option(
       name = "task_tree_threshold",
@@ -221,7 +222,7 @@ public final class ProfileCommand implements BlazeCommand {
       opts.vfsStatsLimit = 0;
     }
 
-    try (PrintStream out = new PrintStream(env.getReporter().getOutErr().getOutputStream())) {
+    try (PrintStream out = getOutputStream(env)) {
       env.getReporter()
           .handle(
               Event.warn(
@@ -250,7 +251,6 @@ public final class ProfileCommand implements BlazeCommand {
                     statistics.getSummaryStatistics(),
                     statistics.getSummaryPhaseStatistics(),
                     Optional.<CriticalPathStatistics>absent(),
-                    statistics.getMissingActionsCount(),
                     opts.vfsStatsLimit)
                 .print();
           }
@@ -272,7 +272,7 @@ public final class ProfileCommand implements BlazeCommand {
             }
 
             if (opts.taskTree != null) {
-              printTaskTree(out, name, info, opts.taskTree, opts.taskTreeThreshold);
+              printTaskTree(out, name, info, opts.taskTree.regexPattern(), opts.taskTreeThreshold);
               continue;
             }
 
@@ -309,7 +309,6 @@ public final class ProfileCommand implements BlazeCommand {
                   phaseSummaryStatistics,
                   phaseStatistics,
                   critPathStats,
-                  info.getMissingActionsCount(),
                   opts.htmlDetails,
                   opts.htmlPixelsPerSecond,
                   opts.vfsStatsLimit,
@@ -321,7 +320,6 @@ public final class ProfileCommand implements BlazeCommand {
                       phaseSummaryStatistics,
                       phaseStatistics,
                       Optional.of(critPathStats),
-                      info.getMissingActionsCount(),
                       opts.vfsStatsLimit)
                   .print();
             }
@@ -330,11 +328,17 @@ public final class ProfileCommand implements BlazeCommand {
             env
                 .getReporter()
                 .handle(Event.error("Failed to analyze profile file(s): " + e.getMessage()));
+            return BlazeCommandResult.exitCode(ExitCode.PARSING_FAILURE);
           }
         }
       }
     }
     return BlazeCommandResult.exitCode(ExitCode.SUCCESS);
+  }
+
+  private static PrintStream getOutputStream(CommandEnvironment env) {
+    return new PrintStream(
+        new BufferedOutputStream(env.getReporter().getOutErr().getOutputStream()), false);
   }
 
   /**

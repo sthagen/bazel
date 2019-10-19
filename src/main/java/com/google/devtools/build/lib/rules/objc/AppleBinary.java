@@ -14,10 +14,10 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import static com.google.devtools.build.lib.packages.Type.STRING;
 import static com.google.devtools.build.lib.rules.objc.AppleBinaryRule.BUNDLE_LOADER_ATTR_NAME;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.MULTI_ARCH_LINKED_BINARIES;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.DylibDependingRule.DYLIBS_ATTR_NAME;
-import static com.google.devtools.build.lib.syntax.Type.STRING;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Functions;
@@ -36,7 +36,7 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
-import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.NativeInfo;
@@ -133,19 +133,39 @@ public class AppleBinary implements RuleConfiguredTargetFactory {
    */
   public static AppleBinaryOutput linkMultiArchBinary(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
+    return linkMultiArchBinary(ruleContext, ImmutableList.of(), ImmutableList.of());
+  }
+
+  /**
+   * Links a (potentially multi-architecture) binary targeting Apple platforms.
+   *
+   * <p>This method comprises a bulk of the logic of the {@code apple_binary} rule, and is
+   * statically available so that it may be referenced by Skylark APIs that replicate its
+   * functionality.
+   *
+   * @param ruleContext the current rule context
+   * @param extraLinkopts extra linkopts to pass to the linker actions
+   * @param extraLinkInputs extra input files to pass to the linker action
+   * @return a tuple containing all necessary information about the linked binary
+   */
+  public static AppleBinaryOutput linkMultiArchBinary(
+      RuleContext ruleContext, Iterable<String> extraLinkopts, Iterable<Artifact> extraLinkInputs)
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     MultiArchSplitTransitionProvider.validateMinimumOs(ruleContext);
     PlatformType platformType = MultiArchSplitTransitionProvider.getPlatformType(ruleContext);
 
     AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
 
     ApplePlatform platform = appleConfiguration.getMultiArchPlatform(platformType);
-    ImmutableListMultimap<BuildConfiguration, TransitiveInfoCollection> configToDepsCollectionMap =
-        ruleContext.getPrerequisitesByConfiguration("deps", Mode.SPLIT);
-    ImmutableListMultimap<BuildConfiguration, ConfiguredTargetAndData>
-        configToCTATDepsCollectionMap =
-            ruleContext.getPrerequisiteCofiguredTargetAndTargetsByConfiguration("deps", Mode.SPLIT);
+    ImmutableListMultimap<String, TransitiveInfoCollection> cpuToDepsCollectionMap =
+        MultiArchBinarySupport.transformMap(
+            ruleContext.getPrerequisitesByConfiguration("deps", Mode.SPLIT));
+    ImmutableListMultimap<String, ConfiguredTargetAndData> cpuToCTATDepsCollectionMap =
+        MultiArchBinarySupport.transformMap(
+            ruleContext.getPrerequisiteCofiguredTargetAndTargetsByConfiguration(
+                "deps", Mode.SPLIT));
 
-    ImmutableMap<BuildConfiguration, CcToolchainProvider> childConfigurations =
+    ImmutableMap<BuildConfiguration, CcToolchainProvider> childConfigurationsAndToolchains =
         MultiArchBinarySupport.getChildConfigurationsAndToolchains(ruleContext);
     Artifact outputArtifact =
         ObjcRuleClasses.intermediateArtifacts(ruleContext).combinedArchitectureBinary();
@@ -154,19 +174,24 @@ public class AppleBinary implements RuleConfiguredTargetFactory {
 
     ImmutableSet<DependencySpecificConfiguration> dependencySpecificConfigurations =
         multiArchBinarySupport.getDependencySpecificConfigurations(
-            childConfigurations,
-            configToDepsCollectionMap,
-            configToCTATDepsCollectionMap,
+            childConfigurationsAndToolchains,
+            cpuToDepsCollectionMap,
+            cpuToCTATDepsCollectionMap,
             getDylibProviderTargets(ruleContext));
 
     Map<String, NestedSet<Artifact>> outputGroupCollector = new TreeMap<>();
+
+    Iterable<Artifact> allLinkInputs =
+        Iterables.concat(getRequiredLinkInputs(ruleContext), extraLinkInputs);
+    ExtraLinkArgs allLinkopts =
+        new ExtraLinkArgs(Iterables.concat(getRequiredLinkopts(ruleContext), extraLinkopts));
+
     NestedSet<Artifact> binariesToLipo =
         multiArchBinarySupport.registerActions(
-            platform,
-            getExtraLinkArgs(ruleContext),
+            allLinkopts,
             dependencySpecificConfigurations,
-            getExtraLinkInputs(ruleContext),
-            configToDepsCollectionMap,
+            allLinkInputs,
+            cpuToDepsCollectionMap,
             outputGroupCollector);
 
     new LipoSupport(ruleContext)
@@ -241,7 +266,8 @@ public class AppleBinary implements RuleConfiguredTargetFactory {
     return new AppleBinaryOutput(binaryInfoProvider, builder.build(), outputGroupCollector);
   }
 
-  private static ExtraLinkArgs getExtraLinkArgs(RuleContext ruleContext) throws RuleErrorException {
+  private static ExtraLinkArgs getRequiredLinkopts(RuleContext ruleContext)
+      throws RuleErrorException {
     BinaryType binaryType = getBinaryType(ruleContext);
 
     ImmutableList.Builder<String> extraLinkArgs = new ImmutableList.Builder<>();
@@ -284,7 +310,7 @@ public class AppleBinary implements RuleConfiguredTargetFactory {
         .build();
   }
 
-  private static Iterable<Artifact> getExtraLinkInputs(RuleContext ruleContext) {
+  private static Iterable<Artifact> getRequiredLinkInputs(RuleContext ruleContext) {
     AppleExecutableBinaryInfo executableProvider =
         ruleContext.getPrerequisite(
             BUNDLE_LOADER_ATTR_NAME, Mode.TARGET,
@@ -341,17 +367,18 @@ public class AppleBinary implements RuleConfiguredTargetFactory {
 
     if (appleConfiguration.shouldLinkingRulesPropagateObjc() && objcProvider != null) {
       targetBuilder.addNativeDeclaredProvider(objcProvider);
+      targetBuilder.addSkylarkTransitiveInfo(ObjcProvider.SKYLARK_NAME, objcProvider);
     }
 
-    InstrumentedFilesProvider instrumentedFilesProvider =
+    InstrumentedFilesInfo instrumentedFilesProvider =
         InstrumentedFilesCollector.forward(ruleContext, "deps", "bundle_loader");
 
-    return targetBuilder.addProvider(InstrumentedFilesProvider.class, instrumentedFilesProvider)
+    return targetBuilder
+        .addNativeDeclaredProvider(instrumentedFilesProvider)
         .addNativeDeclaredProvider(nativeInfo)
         .addNativeDeclaredProvider(appleBinaryOutput.getDebugOutputsProvider())
         .addOutputGroups(appleBinaryOutput.getOutputGroups())
         .build();
-
   }
 
   /**

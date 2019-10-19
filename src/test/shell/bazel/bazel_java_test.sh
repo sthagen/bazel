@@ -17,10 +17,83 @@
 # Tests the examples provided in Bazel
 #
 
-# Load the test setup defined in the parent directory
-CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${CURRENT_DIR}/../integration_test_setup.sh" \
+# --- begin runfiles.bash initialization ---
+if [[ ! -d "${RUNFILES_DIR:-/dev/null}" && ! -f "${RUNFILES_MANIFEST_FILE:-/dev/null}" ]]; then
+    if [[ -f "$0.runfiles_manifest" ]]; then
+      export RUNFILES_MANIFEST_FILE="$0.runfiles_manifest"
+    elif [[ -f "$0.runfiles/MANIFEST" ]]; then
+      export RUNFILES_MANIFEST_FILE="$0.runfiles/MANIFEST"
+    elif [[ -f "$0.runfiles/bazel_tools/tools/bash/runfiles/runfiles.bash" ]]; then
+      export RUNFILES_DIR="$0.runfiles"
+    fi
+fi
+if [[ -f "${RUNFILES_DIR:-/dev/null}/bazel_tools/tools/bash/runfiles/runfiles.bash" ]]; then
+  source "${RUNFILES_DIR}/bazel_tools/tools/bash/runfiles/runfiles.bash"
+elif [[ -f "${RUNFILES_MANIFEST_FILE:-/dev/null}" ]]; then
+  source "$(grep -m1 "^bazel_tools/tools/bash/runfiles/runfiles.bash " \
+            "$RUNFILES_MANIFEST_FILE" | cut -d ' ' -f 2-)"
+else
+  echo >&2 "ERROR: cannot find @bazel_tools//tools/bash/runfiles:runfiles.bash"
+  exit 1
+fi
+# --- end runfiles.bash initialization ---
+
+source "$(rlocation "io_bazel/src/test/shell/integration_test_setup.sh")" \
   || { echo "integration_test_setup.sh not found!" >&2; exit 1; }
+
+case "$(uname -s | tr [:upper:] [:lower:])" in
+msys*|mingw*|cygwin*)
+  declare -r is_windows=true
+  ;;
+*)
+  declare -r is_windows=false
+  ;;
+esac
+
+if "$is_windows"; then
+  export MSYS_NO_PATHCONV=1
+  export MSYS2_ARG_CONV_EXCL="*"
+fi
+
+JAVA_TOOLCHAIN="$1"; shift
+add_to_bazelrc "build --java_toolchain=${JAVA_TOOLCHAIN}"
+add_to_bazelrc "build --host_java_toolchain=${JAVA_TOOLCHAIN}"
+
+JAVA_TOOLS_ZIP="$1"; shift
+if [[ "${JAVA_TOOLS_ZIP}" != "released" ]]; then
+    if [[ "${JAVA_TOOLS_ZIP}" == file* ]]; then
+        JAVA_TOOLS_ZIP_FILE_URL="${JAVA_TOOLS_ZIP}"
+    elif "$is_windows"; then
+        JAVA_TOOLS_ZIP_FILE_URL="file:///$(rlocation io_bazel/$JAVA_TOOLS_ZIP)"
+    else
+        JAVA_TOOLS_ZIP_FILE_URL="file://$(rlocation io_bazel/$JAVA_TOOLS_ZIP)"
+    fi
+fi
+JAVA_TOOLS_ZIP_FILE_URL=${JAVA_TOOLS_ZIP_FILE_URL:-}
+
+if [[ $# -gt 0 ]]; then
+    JAVABASE_VALUE="$1"; shift
+    add_to_bazelrc "build --javabase=${JAVABASE_VALUE}"
+    add_to_bazelrc "build --host_javabase=${JAVABASE_VALUE}"
+fi
+
+function set_up() {
+    cat >>WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+# java_tools versions only used to test Bazel with various JDK toolchains.
+EOF
+
+    if [[ ! -z "${JAVA_TOOLS_ZIP_FILE_URL}" ]]; then
+    cat >>WORKSPACE <<EOF
+http_archive(
+    name = "local_java_tools",
+    urls = ["${JAVA_TOOLS_ZIP_FILE_URL}"]
+)
+EOF
+    fi
+
+    cat $(rlocation io_bazel/src/test/shell/bazel/testdata/jdk_http_archives) >> WORKSPACE
+}
 
 function write_hello_library_files() {
   mkdir -p java/main
@@ -174,13 +247,12 @@ def _impl(ctx):
     ctx,
     source_files = ctx.files.srcs,
     output = output_jar,
-    javac_opts = java_common.default_javac_opts(ctx, java_toolchain_attr = "_java_toolchain"),
     deps = deps,
     exports = exports,
     resources = ctx.files.resources,
     strict_deps = "ERROR",
-    java_toolchain = ctx.attr._java_toolchain,
-    host_javabase = ctx.attr._host_javabase
+    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],
+    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],
   )
   return struct(
     files = depset([output_jar]),
@@ -194,7 +266,7 @@ java_custom_library = rule(
     "deps": attr.label_list(),
     "exports": attr.label_list(),
     "resources": attr.label_list(allow_files=True),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_java_toolchain": attr.label(default = Label("${JAVA_TOOLCHAIN}")),
     "_host_javabase": attr.label(default = Label("@bazel_tools//tools/jdk:current_host_java_runtime"))
   },
   fragments = ["java"]
@@ -208,13 +280,69 @@ function test_build_hello_world() {
   bazel build //java/main:main &> $TEST_log || fail "build failed"
 }
 
-# This test builds a simple java deploy jar using remote singlejar and ijar
-# targets which compile them from source.
-function test_build_hello_world_with_remote_embedded_tool_targets() {
+function test_worker_strategy_is_default() {
   write_hello_library_files
 
-  bazel build //java/main:main_deploy.jar --define EXECUTOR=remote \
-    &> $TEST_log || fail "build failed"
+  bazel build //java/main:main \
+     &> $TEST_log || fail "build failed"
+  # By default, Java rules use worker strategy
+  expect_log " processes: .*worker"
+}
+function test_strategy_overrides_worker_default() {
+  write_hello_library_files
+
+  bazel build //java/main:main \
+    --spawn_strategy=local &> $TEST_log || fail "build failed"
+  # Java rules defaulting to worker do not override the strategy specified on
+  # the cli
+  expect_not_log " processes: .*worker"
+}
+function test_strategy_picks_first_preferred_worker() {
+  write_hello_library_files
+
+  bazel build //java/main:main \
+    --spawn_strategy=worker,local &> $TEST_log || fail "build failed"
+  expect_log " processes: .*worker"
+}
+
+function test_strategy_picks_first_preferred_local() {
+  write_hello_library_files
+
+  bazel build //java/main:main \
+    --spawn_strategy=local,worker &> $TEST_log || fail "build failed"
+  expect_not_log " processes: .*worker"
+  expect_log " processes: .*local"
+}
+
+# This test verifies that jars named by deploy_env are excluded from the final
+# deploy jar.
+function test_build_with_deploy_env() {
+  write_hello_library_files
+
+  # Overwrite java/main to add deploy_env customizations and remove the
+  # compile-time hello_library dependency.
+  cat >java/main/BUILD <<EOF
+java_binary(name = 'env', runtime_deps = ['//java/hello_library'])
+java_binary(name = 'main',
+    runtime_deps = ['//java/hello_library'],
+    srcs = ['Main.java'],
+    main_class = 'main.Main',
+    deploy_env = ['env'])
+EOF
+
+  cat >java/main/Main.java <<EOF
+package main;
+public class Main {
+  public static void main(String[] args) {
+    System.out.println("Hello, World!");
+  }
+}
+EOF
+
+  bazel build //java/main:main_deploy.jar &> $TEST_log || fail "build failed"
+  zipinfo -1 ${PRODUCT_NAME}-bin/java/main/main_deploy.jar &> $TEST_log \
+     || fail "Failed to zipinfo ${PRODUCT_NAME}-bin/java/main/main_deploy.jar"
+  expect_not_log "hello_library/HelloLibrary.class"
 }
 
 function test_build_with_sourcepath() {
@@ -255,7 +383,7 @@ EOF
 
  function test_java_common_compile_sourcepath() {
    # TODO(bazel-team): Enable this for Java 7 when VanillaJavaBuilder supports --sourcepath.
-   JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:toolchain' | grep source_version | cut -d '"' -f 2)"
+   JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:remote_toolchain' | grep source_version | cut -d '"' -f 2)"
    if [ "${JAVA_VERSION}" = "1.7" ]; then
      return 0
    fi
@@ -293,7 +421,7 @@ java_custom_library(
 )
 EOF
 
-  cat >g/java_custom_library.bzl <<'EOF'
+  cat >g/java_custom_library.bzl << EOF
 def _impl(ctx):
   output_jar = ctx.actions.declare_file("lib" + ctx.label.name + ".jar")
 
@@ -301,12 +429,11 @@ def _impl(ctx):
     ctx,
     source_files = ctx.files.srcs,
     output = output_jar,
-    javac_opts = java_common.default_javac_opts(ctx, java_toolchain_attr = "_java_toolchain"),
     deps = [],
     sourcepath = ctx.files.sourcepath,
     strict_deps = "ERROR",
-    java_toolchain = ctx.attr._java_toolchain,
-    host_javabase = ctx.attr._host_javabase
+    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],
+    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],
   )
   return struct(
     files = depset([output_jar]),
@@ -318,21 +445,21 @@ java_custom_library = rule(
   attrs = {
     "srcs": attr.label_list(allow_files=True),
     "sourcepath": attr.label_list(),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_java_toolchain": attr.label(default = Label("${JAVA_TOOLCHAIN}")),
     "_host_javabase": attr.label(default = Label("@bazel_tools//tools/jdk:current_host_java_runtime"))
   },
   fragments = ["java"]
 )
 EOF
    bazel build //g:test &> $TEST_log || fail "Failed to build //g:test"
-   jar tf bazel-bin/g/libtest.jar >> $TEST_log || fail "Failed to jar tf bazel-bin/g/libtest.jar"
+   zipinfo -1 bazel-bin/g/libtest.jar >> $TEST_log || fail "Failed to zipinfo -1 bazel-bin/g/libtest.jar"
    expect_log "g/A.class"
    expect_not_log "g/B.class"
  }
 
 function test_java_common_compile_sourcepath_with_implicit_class() {
    # TODO(bazel-team): Enable this for Java 7 when VanillaJavaBuilder supports --sourcepath.
-   JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:toolchain' | grep source_version | cut -d '"' -f 2)"
+   JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:remote_toolchain' | grep source_version | cut -d '"' -f 2)"
    if [ "${JAVA_VERSION}" = "1.7" ]; then
      return 0
    fi
@@ -370,7 +497,7 @@ java_custom_library(
 )
 EOF
 
-  cat >g/java_custom_library.bzl <<'EOF'
+  cat >g/java_custom_library.bzl << EOF
 def _impl(ctx):
   output_jar = ctx.actions.declare_file("lib" + ctx.label.name + ".jar")
 
@@ -378,12 +505,12 @@ def _impl(ctx):
     ctx,
     source_files = ctx.files.srcs,
     output = output_jar,
-    javac_opts = java_common.default_javac_opts(ctx, java_toolchain_attr = "_java_toolchain") + ["-implicit:class"],
+    javac_opts = ["-implicit:class"],
     deps = [],
     sourcepath = ctx.files.sourcepath,
     strict_deps = "ERROR",
-    java_toolchain = ctx.attr._java_toolchain,
-    host_javabase = ctx.attr._host_javabase
+    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],
+    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],
   )
   return struct(
     files = depset([output_jar]),
@@ -395,29 +522,29 @@ java_custom_library = rule(
   attrs = {
     "srcs": attr.label_list(allow_files=True),
     "sourcepath": attr.label_list(),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_java_toolchain": attr.label(default = Label("${JAVA_TOOLCHAIN}")),
     "_host_javabase": attr.label(default = Label("@bazel_tools//tools/jdk:current_host_java_runtime"))
   },
   fragments = ["java"]
 )
 EOF
    bazel build //g:test &> $TEST_log || fail "Failed to build //g:test"
-   jar tf bazel-bin/g/libtest.jar >> $TEST_log || fail "Failed to jar tf bazel-bin/g/libtest.jar"
+   zipinfo -1 bazel-bin/g/libtest.jar >> $TEST_log || fail "Failed to zipinfo -1 bazel-bin/g/libtest.jar"
    expect_log "g/A.class"
    expect_log "g/B.class"
  }
 
 # Runfiles is disabled by default on Windows, but we can test it on Unix by
-# adding flag --experimental_enable_runfiles=0
+# adding flag --enable_runfiles=0
 function test_build_and_run_hello_world_without_runfiles() {
   write_hello_library_files
 
-  bazel run --experimental_enable_runfiles=0 //java/main:main &> $TEST_log || fail "build failed"
+  bazel run --enable_runfiles=0 //java/main:main &> $TEST_log || fail "build failed"
   expect_log "Hello, Library!;Hello, World!"
 }
 
 function test_errorprone_error_fails_build_by_default() {
-  JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:toolchain' | grep source_version | cut -d '"' -f 2)"
+  JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:remote_toolchain' | grep source_version | cut -d '"' -f 2)"
   if [ "${JAVA_VERSION}" = "1.7" ]; then
     return 0
   fi
@@ -440,7 +567,7 @@ EOF
 }
 
 function test_extrachecks_off_disables_errorprone() {
-  JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:toolchain' | grep source_version | cut -d '"' -f 2)"
+  JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:remote_toolchain' | grep source_version | cut -d '"' -f 2)"
   if [ "${JAVA_VERSION}" = "1.7" ]; then
     return 0
   fi
@@ -505,7 +632,7 @@ EOF
   cat > java/testrunners/BUILD <<EOF
 java_library(name = "test_runner",
              srcs = ['TestRunner.java'],
-             deps = ['@bazel_tools//tools/jdk:TestRunner_deploy.jar'],
+             deps = ['@bazel_tools//tools/jdk:TestRunner'],
 )
 
 java_test(name = "Tests",
@@ -1293,11 +1420,11 @@ def _impl(ctx):
     ctx,
     source_files = ctx.files.srcs,
     output = compiled_jar,
-    java_toolchain = ctx.attr._java_toolchain,
-    host_javabase = ctx.attr._host_javabase
+    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],
+    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],
   )
 
-  imported_provider = JavaInfo(output_jar = imported_jar, use_ijar=False);
+  imported_provider = JavaInfo(output_jar = imported_jar, compile_jar = imported_jar);
 
   final_provider = java_common.merge([compilation_provider, imported_provider])
 
@@ -1314,7 +1441,7 @@ java_custom_library = rule(
   attrs = {
     "srcs": attr.label_list(allow_files=True),
     "jar": attr.label(allow_files=True),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_java_toolchain": attr.label(default = Label("${JAVA_TOOLCHAIN}")),
     "_host_javabase": attr.label(default = Label("@bazel_tools//tools/jdk:current_host_java_runtime"))
   },
   fragments = ["java"]
@@ -1324,318 +1451,6 @@ EOF
   bazel build java/com/google/sandwich:custom &> "$TEST_log" || fail "Java sandwich build failed"
   expect_log "<generated file java/com/google/sandwich/libcustom.jar>"
   expect_log "<generated file java/com/google/sandwich/libb.jar>"
-}
-
-function test_java_common_create_provider_with_ijar() {
-  mkdir -p java/com/google/foo
-  touch java/com/google/foo/{BUILD,A.java,my_rule.bzl}
-  cat > java/com/google/foo/A.java << EOF
-package com.google.foo;
-class A {}
-EOF
-
-  cat > java/com/google/foo/BUILD << EOF
-load(":my_rule.bzl", "my_rule")
-java_library(name = "a", srcs = ["A.java"])
-my_rule(name = "banana", compile_time_jars = ["liba.jar"])
-EOF
-
-  cat > java/com/google/foo/my_rule.bzl << EOF
-def _impl(ctx):
-  provider = java_common.create_provider(
-    ctx.actions,
-    compile_time_jars = ctx.files.compile_time_jars,
-    java_toolchain = ctx.attr._java_toolchain
-  )
-  print(provider.compile_jars)
-  print(provider.full_compile_jars)
-  return DefaultInfo(files = provider.compile_jars)
-
-my_rule = rule(
-  implementation = _impl,
-  attrs = {
-    "compile_time_jars": attr.label_list(allow_files=True),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
-  }
-)
-EOF
-
-  bazel build java/com/google/foo:banana >& "$TEST_log" || fail "Unexpected fail"
-  expect_log "liba-ijar.jar"
-  unzip -l bazel-bin/java/com/google/foo/liba-ijar.jar >> "$TEST_log"
-  expect_log "00:00   com/google/foo/A.class"
-}
-
-function test_java_common_create_provider_without_ijar() {
-  mkdir -p java/com/google/foo
-  touch java/com/google/foo/{BUILD,A.java,my_rule.bzl}
-  cat > java/com/google/foo/A.java << EOF
-package com.google.foo;
-class A {}
-EOF
-
-  cat > java/com/google/foo/BUILD << EOF
-load(":my_rule.bzl", "my_rule")
-java_library(name = "a", srcs = ["A.java"])
-my_rule(name = "banana", compile_time_jars = ["liba.jar"])
-EOF
-
-  cat > java/com/google/foo/my_rule.bzl << EOF
-def _impl(ctx):
-  provider = java_common.create_provider(
-    use_ijar = False,
-    compile_time_jars = ctx.files.compile_time_jars,
-  )
-  print(provider.compile_jars)
-  return DefaultInfo(files = provider.compile_jars)
-
-my_rule = rule(
-  implementation = _impl,
-  attrs = {
-    "compile_time_jars": attr.label_list(allow_files=True),
-  }
-)
-EOF
-
-  bazel build java/com/google/foo:banana >& "$TEST_log" || fail "Unexpected failure"
-  expect_log "liba.jar"
-}
-
-
-function test_java_common_create_provider_with_ijar_unset_actions() {
-  mkdir -p java/com/google/foo
-  touch java/com/google/foo/{BUILD,A.java,my_rule.bzl}
-  cat > java/com/google/foo/A.java << EOF
-package com.google.foo;
-class A {}
-EOF
-
-  cat > java/com/google/foo/BUILD << EOF
-load(":my_rule.bzl", "my_rule")
-java_library(name = "a", srcs = ["A.java"])
-my_rule(name = "banana", compile_time_jars = ["liba.jar"])
-EOF
-
-  cat > java/com/google/foo/my_rule.bzl << EOF
-def _impl(ctx):
-  provider = java_common.create_provider(
-    compile_time_jars = ctx.files.compile_time_jars,
-    java_toolchain = ctx.attr._java_toolchain
-  )
-  return DefaultInfo(files = provider.compile_jars)
-
-my_rule = rule(
-  implementation = _impl,
-  attrs = {
-    "compile_time_jars": attr.label_list(allow_files=True),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
-  }
-)
-EOF
-
-  bazel build java/com/google/foo:banana >& "$TEST_log" && fail "Unexpected success"
-  expect_log "The value of use_ijar is True. Make sure the ctx.actions argument is valid."
-}
-
-
-function test_java_info_constructor_with_ijar_unset_actions() {
-  mkdir -p java/com/google/foo
-  touch java/com/google/foo/{BUILD,my_rule.bzl}
-  cat > java/com/google/foo/BUILD << EOF
-load(":my_rule.bzl", "my_rule")
-my_rule(
-  name = 'my_skylark_rule',
-  output_jar = 'my_skylark_rule_lib.jar',
-  source_jars = ['my_skylark_rule_src.jar']
- )
-EOF
-
-  cat > java/com/google/foo/my_rule.bzl << EOF
-result = provider()
-def _impl(ctx):
-  javaInfo = JavaInfo(
-    output_jar = ctx.file.output_jar,
-    source_jars = ctx.files.source_jars,
-    use_ijar = True,
-    java_toolchain = ctx.attr._java_toolchain
-  )
-  return [result(property = javaInfo)]
-
-my_rule = rule(
-  implementation = _impl,
-  attrs = {
-    'output_jar' : attr.label(allow_single_file=True),
-    'source_jars' : attr.label_list(allow_files=['.jar']),
-    "_java_toolchain": attr.label(default = Label("//tools/jdk:toolchain"))
-  }
-)
-EOF
-
-  bazel build java/com/google/foo:my_skylark_rule >& "$TEST_log" && fail "Unexpected success"
-  expect_log "The value of use_ijar is True. Make sure the ctx.actions argument is valid."
-}
-
-
-function test_java_common_create_provider_with_ijar_unset_java_toolchain() {
-  mkdir -p java/com/google/foo
-  touch java/com/google/foo/{BUILD,A.java,my_rule.bzl}
-  cat > java/com/google/foo/A.java << EOF
-package com.google.foo;
-class A {}
-EOF
-
-  cat > java/com/google/foo/BUILD << EOF
-load(":my_rule.bzl", "my_rule")
-java_library(name = "a", srcs = ["A.java"])
-my_rule(name = "banana", compile_time_jars = ["liba.jar"])
-EOF
-
-  cat > java/com/google/foo/my_rule.bzl << EOF
-def _impl(ctx):
-  provider = java_common.create_provider(
-    ctx.actions,
-    compile_time_jars = ctx.files.compile_time_jars,
-  )
-  return DefaultInfo(files = provider.compile_jars)
-
-my_rule = rule(
-  implementation = _impl,
-  attrs = {
-    "compile_time_jars": attr.label_list(allow_files=True),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
-  }
-)
-EOF
-
-  bazel build java/com/google/foo:banana >& "$TEST_log" && fail "Unexpected success"
-  expect_log "The value of use_ijar is True. Make sure the java_toolchain argument is valid."
-}
-
-
-function test_java_info_constructor_with_ijar_unset_java_toolchain() {
-  mkdir -p java/com/google/foo
-  touch java/com/google/foo/{BUILD,my_rule.bzl}
-  cat > java/com/google/foo/BUILD << EOF
-load(":my_rule.bzl", "my_rule")
-my_rule(
-  name = 'my_skylark_rule',
-  output_jar = 'my_skylark_rule_lib.jar',
-  source_jars = ['my_skylark_rule_src.jar']
- )
-EOF
-
-  cat > java/com/google/foo/my_rule.bzl << EOF
-result = provider()
-def _impl(ctx):
-  javaInfo = JavaInfo(
-    output_jar = ctx.file.output_jar,
-    source_jars = ctx.files.source_jars,
-    use_ijar = True,
-    actions = ctx.actions
-  )
-  return [result(property = javaInfo)]
-
-my_rule = rule(
-  implementation = _impl,
-  attrs = {
-    'output_jar' : attr.label(allow_single_file=True),
-    'source_jars' : attr.label_list(allow_files=['.jar'])
-  }
-)
-EOF
-
-  bazel build java/com/google/foo:my_skylark_rule >& "$TEST_log" && fail "Unexpected success"
-  expect_log "The value of use_ijar is True. Make sure the java_toolchain argument is valid."
-}
-
-
-function test_java_test_timeout() {
-  setup_javatest_support
-  mkdir -p javatests/com/google/timeout
-  touch javatests/com/google/timeout/{BUILD,TimeoutTests.java}
-
-  cat > javatests/com/google/timeout/TimeoutTests.java << EOF
-package com.google.timeout;
-
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
-import org.junit.Test;
-
-@RunWith(JUnit4.class)
-public class TimeoutTests {
-
-  @Test
-  public void testPasses() throws InterruptedException { }
-
-  @Test
-  public void testTimesOut() throws InterruptedException {
-    // sleep more than 1 min
-    Thread.sleep(Long.MAX_VALUE);
-  }
-}
-EOF
-
-  cat > javatests/com/google/timeout/BUILD <<EOF
-java_test(
-  name = "TimeoutTests",
-  srcs = ["TimeoutTests.java"],
-  deps = ['//third_party:junit4'],
-  timeout = "short", # 1 min
-)
-EOF
-
-  bazel test javatests/com/google/timeout:TimeoutTests --test_timeout=5  >& "$TEST_log" && fail "Unexpected success"
-  xml_log=bazel-testlogs/javatests/com/google/timeout/TimeoutTests/test.xml
-  [[ -s $xml_log ]] || fail "$xml_log was not present after test"
-  cat "$xml_log" > "$TEST_log"
-  expect_log "failures='2'"
-  expect_log "<failure message='Test cancelled' type='java.lang.Exception'>java.lang.Exception: Test cancelled"
-  expect_log "<failure message='Test interrupted' type='java.lang.Exception'>java.lang.Exception: Test interrupted"
-}
-
-function test_wrapper_resolves_runfiles_to_subsuming_tree() {
-    setup_clean_workspace
-    mkdir -p java/com/google/runfiles/
-    cat <<'EOF' > java/com/google/runfiles/EchoRunfiles.java
-package com.google.runfiles;
-
-public class EchoRunfiles {
-   public static void main(String[] argv) {
-       System.out.println(System.getenv("JAVA_RUNFILES"));
-   }
-}
-EOF
-    cat <<'EOF' > java/com/google/runfiles/BUILD
-java_binary(
-    name = 'EchoRunfiles',
-    srcs = ['EchoRunfiles.java'],
-    visibility = ['//visibility:public'],
-)
-EOF
-    cat <<'EOF' > check_runfiles.sh
-#!/bin/sh -eu
-unset JAVA_RUNFILES # Force the wrapper script to recompute it.
-subrunfiles=`$TEST_SRCDIR/__main__/java/com/google/runfiles/EchoRunfiles`
-if [ $subrunfiles != $TEST_SRCDIR ]; then
-  echo $subrunfiles
-  echo "DOES NOT MATCH"
-  echo $TEST_SRCDIR
-  exit 1
-fi
-EOF
-    chmod u+x check_runfiles.sh
-    cat <<'EOF' > BUILD
-sh_test(
-    name = 'check_runfiles',
-    srcs = ['check_runfiles.sh'],
-    data = ['//java/com/google/runfiles:EchoRunfiles'],
-)
-EOF
-
-    # Create a runfiles tree for EchoRunfiles.
-    bazel build //java/com/google/runfiles:EchoRunfiles
-    # We're testing a formerly non-hermetic interaction, so disable the sandbox.
-    bazel test --spawn_strategy=standalone --test_output=errors :check_runfiles
 }
 
 function test_java_info_constructor_e2e() {
@@ -1657,14 +1472,14 @@ def _impl(ctx):
     ctx.actions,
     jar = ctx.file.output_jar,
     target_label = ctx.label,
-    java_toolchain = ctx.attr._java_toolchain,
+    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],
   )
   source_jar = java_common.pack_sources(
     ctx.actions,
     output_jar = ctx.file.output_jar,
     source_jars = ctx.files.source_jars,
-    java_toolchain = ctx.attr._java_toolchain,
-    host_javabase = ctx.attr._host_javabase,
+    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],
+    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],
   )
   javaInfo = JavaInfo(
     output_jar = ctx.file.output_jar,
@@ -1678,13 +1493,89 @@ my_rule = rule(
   attrs = {
     'output_jar' : attr.label(allow_single_file=True),
     'source_jars' : attr.label_list(allow_files=['.jar']),
-    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:remote_toolchain")),
     "_host_javabase": attr.label(default = Label("@bazel_tools//tools/jdk:current_host_java_runtime"))
   }
 )
 EOF
 
   bazel build java/com/google/foo:my_skylark_rule >& "$TEST_log" || fail "Expected success"
+}
+
+# This test builds a simple java deploy jar using remote singlejar and ijar
+# targets which compile them from source.
+function test_build_hello_world_with_remote_embedded_tool_targets() {
+  write_hello_library_files
+
+  bazel build //java/main:main_deploy.jar --define EXECUTOR=remote \
+    &> $TEST_log || fail "build failed"
+}
+
+
+function test_target_exec_properties_java() {
+  cat > Hello.java << 'EOF'
+public class Hello {
+  public static void main(String[] args) {
+    System.out.println("Hello!");
+  }
+}
+EOF
+  cat > BUILD <<'EOF'
+java_binary(
+  name = "a",
+  srcs = ["Hello.java"],
+  main_class = "Hello",
+  exec_properties = {"key3": "value3", "overridden": "child_value"},
+)
+
+platform(
+    name = "my_platform",
+    parents = ["@local_config_platform//:host"],
+    exec_properties = {
+        "key2": "value2",
+        "overridden": "parent_value",
+        }
+)
+EOF
+  bazel build --extra_execution_platforms=":my_platform" --toolchain_resolution_debug :a --execution_log_json_file out.txt &> $TEST_log || fail "Build failed"
+  grep "key3" out.txt || fail "Did not find the target attribute key"
+  grep "child_value" out.txt || fail "Did not find the overriding value"
+  grep "key2" out.txt || fail "Did not find the platform key"
+}
+
+
+function test_current_host_java_runtime_runfiles() {
+  if "$is_windows"; then
+    echo "Skipping test on Windows" && return
+  fi
+  local -r pkg="${FUNCNAME[0]}"
+  mkdir "${pkg}" || fail "Expected success"
+
+  touch "${pkg}"/BUILD "${pkg}"/run.sh
+
+  cat > "${pkg}"/BUILD <<EOF
+sh_test(
+    name = "bar",
+    args = ["\$(JAVA)"],
+    data = ["@bazel_tools//tools/jdk:current_host_java_runtime"],
+    srcs = ["run.sh"],
+    toolchains = ["@bazel_tools//tools/jdk:current_host_java_runtime"],
+)
+EOF
+
+  cat > "${pkg}"/run.sh <<EOF
+#!/bin/bash
+
+set -eu
+
+JAVA=\$1
+[[ "\$JAVA" =~ ^(/|[^/]+$) ]] || JAVA="\$PWD/\$JAVA"
+"\${JAVA}" -fullversion
+EOF
+  chmod +x "${pkg}"/run.sh
+
+  bazel test //"${pkg}":bar --test_output=all --verbose_failures >& "$TEST_log" \
+      || fail "Expected success"
 }
 
 run_suite "Java integration tests"

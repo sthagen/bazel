@@ -21,7 +21,6 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
-import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
@@ -34,7 +33,7 @@ import org.junit.runners.JUnit4;
  * scratch.writeFile() and scratch.overwriteFile()).
  */
 @RunWith(JUnit4.class)
-public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase {
+public abstract class AbstractAndroidLocalTestTestBase extends AndroidBuildViewTestCase {
 
   @Before
   public void setUp() throws Exception {
@@ -65,12 +64,10 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
         "    deps = extra_deps,",
         "    data = ['data.dat'])");
 
-    writeFile("java/test/data.dat",
-        "this is a dummy data file");
+    writeFile("java/test/data.dat", "this is a dummy data file");
 
     ConfiguredTarget target = getConfiguredTarget("//java/test:dummyTest");
-    Artifact data = getFileConfiguredTarget("//java/test:data.dat")
-        .getArtifact();
+    Artifact data = getFileConfiguredTarget("//java/test:data.dat").getArtifact();
     RunfilesProvider runfiles = target.getProvider(RunfilesProvider.class);
 
     assertThat(runfiles.getDataRunfiles().getAllArtifacts().toSet()).contains(data);
@@ -81,7 +78,9 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
   @Test
   public void testNeverlinkRuntimeDepsExclusionReportsError() throws Exception {
     useConfiguration("--noexperimental_allow_runtime_deps_on_neverlink");
-    checkError("java/test", "test",
+    checkError(
+        "java/test",
+        "test",
         "neverlink dep //java/test:neverlink_lib not allowed in runtime deps",
         String.format("%s(name = 'test',", getRuleName()),
         "    srcs = ['test.java'],",
@@ -141,10 +140,10 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
         ")");
     ConfiguredTarget binary = getConfiguredTarget("//java/com/foo");
     List<String> inputs =
-        actionsTestUtil()
-            .prettyArtifactNames(actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)));
+        ActionsTestUtil.prettyArtifactNames(
+            actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)));
 
-    assertThat(inputs).containsAllOf("java/com/foo/Flag1On.java", "java/com/foo/Flag2Off.java");
+    assertThat(inputs).containsAtLeast("java/com/foo/Flag1On.java", "java/com/foo/Flag2Off.java");
     assertThat(inputs).containsNoneOf("java/com/foo/Flag1Off.java", "java/com/foo/Flag2On.java");
   }
 
@@ -196,7 +195,7 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
         actionsTestUtil()
             .prettyArtifactNames(actionsTestUtil().artifactClosureOf(getFilesToBuild(binary)));
 
-    assertThat(inputs).containsAllOf("java/com/foo/Flag1On.java", "java/com/foo/Flag2Off.java");
+    assertThat(inputs).containsAtLeast("java/com/foo/Flag1On.java", "java/com/foo/Flag2Off.java");
     assertThat(inputs).containsNoneOf("java/com/foo/Flag1Off.java", "java/com/foo/Flag2On.java");
   }
 
@@ -323,7 +322,7 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
         "  transitive_configs = [':flag1', ':flag2'],",
         ")");
     Artifact flagList =
-        actionsTestUtil().getFirstArtifactEndingWith(
+        ActionsTestUtil.getFirstArtifactEndingWith(
             actionsTestUtil()
                 .artifactClosureOf(getFilesToBuild(getConfiguredTarget("//java/com/foo"))),
             "/FooFlags.java");
@@ -333,8 +332,7 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
   }
 
   @Test
-  public void testFeatureFlagsAttributeFailsAnalysisIfFlagIsAliased()
-      throws Exception {
+  public void testFeatureFlagsAttributeFailsAnalysisIfFlagIsAliased() throws Exception {
     reporter.removeHandler(failFastHandler);
     useConfiguration(
         "--experimental_dynamic_configs=on",
@@ -362,10 +360,12 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
         "  transitive_configs = [':flag1'],",
         ")");
     assertThat(getConfiguredTarget("//java/com/foo")).isNull();
-    assertContainsEvent(String.format(
-        "in feature_flags attribute of %s rule //java/com/foo:foo: "
-            + "Feature flags must be named directly, not through aliases; "
-            + "use '//java/com/foo:flag1', not '//java/com/foo:alias'", getRuleName()));
+    assertContainsEvent(
+        String.format(
+            "in feature_flags attribute of %s rule //java/com/foo:foo: "
+                + "Feature flags must be named directly, not through aliases; "
+                + "use '//java/com/foo:flag1', not '//java/com/foo:alias'",
+            getRuleName()));
   }
 
   @Test
@@ -399,9 +399,11 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
         ")");
     assertThat(getConfiguredTarget("//java/com/google/android/foo:foo")).isNull();
     assertContainsEvent(
-        String.format("in feature_flags attribute of %s rule "
-            + "//java/com/google/android/foo:foo: the feature_flags attribute is not available in "
-            + "package 'java/com/google/android/foo'", getRuleName()));
+        String.format(
+            "in feature_flags attribute of %s rule //java/com/google/android/foo:foo: the"
+                + " feature_flags attribute is not available in package"
+                + " 'java/com/google/android/foo'",
+            getRuleName()));
   }
 
   @Test
@@ -460,6 +462,86 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
   }
 
   @Test
+  public void androidManifestMergerOrderAlphabeticalByConfiguration_MergeesSortedByPathInBinOrGen()
+      throws Exception {
+    useConfiguration(
+        "--fat_apk_cpu=k8", "--android_manifest_merger_order=alphabetical_by_configuration");
+    scratch.overwriteFile(
+        "java/android/BUILD",
+        "android_library(",
+        "    name = 'core',",
+        "    manifest = 'core/AndroidManifest.xml',",
+        "    exports_manifest = 1,",
+        "    resource_files = ['core/res/values/strings.xml'],",
+        ")",
+        "android_library(",
+        "    name = 'utility',",
+        "    manifest = 'utility/AndroidManifest.xml',",
+        "    exports_manifest = 1,",
+        "    resource_files = ['utility/res/values/values.xml'],",
+        "    deps = ['//java/common:common'],",
+        ")");
+    scratch.file(
+        "java/binary/BUILD",
+        "android_binary(",
+        "    name = 'application',",
+        "    srcs = ['App.java'],",
+        "    manifest = 'app/AndroidManifest.xml',",
+        "    deps = [':library'],",
+        ")",
+        "android_library(",
+        "    name = 'library',",
+        "    manifest = 'library/AndroidManifest.xml',",
+        "    exports_manifest = 1,",
+        "    deps = ['//java/common:theme', '//java/android:utility'],",
+        ")");
+    scratch.file(
+        "java/test/BUILD",
+        "android_local_test(",
+        "    name = 'test',",
+        "    srcs = ['Test.java'],",
+        "    manifest = 'testing/AndroidManifest.xml',",
+        "    deps = ['//java/binary:application', '//java/binary:library'],",
+        ")");
+    scratch.file(
+        "java/common/BUILD",
+        "android_library(",
+        "    name = 'common',",
+        "    manifest = 'common/AndroidManifest.xml',",
+        "    exports_manifest = 1,",
+        "    resource_files = ['common/res/values/common.xml'],",
+        "    deps = ['//java/android:core'],",
+        ")",
+        "android_library(",
+        "    name = 'theme',",
+        "    manifest = 'theme/AndroidManifest.xml',",
+        "    exports_manifest = 1,",
+        "    resource_files = ['theme/res/values/values.xml'],",
+        ")");
+
+    ConfiguredTarget test = getConfiguredTarget("//java/test:test");
+    assertNoEvents();
+    assertThat(test).isNotNull();
+
+    // each entry appears twice because the application duplicates them all into another config;
+    // this is partially testing that doing so does not cause a crash because of matching
+    // root-relative paths.
+    assertThat(getLocalTestMergeeManifests(test).values())
+        .containsExactly(
+            "//java/android:core",
+            "//java/android:core",
+            "//java/android:utility",
+            "//java/android:utility",
+            "//java/binary:library",
+            "//java/binary:library",
+            "//java/common:common",
+            "//java/common:common",
+            "//java/common:theme",
+            "//java/common:theme")
+        .inOrder();
+  }
+
+  @Test
   public void testDeployJar() throws Exception {
     writeFile(
         "java/com/google/android/foo/BUILD",
@@ -476,11 +558,7 @@ public abstract class AbstractAndroidLocalTestTestBase extends BuildViewTestCase
             getFileConfiguredTarget("//java/com/google/android/foo:test_deploy.jar").getArtifact());
     List<String> inputs = ActionsTestUtil.baseArtifactNames(deployJarAction.getInputs());
 
-    assertThat(inputs)
-        .containsAllOf(
-            "test_resources.jar",
-            "test.jar",
-            "SingleJar_deploy.jar");
+    assertThat(inputs).containsAtLeast("test_resources.jar", "test.jar");
   }
 
   public abstract void checkMainClass(

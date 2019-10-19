@@ -16,14 +16,14 @@
 
 package(default_visibility = ["//visibility:public"])
 
+load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+load(":armeabi_cc_toolchain_config.bzl", "armeabi_cc_toolchain_config")
+load("@rules_cc//cc:defs.bzl", "cc_toolchain", "cc_toolchain_suite")
+
 licenses(["notice"])  # Apache 2.0
 
 cc_library(
     name = "malloc",
-)
-
-cc_library(
-    name = "stl",
 )
 
 filegroup(
@@ -38,7 +38,7 @@ filegroup(
 
 filegroup(
     name = "compiler_deps",
-    srcs = glob(["extra_tools/**"]) + ["%{cc_compiler_deps}"],
+    srcs = glob(["extra_tools/**"], allow_empty = True) + [%{cc_compiler_deps}],
 )
 
 # This is the entry point for --crosstool_top.  Toolchains are found
@@ -48,63 +48,66 @@ cc_toolchain_suite(
     name = "toolchain",
     toolchains = {
         "%{name}|%{compiler}": ":cc-compiler-%{name}",
+        "%{name}": ":cc-compiler-%{name}",
         "armeabi-v7a|compiler": ":cc-compiler-armeabi-v7a",
+        "armeabi-v7a": ":cc-compiler-armeabi-v7a",
     },
 )
 
 cc_toolchain(
     name = "cc-compiler-%{name}",
+    toolchain_identifier = "%{cc_toolchain_identifier}",
+    toolchain_config = ":%{cc_toolchain_identifier}",
     all_files = ":compiler_deps",
+    ar_files = ":compiler_deps",
+    as_files = ":compiler_deps",
     compiler_files = ":compiler_deps",
-    cpu = "%{name}",
     dwp_files = ":empty",
-    dynamic_runtime_libs = [":empty"],
     linker_files = ":compiler_deps",
     objcopy_files = ":empty",
-    static_runtime_libs = [":empty"],
     strip_files = ":empty",
     supports_param_files = %{supports_param_files},
 )
 
-toolchain(
-    name = "cc-toolchain-%{name}",
-    exec_compatible_with = [
-        # This toolchain will only work with the local autoconfigured platforms.
-        "@bazel_tools//platforms:autoconfigured",
-        # TODO(katre): add autodiscovered constraints for host CPU and OS.
-    ],
-    target_compatible_with = [
-        # TODO(katre): add autodiscovered constraints for host CPU and OS.
-    ],
-    toolchain = ":cc-compiler-%{name}",
-    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+cc_toolchain_config(
+    name = "%{cc_toolchain_identifier}",
+    cpu = "%{target_cpu}",
+    compiler = "%{compiler}",
+    toolchain_identifier = "%{cc_toolchain_identifier}",
+    host_system_name = "%{host_system_name}",
+    target_system_name = "%{target_system_name}",
+    target_libc = "%{target_libc}",
+    abi_version = "%{abi_version}",
+    abi_libc_version = "%{abi_libc_version}",
+    cxx_builtin_include_directories = [%{cxx_builtin_include_directories}],
+    tool_paths = {%{tool_paths}},
+    compile_flags = [%{compile_flags}],
+    opt_compile_flags = [%{opt_compile_flags}],
+    dbg_compile_flags = [%{dbg_compile_flags}],
+    cxx_flags = [%{cxx_flags}],
+    link_flags = [%{link_flags}],
+    link_libs = [%{link_libs}],
+    opt_link_flags = [%{opt_link_flags}],
+    unfiltered_compile_flags = [%{unfiltered_compile_flags}],
+    coverage_compile_flags = [%{coverage_compile_flags}],
+    coverage_link_flags = [%{coverage_link_flags}],
+    supports_start_end_lib = %{supports_start_end_lib},
 )
 
 # Android tooling requires a default toolchain for the armeabi-v7a cpu.
 cc_toolchain(
     name = "cc-compiler-armeabi-v7a",
+    toolchain_identifier = "stub_armeabi-v7a",
+    toolchain_config = ":stub_armeabi-v7a",
     all_files = ":empty",
+    ar_files = ":empty",
+    as_files = ":empty",
     compiler_files = ":empty",
-    cpu = "local",
     dwp_files = ":empty",
-    dynamic_runtime_libs = [":empty"],
     linker_files = ":empty",
     objcopy_files = ":empty",
-    static_runtime_libs = [":empty"],
     strip_files = ":empty",
     supports_param_files = 1,
 )
 
-toolchain(
-    name = "cc-toolchain-armeabi-v7a",
-    exec_compatible_with = [
-        # TODO(katre): add autodiscovered constraints for host CPU and OS.
-    ],
-    target_compatible_with = [
-        "@bazel_tools//platforms:arm",
-        "@bazel_tools//platforms:android",
-    ],
-    toolchain = ":cc-compiler-armabi-v7a",
-    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
-)
-
+armeabi_cc_toolchain_config(name = "stub_armeabi-v7a")

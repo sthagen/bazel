@@ -15,9 +15,8 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.base.Preconditions;
-import com.google.devtools.build.lib.util.SpellChecker;
+import com.google.common.collect.ImmutableSet;
 import java.io.IOException;
-import java.util.Set;
 import javax.annotation.Nullable;
 
 // TODO(bazel-team): For performance, avoid doing HashMap lookups at runtime, and compile local
@@ -25,10 +24,6 @@ import javax.annotation.Nullable;
 // speed bottleneck, as previously measured in an experiment.
 /**
  * Syntax node for an identifier.
- *
- * <p>Unlike most {@link ASTNode} subclasses, this one supports {@link Object#equals} and {@link
- * Object#hashCode} (but note that these methods ignore location information). They are needed
- * because {@code Identifier}s are stored in maps when constructing {@link LoadStatement}.
  */
 public final class Identifier extends Expression {
 
@@ -37,7 +32,7 @@ public final class Identifier extends Expression {
   // ValidationEnvironment.
   @Nullable private ValidationEnvironment.Scope scope;
 
-  public Identifier(String name) {
+  Identifier(String name) {
     this.name = name;
   }
 
@@ -52,25 +47,13 @@ public final class Identifier extends Expression {
     return name.startsWith("_");
   }
 
+  ValidationEnvironment.Scope getScope() {
+    return scope;
+  }
+
   @Override
   public void prettyPrint(Appendable buffer) throws IOException {
     buffer.append(name);
-  }
-
-  @Override
-  public boolean equals(@Nullable Object object) {
-    // TODO(laurentlb): Remove this. AST nodes should probably not be comparable.
-    if (object instanceof Identifier) {
-      Identifier that = (Identifier) object;
-      return this.name.equals(that.name);
-    }
-    return false;
-  }
-
-  @Override
-  public int hashCode() {
-    // TODO(laurentlb): Remove this.
-    return name.hashCode();
   }
 
   void setScope(ValidationEnvironment.Scope scope) {
@@ -79,44 +62,7 @@ public final class Identifier extends Expression {
   }
 
   @Override
-  Object doEval(Environment env) throws EvalException {
-    Object result;
-    if (scope == null) {
-      // Legacy behavior, in case the AST was not analyzed.
-      result = env.lookup(name);
-      if (result == null) {
-        throw createInvalidIdentifierException(env.getVariableNames());
-      }
-      return result;
-    }
-
-    switch (scope) {
-      case Local:
-        result = env.localLookup(name);
-        break;
-      case Module:
-        result = env.moduleLookup(name);
-        break;
-      case Universe:
-        result = env.universeLookup(name);
-        break;
-      default:
-        throw new IllegalStateException(scope.toString());
-    }
-
-    if (result == null) {
-      // Since Scope was set, we know that the variable is defined in the scope.
-      // However, the assignment was not yet executed.
-      throw new EvalException(
-          getLocation(),
-          scope.getQualifier() + " variable '" + name + "' is referenced before assignment.");
-    }
-
-    return result;
-  }
-
-  @Override
-  public void accept(SyntaxTreeVisitor visitor) {
+  public void accept(NodeVisitor visitor) {
     visitor.visit(this);
   }
 
@@ -125,36 +71,67 @@ public final class Identifier extends Expression {
     return Kind.IDENTIFIER;
   }
 
-  EvalException createInvalidIdentifierException(Set<String> symbols) {
-    if (name.equals("$error$")) {
-      return new EvalException(getLocation(), "contains syntax error(s)", true);
-    }
-
-    if (name.equals("PACKAGE_NAME")) {
-      return new EvalException(
-          getLocation(),
-          "The value 'PACKAGE_NAME' has been removed in favor of 'package_name()', "
-              + "please use the latter ("
-              + "https://docs.bazel.build/versions/master/skylark/lib/native.html#package_name). "
-              + "You can temporarily allow the old name "
-              + "by using --incompatible_package_name_is_a_function=false");
-    }
-    if (name.equals("REPOSITORY_NAME")) {
-      return new EvalException(
-          getLocation(),
-          "The value 'REPOSITORY_NAME' has been removed in favor of 'repository_name()', "
-              + "please use the latter ("
-              + "https://docs.bazel.build/versions/master/skylark/lib/native.html#repository_name)."
-              + " You can temporarily allow the old name "
-              + "by using --incompatible_package_name_is_a_function=false");
-    }
-
-    String suggestion = SpellChecker.didYouMean(name, symbols);
-    return new EvalException(getLocation(), "name '" + name + "' is not defined" + suggestion);
+  /** @return The {@link Identifier} of the provided name. */
+  static Identifier of(String name) {
+    return new Identifier(name);
   }
 
-  /** @return The {@link Identifier} of the provided name. */
-  public static Identifier of(String name) {
-    return new Identifier(name);
+  /** Returns true if the string is a syntactically valid identifier. */
+  public static boolean isValid(String name) {
+    // TODO(laurentlb): Handle Unicode characters.
+    if (name.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < name.length(); i++) {
+      char c = name.charAt(i);
+      if ((c >= 'a' && c <= 'z')
+          || (c >= 'A' && c <= 'Z')
+          || (c >= '0' && c <= '9')
+          || (c == '_')) {
+        continue;
+      }
+      return false;
+    }
+    if (name.charAt(0) >= '0' && name.charAt(0) <= '9') {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Returns all names bound by an LHS expression.
+   *
+   * <p>Examples:
+   *
+   * <ul>
+   *   <li><{@code x = ...} binds x.
+   *   <li><{@code x, [y,z] = ..} binds x, y, z.
+   *   <li><{@code x[5] = ..} does not bind any names.
+   * </ul>
+   */
+  static ImmutableSet<Identifier> boundIdentifiers(Expression expr) {
+    if (expr instanceof Identifier) {
+      // Common case/fast path - skip the builder.
+      return ImmutableSet.of((Identifier) expr);
+    } else {
+      ImmutableSet.Builder<Identifier> result = ImmutableSet.builder();
+      collectBoundIdentifiers(expr, result);
+      return result.build();
+    }
+  }
+
+  private static void collectBoundIdentifiers(
+      Expression lhs, ImmutableSet.Builder<Identifier> result) {
+    if (lhs instanceof Identifier) {
+      result.add((Identifier) lhs);
+      return;
+    }
+    if (lhs instanceof ListExpression) {
+      ListExpression variables = (ListExpression) lhs;
+      for (Expression expression : variables.getElements()) {
+        collectBoundIdentifiers(expression, result);
+      }
+    }
   }
 }

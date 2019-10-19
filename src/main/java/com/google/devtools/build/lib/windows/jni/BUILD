@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 filegroup(
@@ -56,5 +58,5 @@ java_library(
 java_library(
     name = "jni-loader",
     srcs = ["WindowsJniLoader.java"],
-    deps = ["//src/main/java/com/google/devtools/build/lib/windows/runfiles"],
+    deps = ["@bazel_tools//tools/java/runfiles"],
 )

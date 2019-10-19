@@ -15,7 +15,7 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -79,18 +79,6 @@ public class TimestampBuilderTest extends TimestampBuilderTestCase {
   }
 
   @Test
-  public void testBuildingNonexistentSourcefileFails() throws Exception {
-    reporter.removeHandler(failFastHandler);
-    Artifact hello = createSourceArtifact("hello");
-    try {
-      buildArtifacts(cachingBuilder(), hello);
-      fail("Expected input file to be missing");
-    } catch (BuildFailedException e) {
-      assertThat(e).hasMessage("missing input file '" + hello.getPath() + "'");
-    }
-  }
-
-  @Test
   public void testCachingBuilderCachesUntilReset() throws Exception {
     // [action] -> hello
     Artifact hello = createDerivedArtifact("hello");
@@ -114,7 +102,8 @@ public class TimestampBuilderTest extends TimestampBuilderTestCase {
   @Test
   public void testUnneededInputs() throws Exception {
     Artifact hello = createSourceArtifact("hello");
-    BlazeTestUtils.makeEmptyFile(hello.getPath());
+    FileSystemUtils.createDirectoryAndParents(hello.getPath().getParentDirectory());
+    FileSystemUtils.writeContentAsLatin1(hello.getPath(), "content1");
     Artifact optional = createSourceArtifact("hello.optional");
     Artifact goodbye = createDerivedArtifact("goodbye");
     Button button = createActionButton(Sets.newHashSet(hello, optional), Sets.newHashSet(goodbye));
@@ -128,6 +117,7 @@ public class TimestampBuilderTest extends TimestampBuilderTestCase {
     assertThat(button.pressed).isFalse(); // not rebuilt
 
     BlazeTestUtils.makeEmptyFile(optional.getPath());
+    FileSystemUtils.writeContentAsLatin1(hello.getPath(), "content2");
 
     button.pressed = false;
     buildArtifacts(cachingBuilder(), goodbye);
@@ -138,6 +128,7 @@ public class TimestampBuilderTest extends TimestampBuilderTestCase {
     assertThat(button.pressed).isFalse(); // not rebuilt
 
     optional.getPath().delete();
+    FileSystemUtils.writeContentAsLatin1(hello.getPath(), "content3");
 
     button.pressed = false;
     buildArtifacts(cachingBuilder(), goodbye);
@@ -324,11 +315,8 @@ public class TimestampBuilderTest extends TimestampBuilderTestCase {
     registerAction(new TestAction(TestAction.NO_EFFECT, Collections.singleton(in),
         Collections.singleton(out)));
 
-    try {
-      buildArtifacts(amnesiacBuilder(), out); // fails with ActionExecutionException
-      fail();
-    } catch (BuildFailedException e) {
-      assertThat(e).hasMessageThat().contains("1 input file(s) do not exist");
-    }
+    BuildFailedException e =
+        assertThrows(BuildFailedException.class, () -> buildArtifacts(amnesiacBuilder(), out));
+    assertThat(e).hasMessageThat().contains("1 input file(s) do not exist");
   }
 }

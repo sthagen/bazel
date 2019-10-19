@@ -63,7 +63,7 @@ function ensure_contains_exactly() {
   num=`grep "${1}" output.log.txt | wc -l`
   if [ "$num" -ne $2 ]
   then
-    fail "Expected exactly $2 occurences of $1, got $num: " `cat output.log.txt`
+    fail "Expected exactly $2 occurrences of $1, got $num: " `cat output.log.txt`
   fi
 }
 
@@ -71,7 +71,16 @@ function ensure_contains_atleast() {
   num=`grep "${1}" output.log.txt | wc -l`
   if [ "$num" -lt $2 ]
   then
-    fail "Expected at least $2 occurences of $1, got $num: " `cat output.log.txt`
+    fail "Expected at least $2 occurrences of $1, got $num: " `cat output.log.txt`
+  fi
+}
+
+function ensure_output_contains_exactly_once() {
+  file_path=$(bazel info output_base)/$1
+  num=`grep "$2" $file_path | wc -l`
+  if [ "$num" -ne 1 ]
+  then
+    fail "Expected to read \"$2\" in $1, but got $num occurrences: " `cat $file_path`
   fi
 }
 
@@ -196,13 +205,19 @@ function test_download_multiple() {
   # Prepare HTTP server with Python
   local server_dir="${TEST_TMPDIR}/server_dir"
   mkdir -p "${server_dir}"
+  local file1="${server_dir}/file1.txt"
   local file2="${server_dir}/file2.txt"
-  echo "second contents here" > "${file2}"
+  echo "contents here" > "${file1}"
+  echo "contents here" > "${file2}"
+  sha256=$(sha256sum "${file2}" | head -c 64)
 
   # Start HTTP server with Python
+  ls -al "${server_dir}"
+  sha256sum "${file2}"
+
   startup_server "${server_dir}"
 
-  set_workspace_command "repository_ctx.download([\"http://localhost:${fileserver_port}/file1.txt\",\"http://localhost:${fileserver_port}/file2.txt\"], \"out_for_list.txt\")"
+  set_workspace_command "repository_ctx.download([\"http://localhost:${fileserver_port}/file1.txt\",\"http://localhost:${fileserver_port}/file2.txt\"], \"out_for_list.txt\", sha256='${sha256}')"
 
   build_and_process_log --exclude_rule "//external:local_config_cc"
 
@@ -214,6 +229,169 @@ function test_download_multiple() {
   ensure_contains_exactly 'output: "out_for_list.txt"' 1
 }
 
+function test_download_integrity_sha256() {
+  # Prepare HTTP server with Python
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  mkdir -p "${server_dir}"
+  local file="${server_dir}/file.txt"
+  echo "file contents here" > "${file}"
+
+  # Use Python for hashing and encoding due to cross-platform differences in
+  # presence + behavior of `shasum` and `base64`.
+  sha256_py='import base64, hashlib, sys; print(base64.b64encode(hashlib.sha256(sys.stdin.read()).digest()))'
+  file_integrity="sha256-$(cat "${file}" | python -c "${sha256_py}")"
+
+  # Start HTTP server with Python
+  startup_server "${server_dir}"
+
+  set_workspace_command "repository_ctx.download(\"http://localhost:${fileserver_port}/file.txt\", \"file.txt\", integrity=\"${file_integrity}\")"
+
+  echo 'build --incompatible_disallow_unverified_http_downloads' >> .bazelrc
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+
+  ensure_contains_exactly 'location: .*repos.bzl:2:3' 1
+  ensure_contains_atleast 'rule: "//external:repo"' 1
+  ensure_contains_exactly 'download_event' 1
+  ensure_contains_exactly "url: \"http://localhost:${fileserver_port}/file.txt\"" 1
+  ensure_contains_exactly 'output: "file.txt"' 1
+  ensure_contains_exactly "sha256: " 0
+  ensure_contains_exactly "integrity: \"${file_integrity}\"" 1
+}
+
+function test_download_integrity_sha512() {
+  # Prepare HTTP server with Python
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  mkdir -p "${server_dir}"
+  local file="${server_dir}/file.txt"
+  echo "file contents here" > "${file}"
+
+  # Use Python for hashing and encoding due to cross-platform differences in
+  # presence + behavior of `shasum` and `base64`.
+  sha512_py='import base64, hashlib, sys; print(base64.b64encode(hashlib.sha512(sys.stdin.read()).digest()))'
+  file_integrity="sha512-$(cat "${file}" | python -c "${sha512_py}")"
+
+
+  # Start HTTP server with Python
+  startup_server "${server_dir}"
+
+  set_workspace_command "repository_ctx.download(\"http://localhost:${fileserver_port}/file.txt\", \"file.txt\", integrity=\"${file_integrity}\")"
+
+  echo 'build --incompatible_disallow_unverified_http_downloads' >> .bazelrc
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+
+  ensure_contains_exactly 'location: .*repos.bzl:2:3' 1
+  ensure_contains_atleast 'rule: "//external:repo"' 1
+  ensure_contains_exactly 'download_event' 1
+  ensure_contains_exactly "url: \"http://localhost:${fileserver_port}/file.txt\"" 1
+  ensure_contains_exactly 'output: "file.txt"' 1
+  ensure_contains_exactly "sha256: " 0
+  ensure_contains_exactly "integrity: \"${file_integrity}\"" 1
+}
+
+function test_download_integrity_malformed() {
+  # Verify that a malformed value for integrity leads to a failing build
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  mkdir -p "${server_dir}"
+  local file="${server_dir}/file.txt"
+  startup_server "${server_dir}"
+  echo 'build --incompatible_disallow_unverified_http_downloads' >> .bazelrc
+  echo "file contents here" > "${file}"
+
+  # Unsupported checksum algorithm
+  file_integrity="This is no a checksum algorithm"
+  set_workspace_command "repository_ctx.download(\"http://localhost:${fileserver_port}/file.txt\", \"file.txt\", integrity=\"${file_integrity}\")"
+  bazel build //:test > "${TEST_log}" 2>&1 && fail "Expected failure" || :
+  expect_log "${file_integrity}"
+  expect_log "[Uu]nsupported checksum algorithm"
+
+  # Syntactically invalid checksum
+  file_integrity="sha512-ThisIsNotASha512Hash"
+  set_workspace_command "repository_ctx.download(\"http://localhost:${fileserver_port}/file.txt\", \"file.txt\", integrity=\"${file_integrity}\")"
+  bazel build //:test > "${TEST_log}" 2>&1 && fail "Expected failure" || :
+  expect_log "${file_integrity}"
+  expect_log "[Ii]nvalid.*checksum"
+
+  # Syntactically correct, but incorrect value
+  file_integrity="sha512-cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+  set_workspace_command "repository_ctx.download(\"http://localhost:${fileserver_port}/file.txt\", \"file.txt\", integrity=\"${file_integrity}\")"
+  bazel build //:test > "${TEST_log}" 2>&1 && fail "Expected failure" || :
+  expect_log "${file_integrity}"
+  expect_log "[Ii]nvalid.*checksum"
+}
+
+function test_download_then_extract() {
+  # Prepare HTTP server with Python
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  mkdir -p "${server_dir}"
+  local file_prefix="${server_dir}/download_then_extract"
+
+  pushd ${TEST_TMPDIR}
+  echo "This is one file" > ${server_dir}/download_then_extract.txt
+  zip -r ${server_dir}/download_then_extract.zip server_dir
+  file_sha256="$(sha256sum $server_dir/download_then_extract.zip | head -c 64)"
+  popd
+
+  # Start HTTP server with Python
+  startup_server "${server_dir}"
+
+  set_workspace_command "
+  repository_ctx.download(\"http://localhost:${fileserver_port}/download_then_extract.zip\", \"downloaded_file.zip\", \"${file_sha256}\")
+  repository_ctx.extract(\"downloaded_file.zip\", \"out_dir\", \"server_dir/\")"
+
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+
+  ensure_contains_exactly 'location: .*repos.bzl:3:3' 1
+  ensure_contains_exactly 'location: .*repos.bzl:4:3' 1
+  ensure_contains_atleast 'rule: "//external:repo"' 2
+  ensure_contains_exactly 'download_event' 1
+  ensure_contains_exactly "url: \"http://localhost:${fileserver_port}/download_then_extract.zip\"" 1
+  ensure_contains_exactly 'output: "downloaded_file.zip"' 1
+  ensure_contains_exactly "sha256: \"${file_sha256}\"" 1
+  ensure_contains_exactly 'extract_event' 1
+  ensure_contains_exactly 'archive: "downloaded_file.zip"' 1
+  ensure_contains_exactly 'output: "out_dir"' 1
+  ensure_contains_exactly 'strip_prefix: "server_dir/"' 1
+
+  ensure_output_contains_exactly_once "external/repo/out_dir/download_then_extract.txt" "This is one file"
+}
+
+function test_download_then_extract_tar() {
+  # Prepare HTTP server with Python
+  local server_dir="${TEST_TMPDIR}/server_dir"
+  local data_dir="${TEST_TMPDIR}/data_dir"
+  mkdir -p "${server_dir}"
+  mkdir -p "${data_dir}"
+
+  pushd ${TEST_TMPDIR}
+  echo "Experiment with tar" > ${data_dir}/download_then_extract_tar.txt
+  tar -zcvf ${server_dir}/download_then_extract.tar.gz data_dir
+  file_sha256="$(sha256sum $server_dir/download_then_extract.tar.gz | head -c 64)"
+  popd
+
+  # Start HTTP server with Python
+  startup_server "${server_dir}"
+
+  set_workspace_command "
+  repository_ctx.download(\"http://localhost:${fileserver_port}/download_then_extract.tar.gz\", \"downloaded_file.tar.gz\", \"${file_sha256}\")
+  repository_ctx.extract(\"downloaded_file.tar.gz\", \"out_dir\", \"data_dir/\")"
+
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+
+  ensure_contains_exactly 'location: .*repos.bzl:3:3' 1
+  ensure_contains_exactly 'location: .*repos.bzl:4:3' 1
+  ensure_contains_atleast 'rule: "//external:repo"' 2
+  ensure_contains_exactly 'download_event' 1
+  ensure_contains_exactly "url: \"http://localhost:${fileserver_port}/download_then_extract.tar.gz\"" 1
+  ensure_contains_exactly 'output: "downloaded_file.tar.gz"' 1
+  ensure_contains_exactly "sha256: \"${file_sha256}\"" 1
+  ensure_contains_exactly 'extract_event' 1
+  ensure_contains_exactly 'archive: "downloaded_file.tar.gz"' 1
+  ensure_contains_exactly 'output: "out_dir"' 1
+  ensure_contains_exactly 'strip_prefix: "data_dir/"' 1
+
+  ensure_output_contains_exactly_once "external/repo/out_dir/download_then_extract_tar.txt" "Experiment with tar"
+}
+
 function test_download_and_extract() {
   # Prepare HTTP server with Python
   local server_dir="${TEST_TMPDIR}/server_dir"
@@ -221,8 +399,8 @@ function test_download_and_extract() {
   local file_prefix="${server_dir}/download_and_extract"
 
   pushd ${TEST_TMPDIR}
-  echo "This is one file" > server_dir/download_and_extract.txt
-  zip -r server_dir/download_and_extract.zip server_dir
+  echo "This is one file" > ${server_dir}/download_and_extract.txt
+  zip -r ${server_dir}/download_and_extract.zip server_dir
   file_sha256="$(sha256sum server_dir/download_and_extract.zip | head -c 64)"
   popd
 
@@ -241,6 +419,8 @@ function test_download_and_extract() {
   ensure_contains_exactly "sha256: \"${file_sha256}\"" 1
   ensure_contains_exactly 'type: "zip"' 1
   ensure_contains_exactly 'strip_prefix: "server_dir/"' 1
+
+  ensure_output_contains_exactly_once "external/repo/out_dir/download_and_extract.txt" "This is one file"
 }
 
 function test_file() {
@@ -256,6 +436,75 @@ function test_file() {
   ensure_contains_exactly 'path: ".*filefile.sh"' 1
   ensure_contains_exactly 'content: "echo filefile"' 1
   ensure_contains_exactly 'executable: true' 1
+}
+
+function test_file_nonascii() {
+  set_workspace_command 'repository_ctx.file("filefile.sh", "echo fïlëfïlë", True)'
+
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+
+  ensure_contains_exactly 'location: .*repos.bzl:2:3' 1
+  ensure_contains_atleast 'rule: "//external:repo"' 1
+
+  # There are 3 file_event in external:repo as it is currently set up
+  ensure_contains_exactly 'file_event' 3
+  ensure_contains_exactly 'path: ".*filefile.sh"' 1
+  ensure_contains_exactly 'executable: true' 1
+
+  # This test file is in UTF-8, so the string passed to file() is UTF-8.
+  # Protobuf strings are Unicode encoded in UTF-8, so the logged text
+  # is double-encoded relative to the workspace command.
+  #
+  # >>> content = "echo f\u00EFl\u00EBf\u00EFl\u00EB".encode("utf8")
+  # >>> proto_content = content.decode("iso-8859-1").encode("utf8")
+  # >>> print("".join(chr(c) if c <= 0x7F else ("\\" + oct(c)[2:]) for c in proto_content))
+  # echo f\303\203\302\257l\303\203\302\253f\303\203\302\257l\303\203\302\253
+  # >>>
+
+  ensure_contains_exactly 'content: "echo f\\303\\203\\302\\257l\\303\\203\\302\\253f\\303\\203\\302\\257l\\303\\203\\302\\253"' 1
+}
+
+function test_read() {
+  set_workspace_command '
+  content = "echo filefile"
+  repository_ctx.file("filefile.sh", content, True)
+  read_result = repository_ctx.read("filefile.sh")
+  if read_result != content:
+    fail("read(): expected %r, got %r" % (content, read_result))'
+
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+
+  ensure_contains_exactly 'location: .*repos.bzl:4:3' 1
+  ensure_contains_exactly 'location: .*repos.bzl:5:17' 1
+  ensure_contains_atleast 'rule: "//external:repo"' 2
+
+  ensure_contains_exactly 'read_event' 1
+  ensure_contains_exactly 'path: ".*filefile.sh"' 2
+}
+
+function test_read_roundtrip_legacy_utf8() {
+  # See discussion on https://github.com/bazelbuild/bazel/pull/7309
+  set_workspace_command '
+  content = "echo fïlëfïlë"
+  repository_ctx.file("filefile.sh", content, True, legacy_utf8=True)
+  read_result = repository_ctx.read("filefile.sh")
+
+  corrupted_content = "echo fÃ¯lÃ«fÃ¯lÃ«"
+  if read_result != corrupted_content:
+    fail("read(): expected %r, got %r" % (corrupted_content, read_result))'
+
+  build_and_process_log --exclude_rule "//external:local_config_cc"
+}
+
+function test_read_roundtrip_nolegacy_utf8() {
+  set_workspace_command '
+  content = "echo fïlëfïlë"
+  repository_ctx.file("filefile.sh", content, True, legacy_utf8=False)
+  read_result = repository_ctx.read("filefile.sh")
+  if read_result != content:
+    fail("read(): expected %r, got %r" % (content, read_result))'
+
+  build_and_process_log --exclude_rule "//external:local_config_cc"
 }
 
 function test_os() {
@@ -277,8 +526,8 @@ function test_symlink() {
   ensure_contains_exactly 'location: .*repos.bzl:3:3' 1
   ensure_contains_atleast 'rule: "//external:repo"' 1
   ensure_contains_exactly 'symlink_event' 1
-  ensure_contains_exactly 'from: ".*symlink.txt"' 1
-  ensure_contains_exactly 'to: ".*symlink_out.txt"' 1
+  ensure_contains_exactly 'target: ".*symlink.txt"' 1
+  ensure_contains_exactly 'path: ".*symlink_out.txt"' 1
 }
 
 function test_template() {

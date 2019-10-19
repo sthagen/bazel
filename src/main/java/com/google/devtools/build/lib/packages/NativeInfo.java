@@ -16,16 +16,17 @@ package com.google.devtools.build.lib.packages;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.syntax.CallUtils;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.MethodDescriptor;
 import java.util.Map;
 
 /** Base class for native implementations of {@link StructImpl}. */
 // todo(vladmos,dslomov): make abstract once DefaultInfo stops instantiating it.
 public class NativeInfo extends StructImpl {
-  protected final ImmutableMap<String, Object> values;
+  protected final ImmutableSortedMap<String, Object> values;
 
   // Initialized lazily.
   private ImmutableSet<String> fieldNames;
@@ -35,9 +36,9 @@ public class NativeInfo extends StructImpl {
     if (values.containsKey(name)) {
       return values.get(name);
     } else if (hasField(name)) {
-      MethodDescriptor methodDescriptor = FuncallExpression.getStructField(this.getClass(), name);
+      MethodDescriptor methodDescriptor = CallUtils.getStructField(this.getClass(), name);
       try {
-        return FuncallExpression.invokeStructField(methodDescriptor, name, this);
+        return CallUtils.invokeStructField(methodDescriptor, name, this);
       } catch (InterruptedException exception) {
         // Struct fields on NativeInfo objects are supposed to behave well and not throw
         // exceptions, as they should be logicless field accessors. If this occurs, it's
@@ -59,10 +60,11 @@ public class NativeInfo extends StructImpl {
   @Override
   public ImmutableCollection<String> getFieldNames() {
     if (fieldNames == null) {
-      fieldNames = ImmutableSet.<String>builder()
-          .addAll(values.keySet())
-          .addAll(FuncallExpression.getStructFieldNames(this.getClass()))
-          .build();
+      fieldNames =
+          ImmutableSet.<String>builder()
+              .addAll(values.keySet())
+              .addAll(CallUtils.getStructFieldNames(this.getClass()))
+              .build();
     }
     return fieldNames;
   }

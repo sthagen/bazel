@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/tools/launcher/java_launcher.h"
+
 #include <memory>
 #include <sstream>
 #include <string>
@@ -23,7 +25,7 @@
 #include "src/main/cpp/util/path_platform.h"
 #include "src/main/cpp/util/strings.h"
 #include "src/main/native/windows/file.h"
-#include "src/tools/launcher/java_launcher.h"
+#include "src/main/native/windows/process.h"
 #include "src/tools/launcher/util/launcher_util.h"
 
 namespace bazel {
@@ -103,7 +105,7 @@ vector<wstring> JavaBinaryLauncher::ProcessesCommandLine() {
   vector<wstring> args;
   bool first = 1;
   for (const auto& arg : this->GetCommandlineArguments()) {
-    // Skip the first arugment.
+    // Skip the first argument.
     if (first) {
       first = 0;
       continue;
@@ -300,7 +302,7 @@ ExitCode JavaBinaryLauncher::Launch() {
 
   // Print Java binary path if needed
   wstring java_bin = this->Rlocation(this->GetLaunchInfoByKey(JAVA_BIN_PATH),
-                                     /*need_workspace_name =*/false);
+                                     /*has_workspace_name =*/true);
   if (this->print_javabin ||
       this->GetLaunchInfoByKey(JAVA_START_CLASS) == L"--print_javabin") {
     wprintf(L"%s\n", java_bin.c_str());
@@ -359,7 +361,7 @@ ExitCode JavaBinaryLauncher::Launch() {
     jvm_flags.push_back(flag);
   }
   wstringstream jvm_flags_launch_info_ss(this->GetLaunchInfoByKey(JVM_FLAGS));
-  while (getline(jvm_flags_launch_info_ss, flag, L' ')) {
+  while (getline(jvm_flags_launch_info_ss, flag, L'\t')) {
     jvm_flags.push_back(flag);
   }
 
@@ -403,7 +405,7 @@ ExitCode JavaBinaryLauncher::Launch() {
   }
   // Add java start class
   arguments.push_back(this->GetLaunchInfoByKey(JAVA_START_CLASS));
-  // Add the remaininng arguements, they will be passed to the program.
+  // Add the remaininng arguments, they will be passed to the program.
   for (const auto& arg : remaining_args) {
     arguments.push_back(arg);
   }
@@ -411,8 +413,7 @@ ExitCode JavaBinaryLauncher::Launch() {
   vector<wstring> escaped_arguments;
   // Quote the arguments if having spaces
   for (const auto& arg : arguments) {
-    escaped_arguments.push_back(
-        GetEscapedArgument(arg, /*escape_backslash = */ false));
+    escaped_arguments.push_back(bazel::windows::WindowsEscapeArg(arg));
   }
 
   ExitCode exit_code = this->LaunchProcess(java_bin, escaped_arguments);

@@ -18,11 +18,11 @@ import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkGlobalLibrary;
 import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /**
  * The Skylark module containing the definition of {@code repository_rule} function to define a
@@ -40,10 +40,11 @@ public interface RepositoryModuleApi {
         @Param(
             name = "implementation",
             type = BaseFunction.class,
+            named = true,
             doc =
-                "the function implementing this rule, has to have exactly one parameter: "
-                    + "<code><a href=\"repository_ctx.html\">repository_ctx</a></code>. The function "
-                    + "is called during loading phase for each instance of the rule."),
+                "the function implementing this rule, has to have exactly one parameter: <code><a"
+                    + " href=\"repository_ctx.html\">repository_ctx</a></code>. The function is"
+                    + " called during loading phase for each instance of the rule."),
         @Param(
             name = "attrs",
             type = SkylarkDict.class,
@@ -72,19 +73,39 @@ public interface RepositoryModuleApi {
             type = SkylarkList.class,
             generic1 = String.class,
             defaultValue = "[]",
-            doc = "Provides a list of environment variable that this repository rule depends on. If"
-                + " an environment variable in that list change, the repository will be refetched.",
+            doc =
+                "Provides a list of environment variable that this repository rule depends on. If "
+                    + "an environment variable in that list change, the repository will be "
+                    + "refetched.",
+            named = true,
+            positional = false),
+        @Param(
+            name = "configure",
+            type = Boolean.class,
+            defaultValue = "False",
+            doc = "Indicate that the repository inspects the system for configuration purpose",
+            named = true,
+            positional = false),
+        @Param(
+            name = "doc",
+            type = String.class,
+            defaultValue = "''",
+            doc =
+                "A description of the repository rule that can be extracted by documentation "
+                    + "generating tools.",
             named = true,
             positional = false)
       },
       useAst = true,
-      useEnvironment = true)
-    public BaseFunction repositoryRule(
-        BaseFunction implementation,
-        Object attrs,
-        Boolean local,
-        SkylarkList<String> environ,
-        FuncallExpression ast,
-        Environment env)
-        throws EvalException;
+      useStarlarkThread = true)
+  public BaseFunction repositoryRule(
+      BaseFunction implementation,
+      Object attrs,
+      Boolean local,
+      SkylarkList<?> environ, // <String> expected
+      Boolean configure,
+      String doc,
+      FuncallExpression ast,
+      StarlarkThread thread)
+      throws EvalException;
 }

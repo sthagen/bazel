@@ -34,6 +34,11 @@ public class TestCompletionValue implements SkyValue {
 
   private TestCompletionValue() { }
 
+  @Override
+  public boolean dataIsShareable() {
+    return false;
+  }
+
   public static SkyKey key(
       ConfiguredTargetKey lac,
       final TopLevelArtifactContext topLevelArtifactContext,
@@ -55,9 +60,10 @@ public class TestCompletionValue implements SkyValue {
                 exclusiveTesting));
   }
 
+  /** Key for {@link TestCompletionValue} nodes. */
   @AutoCodec
   @AutoValue
-  abstract static class TestCompletionKey implements SkyKey {
+  public abstract static class TestCompletionKey implements SkyKey {
     private static final Interner<TestCompletionKey> interner = BlazeInterners.newWeakInterner();
 
     @AutoCodec.VisibleForSerialization

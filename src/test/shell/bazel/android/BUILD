@@ -20,7 +20,10 @@ filegroup(
 sh_library(
     name = "android_helper",
     srcs = ["android_helper.sh"],
-    data = ["sample.aar"],
+    data = [
+        "sample.aar",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
 )
 
 sh_test(
@@ -31,6 +34,11 @@ sh_test(
         ":android_helper",
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
+    ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = [
+        "no-remote",
+        "no-windows",
     ],
 )
 
@@ -43,6 +51,8 @@ sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = ["no-remote"],
 )
 
 sh_test(
@@ -51,8 +61,14 @@ sh_test(
     srcs = ["aar_integration_test.sh"],
     data = [
         ":android_helper",
+        "//external:android_ndk_for_testing",
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
+    ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = [
+        "no-remote",
+        "no-windows",
     ],
 )
 
@@ -65,6 +81,8 @@ sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = ["no-remote"],
 )
 
 sh_test(
@@ -77,6 +95,11 @@ sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 3,
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = [
+        "no-remote",
+        "no-windows",
+    ],
 )
 
 sh_test(
@@ -91,6 +114,11 @@ sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 6,
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = [
+        "no-remote",
+        "no-windows",
+    ],
 )
 
 sh_test(
@@ -102,6 +130,8 @@ sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = ["no-remote"],
 )
 
 sh_test(
@@ -113,6 +143,8 @@ sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = ["no-remote"],
 )
 
 sh_test(
@@ -125,11 +157,16 @@ sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 4,
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = [
+        "no-remote",
+        "no-windows",
+    ],
 )
 
 sh_test(
     name = "resource_processing_integration_test",
-    size = "medium",
+    size = "large",
     srcs = ["resource_processing_integration_test.sh"],
     data = [
         ":android_helper",
@@ -137,4 +174,14 @@ sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
+    # See https://github.com/bazelbuild/bazel/issues/8235
+    tags = ["no-remote"],
+)
+
+test_suite(
+    name = "all_windows_tests",
+    tags = [
+        "-no-windows",
+    ],
+    visibility = ["//src/test/shell:__pkg__"],
 )

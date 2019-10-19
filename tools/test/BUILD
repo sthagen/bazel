@@ -1,5 +1,7 @@
 package(default_visibility = ["//visibility:public"])
 
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
+
 # Members of this filegroup shouldn't have duplicate basenames, otherwise
 # TestRunnerAction#getRuntimeArtifact() will get confused.
 # Deprecated, do not use.
@@ -35,16 +37,76 @@ filegroup(
 
 filegroup(
     name = "coverage_report_generator",
-    srcs = ["@bazel_tools//tools/test/LcovMerger/java/com/google/devtools/lcovmerger:Main"],
+    srcs = ["@bazel_tools//tools/test/CoverageOutputGenerator/java/com/google/devtools/coverageoutputgenerator:Main"],
+)
+
+# Test wrapper binary to run tests on Windows.
+# This target just wraps the actual code in "tw_lib" to make it into a binary.
+# See https://github.com/bazelbuild/bazel/issues/5508
+cc_binary(
+    name = "tw",
+    srcs = ["windows/tw_main.cc"],
+    visibility = ["//visibility:private"],
+    deps = [":tw_lib"],
 )
 
 cc_binary(
-    name = "test_wrapper_bin",
+    name = "xml",
+    srcs = ["windows/xml_main.cc"],
+    visibility = ["//visibility:private"],
+    deps = [":tw_lib"],
+)
+
+# Test wrapper binary to run tests on Windows.
+# See https://github.com/bazelbuild/bazel/issues/5508
+cc_library(
+    name = "tw_lib",
     srcs = select({
-        "@bazel_tools//src/conditions:windows": ["windows/test_wrapper.cc"],
+        "@bazel_tools//src/conditions:windows": ["windows/tw.cc"],
         "//conditions:default": ["empty_test_wrapper.cc"],
     }),
+    hdrs = select({
+        "@bazel_tools//src/conditions:windows": ["windows/tw.h"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        "//src/conditions:windows": [
+            "-DEFAULTLIB:advapi32.lib",  # GetUserNameW
+        ],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:private"],
+    deps = select({
+        "@bazel_tools//src/conditions:windows": [
+            "//src/main/cpp/util:filesystem",
+            "//src/main/cpp/util:strings",
+            "//src/main/native/windows:lib-file",
+            "//src/main/native/windows:lib-process",
+            "//third_party/ijar:zip",
+            "@bazel_tools//tools/cpp/runfiles",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+cc_test(
+    name = "tw_test",
+    srcs = select({
+        "@bazel_tools//src/conditions:windows": ["windows/tw_test.cc"],
+        "//conditions:default": ["empty_test.cc"],
+    }),
+    deps = [
+        ":tw_lib",
+        "//src/main/cpp/util:filesystem",
+        "//src/test/cpp/util:windows_test_util",
+        "@com_google_googletest//:gtest_main",
+    ] + select({
+        "@bazel_tools//src/conditions:windows": [
+            "//src/main/native/windows:lib-file",
+            "//third_party/ijar:zip",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 filegroup(
@@ -60,8 +122,11 @@ filegroup(
         "generate-xml.sh",
         "collect_coverage.sh",
         "collect_cc_coverage.sh",
-    ] + glob(["LcovMerger/**"]) + select({
-        "@bazel_tools//src/conditions:windows": ["test_wrapper_bin"],
+    ] + select({
+        "@bazel_tools//src/conditions:windows": [
+            "tw",
+            "xml",
+        ],
         "//conditions:default": [],
     }),
     visibility = ["//tools:__pkg__"],
@@ -80,7 +145,7 @@ test_suite(
     name = "all_windows_tests",
     tests = [
         ":windows_tests",
-        "//tools/test/LcovMerger/javatests/com/google/devtools/lcovmerger:all_windows_tests",
+        "//tools/test/CoverageOutputGenerator/javatests/com/google/devtools/coverageoutputgenerator:all_windows_tests",
     ],
     visibility = ["//tools:__pkg__"],
 )

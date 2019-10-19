@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 // For rand_s function, https://msdn.microsoft.com/en-us/library/sxtz2fa8.aspx
 #define _CRT_RAND_S
 #include <fcntl.h>
@@ -20,7 +25,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
 #include <algorithm>
 #include <sstream>
 #include <string>
@@ -117,22 +121,27 @@ bool DeleteDirectoryByPath(const wchar_t* path) {
   return RemoveDirectoryW(AsAbsoluteWindowsPath(path).c_str());
 }
 
+static bool EndsWithExe(const wstring& s) {
+  return s.size() >= 4 && _wcsnicmp(s.c_str() + s.size() - 4, L".exe", 4) == 0;
+}
+
 wstring GetBinaryPathWithoutExtension(const wstring& binary) {
-  if (binary.find(L".exe", binary.size() - 4) != wstring::npos) {
-    return binary.substr(0, binary.length() - 4);
-  }
-  return binary;
+  return EndsWithExe(binary) ? binary.substr(0, binary.size() - 4) : binary;
 }
 
 wstring GetBinaryPathWithExtension(const wstring& binary) {
-  return GetBinaryPathWithoutExtension(binary) + L".exe";
+  return EndsWithExe(binary) ? binary : (binary + L".exe");
 }
 
-wstring GetEscapedArgument(const wstring& argument, bool escape_backslash) {
+std::wstring BashEscapeArg(const std::wstring& argument) {
   wstring escaped_arg;
   // escaped_arg will be at least this long
   escaped_arg.reserve(argument.size());
   bool has_space = argument.find_first_of(L' ') != wstring::npos;
+
+  if (argument.empty()) {
+    return L"\"\"";
+  }
 
   if (has_space) {
     escaped_arg += L'\"';
@@ -146,8 +155,8 @@ wstring GetEscapedArgument(const wstring& argument, bool escape_backslash) {
         break;
 
       case L'\\':
-        // Escape back slashes if escape_backslash is true
-        escaped_arg += (escape_backslash ? L"\\\\" : L"\\");
+        // Escape back slashes.
+        escaped_arg += L"\\\\";
         break;
 
       default:

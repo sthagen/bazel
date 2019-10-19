@@ -18,18 +18,22 @@ import static com.google.common.collect.ImmutableSortedMap.toImmutableSortedMap;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import java.util.Map;
@@ -44,7 +48,15 @@ public final class FeatureFlagManualTrimmingTest extends SkylarkTestCase {
 
   @Before
   public void enableManualTrimming() throws Exception {
-    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
+    enableManualTrimmingAnd();
+  }
+
+  private void enableManualTrimmingAnd(String... otherFlags) throws Exception {
+    ImmutableList<String> flags = new ImmutableList.Builder<String>()
+        .add("--enforce_transitive_configs_for_config_feature_flag")
+        .add(otherFlags)
+        .build();
+    useConfiguration(flags.toArray(new String[0]));
   }
 
   @Override
@@ -85,8 +97,9 @@ public final class FeatureFlagManualTrimmingTest extends SkylarkTestCase {
         ")");
   }
 
-  private ImmutableSortedMap<Label, String> getFlagMapFromConfiguration(BuildConfiguration config) {
-    return config.getOptions().get(ConfigFeatureFlagOptions.class).getFlagValues();
+  private ImmutableSortedMap<Label, String> getFlagMapFromConfiguration(BuildConfiguration config)
+      throws Exception {
+    return FeatureFlagValue.getFlagValues(config.getOptions());
   }
 
   private ImmutableSortedMap<Label, String> getFlagValuesFromOutputFile(Artifact flagDict) {
@@ -682,6 +695,77 @@ public final class FeatureFlagManualTrimmingTest extends SkylarkTestCase {
   }
 
   @Test
+  public void noDistinctHostConfiguration_DoesNotResultInActionConflicts() throws Exception {
+    scratch.file(
+        "test/BUILD",
+        "load(':host_transition.bzl', 'host_transition')",
+        "load(':read_flags.bzl', 'read_flags')",
+        "feature_flag_setter(",
+        "    name = 'target',",
+        "    deps = [':host', ':reader'],",
+        ")",
+        "host_transition(",
+        "    name = 'host',",
+        "    srcs = [':reader'],",
+        ")",
+        "read_flags(",
+        "    name = 'reader',",
+        "    flags = [],",
+        ")");
+
+    enableManualTrimmingAnd("--nodistinct_host_configuration");
+    ConfiguredTarget target = getConfiguredTarget("//test:target");
+    assertNoEvents();
+    // Note that '//test:reader' is accessed (and creates actions) in both the host and target
+    // configurations. If these are different but output to the same path (as was the case before
+    // --nodistinct_host_configuration caused --enforce_transitive_configs_for_config_feature_flag
+    // to become a no-op), then this causes action conflicts, as described in b/117932061 (for which
+    // this test is a regression test).
+    assertThat(getFilesToBuild(target).toList()).hasSize(1);
+    // Action conflict detection is not enabled for these tests. However, the action conflict comes
+    // from the outputs of the two configurations of //test:reader being unequal artifacts;
+    // hence, this test checks that the nested set of artifacts reachable from //test:target only
+    // contains one artifact, that is, they were deduplicated for being equal.
+  }
+
+
+  @Test
+  public void noDistinctHostConfiguration_DisablesEnforcementForBothHostAndTargetConfigs()
+      throws Exception {
+    scratch.file(
+        "test/BUILD",
+        "load(':host_transition.bzl', 'host_transition')",
+        "load(':read_flags.bzl', 'read_flags')",
+        "feature_flag_setter(",
+        "    name = 'target',",
+        "    deps = [':host', ':reader'],",
+        "    flag_values = {",
+        "        ':used_flag': 'configured',",
+        "    },",
+        // no transitive_configs
+        ")",
+        "host_transition(",
+        "    name = 'host',",
+        "    srcs = [':reader'],",
+        // no transitive_configs
+        ")",
+        "read_flags(",
+        "    name = 'reader',",
+        "    flags = [':used_flag'],",
+        // no transitive_configs
+        ")",
+        "config_feature_flag(",
+        "    name = 'used_flag',",
+        "    allowed_values = ['default', 'configured', 'other'],",
+        "    default_value = 'default',",
+        ")");
+
+    enableManualTrimmingAnd("--nodistinct_host_configuration");
+    getConfiguredTarget("//test:target");
+    assertNoEvents();
+  }
+
+  @Test
   public void featureFlagAccessedDirectly_ReturnsDefaultValue() throws Exception {
     scratch.file(
         "test/BUILD",
@@ -767,5 +851,41 @@ public final class FeatureFlagManualTrimmingTest extends SkylarkTestCase {
 
     Label usedFlag = Label.parseAbsolute("//test:used_flag", ImmutableMap.of());
     assertThat(getFlagValuesFromOutputFile(targetFlags)).containsEntry(usedFlag, "configured");
+  }
+
+  @Test
+  public void trimmingTransitionReturnsOriginalOptionsWhenNothingIsTrimmed() throws Exception {
+    // This is a performance regression test. The trimming transition applies over every configured
+    // target in a build. Since BuildOptions.hashCode is expensive, if that produced a unique
+    // BuildOptions instance for every configured target
+    scratch.file(
+        "test/BUILD",
+        "load(':read_flags.bzl', 'read_flags')",
+        "feature_flag_setter(",
+        "    name = 'toplevel_target',",
+        "    deps = [':dep'],",
+        "    flag_values = {",
+        "        ':used_flag': 'configured',",
+        "    },",
+        "    transitive_configs = [':used_flag'],",
+        ")",
+        "read_flags(",
+        "    name = 'dep',",
+        "    flags = [':used_flag'],",
+        "    transitive_configs = [':used_flag'],",
+        ")",
+        "config_feature_flag(",
+        "    name = 'used_flag',",
+        "    allowed_values = ['default', 'configured', 'other'],",
+        "    default_value = 'default',",
+        ")");
+
+    BuildOptions topLevelOptions =
+        getConfiguration(getConfiguredTarget("//test:toplevel_target")).getOptions();
+    BuildOptions depOptions =
+        new ConfigFeatureFlagTaggedTrimmingTransitionFactory(BaseRuleClasses.TAGGED_TRIMMING_ATTR)
+            .create((Rule) getTarget("//test:dep"))
+            .patch(topLevelOptions);
+    assertThat(depOptions).isSameInstanceAs(topLevelOptions);
   }
 }

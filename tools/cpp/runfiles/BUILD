@@ -1,5 +1,7 @@
 package(default_visibility = ["//visibility:private"])
 
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
 filegroup(
     name = "srcs",
     srcs = glob(
@@ -9,7 +11,7 @@ filegroup(
             "*~",
         ],
     ),
-    visibility = ["//tools:__pkg__"],
+    visibility = ["//tools/cpp:__pkg__"],
 )
 
 filegroup(
@@ -18,9 +20,18 @@ filegroup(
         "BUILD.tools",
         ":srcs_for_embedded_tools",
     ],
-    visibility = ["//tools:__pkg__"],
+    visibility = ["//tools/cpp:__pkg__"],
 )
 
+# Rewrite the include path for runfiles.h in runfiles_src.cc, and create
+# "generated_runfiles.{h,cc}". These files are renamed to "runfiles.{h,cc}" as
+# part of creating the embedded tools of Bazel.
+#
+# We cannot just check in runfiles_src.{h,cc} as runfiles.{h,cc}, because it'd
+# cause a header check failure on Windows when building targets in the Bazel
+# source tree, if those targets depend on @bazel_tools//tools/cpp/runfiles,
+# because due to lack of sandboxing they would accidentally pick up runfiles.h
+# from //tools/cpp/runfiles.
 genrule(
     name = "srcs_for_embedded_tools",
     srcs = [
@@ -28,13 +39,15 @@ genrule(
         "runfiles_src.h",
     ],
     outs = [
-        "runfiles.cc",
-        "runfiles.h",
+        "generated_runfiles.cc",
+        "generated_runfiles.h",
     ],
+    # Keep this transformation logic in sync with the
+    # //scripts/bootstrap/compile.sh
     cmd = ("sed " +
            "  's|^#include.*/runfiles_src.h.*|#include \"tools/cpp/runfiles/runfiles.h\"|' " +
-           "  $(location runfiles_src.cc) > $(location runfiles.cc) && " +
-           "cp $(location runfiles_src.h) $(location runfiles.h)"),
+           "  $(location runfiles_src.cc) > $(location generated_runfiles.cc) && " +
+           "cp $(location runfiles_src.h) $(location generated_runfiles.h)"),
 )
 
 cc_library(
@@ -50,7 +63,6 @@ cc_test(
     visibility = ["//visibility:public"],
     deps = [
         ":runfiles",
-        "//src/main/cpp/util:filesystem",
         "@com_google_googletest//:gtest_main",
     ],
 )

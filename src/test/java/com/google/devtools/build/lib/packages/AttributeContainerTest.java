@@ -15,8 +15,6 @@ package com.google.devtools.build.lib.packages;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.events.Location.LineAndColumn;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import java.util.Arrays;
 import java.util.Collections;
@@ -74,69 +72,38 @@ public class AttributeContainerTest {
     assertThat(container.isAttributeValueExplicitlySpecified(attribute2)).isFalse();
   }
 
-  private static Location newLocation() {
-    return Location.fromPathAndStartColumn(null, 0, 0, new LineAndColumn(0, 0));
-  }
-
-  @Test
-  public void testAttributeLocation() throws Exception {
-    Location location1 = newLocation();
-    Location location2 = newLocation();
-    container.setAttributeLocation(attribute1, location1);
-    container.setAttributeLocation(attribute2, location2);
-    assertThat(container.getAttributeLocation(attribute1.getName())).isEqualTo(location1);
-    assertThat(container.getAttributeLocation(attribute2.getName())).isEqualTo(location2);
-    assertThat(container.getAttributeLocation("nomatch")).isNull();
-  }
-
   @Test
   public void testPackedState() throws Exception {
     Random rng = new Random();
     // The state packing machinery has special behavior at multiples of 8,
-    // so set enough explicit values and locations to exercise that.
-    final int N = 17;
-    Attribute[] attributes = new Attribute[N];
-    for (int i = 0; i < N; ++i) {
-      attributes[i] = ruleClass.getAttribute(i);
+    // so set enough explicit values to exercise that.
+    final int numAttributes = 17;
+    Attribute[] attributes = new Attribute[numAttributes];
+    for (int attributeIndex = 0; attributeIndex < numAttributes; ++attributeIndex) {
+      attributes[attributeIndex] = ruleClass.getAttribute(attributeIndex);
     }
+
     Object someValue = new Object();
-    Location[] locations = new Location[N];
-    for (int i = 0; i < N; ++i) {
-      locations[i] = newLocation();
-    }
-    assertThat(locations[0] != locations[1])
-        .isTrue(); // test relies on checking reference inequality
-    for (int explicitCount = 0; explicitCount <= N; ++explicitCount) {
-      for (int locationCount = 0; locationCount <= N; ++locationCount) {
+    for (int explicitCount = 0; explicitCount <= numAttributes; ++explicitCount) {
         AttributeContainer container = new AttributeContainer(ruleClass);
         // Shuffle the attributes each time through, to exercise
         // different stored indices and orderings.
         Collections.shuffle(Arrays.asList(attributes));
         // Also randomly interleave calls to the two setters.
-        int valuePassKey = rng.nextInt(1 << N);
-        int locationPassKey = rng.nextInt(1 << N);
+        int valuePassKey = rng.nextInt(1 << numAttributes);
         for (int pass = 0; pass <= 1; ++pass) {
           for (int i = 0; i < explicitCount; ++i) {
             if (pass == ((valuePassKey >> i) & 1)) {
               container.setAttributeValue(attributes[i], someValue, true);
             }
           }
-          for (int i = 0; i < locationCount; ++i) {
-            if (pass == ((locationPassKey >> i) & 1)) {
-              container.setAttributeLocation(attributes[i], locations[i]);
-            }
-          }
         }
-        for (int i = 0; i < N; ++i) {
+
+        for (int i = 0; i < numAttributes; ++i) {
           boolean expected = i < explicitCount;
           assertThat(container.isAttributeValueExplicitlySpecified(attributes[i]))
               .isEqualTo(expected);
         }
-        for (int i = 0; i < N; ++i) {
-          Location expected = i < locationCount ? locations[i] : null;
-          assertThat(container.getAttributeLocation(attributes[i].getName())).isSameAs(expected);
-        }
-      }
     }
   }
 }

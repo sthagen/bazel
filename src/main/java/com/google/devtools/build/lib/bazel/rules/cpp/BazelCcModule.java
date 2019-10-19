@@ -14,24 +14,27 @@
 
 package com.google.devtools.build.lib.bazel.rules.cpp;
 
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.skylark.SkylarkActionFactory;
 import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleContext;
-import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper.CompilationInfo;
-import com.google.devtools.build.lib.rules.cpp.CcCompilationInfo;
+import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationContext;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationOutputs;
-import com.google.devtools.build.lib.rules.cpp.CcLinkParams;
-import com.google.devtools.build.lib.rules.cpp.CcLinkingHelper.LinkingInfo;
-import com.google.devtools.build.lib.rules.cpp.CcLinkingInfo;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingContext;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingOutputs;
 import com.google.devtools.build.lib.rules.cpp.CcModule;
-import com.google.devtools.build.lib.rules.cpp.CcModule.CcSkylarkInfo;
-import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainConfigInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainVariables;
-import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
+import com.google.devtools.build.lib.rules.cpp.CppSemantics;
+import com.google.devtools.build.lib.rules.cpp.FeatureConfigurationForStarlark;
+import com.google.devtools.build.lib.rules.cpp.LibraryToLink;
 import com.google.devtools.build.lib.skylarkbuildapi.cpp.BazelCcModuleApi;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkList;
+import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /**
  * A module that contains Skylark utilities for C++ support.
@@ -41,67 +44,120 @@ import com.google.devtools.build.lib.syntax.SkylarkList;
  */
 public class BazelCcModule extends CcModule
     implements BazelCcModuleApi<
+        SkylarkActionFactory,
+        Artifact,
+        SkylarkRuleContext,
         CcToolchainProvider,
-        FeatureConfiguration,
-        CompilationInfo,
-        CcCompilationInfo,
+        FeatureConfigurationForStarlark,
+        CcCompilationContext,
         CcCompilationOutputs,
-        LinkingInfo,
-        CcLinkingInfo,
-        CcToolchainVariables,
+        CcLinkingOutputs,
         LibraryToLink,
-        CcLinkParams,
-        CcSkylarkInfo> {
+        CcLinkingContext,
+        CcToolchainVariables,
+        CcToolchainConfigInfo> {
 
   @Override
-  public CompilationInfo compile(
-      SkylarkRuleContext skylarkRuleContext,
-      FeatureConfiguration skylarkFeatureConfiguration,
-      CcToolchainProvider skylarkCcToolchainProvider,
-      SkylarkList<Artifact> sources,
-      SkylarkList<Artifact> headers,
-      Object skylarkIncludes,
-      Object skylarkCopts,
-      SkylarkList<CcCompilationInfo> ccCompilationInfos)
-      throws EvalException {
-    return BazelCcModule.compile(
-        BazelCppSemantics.INSTANCE,
-        skylarkRuleContext,
-        skylarkFeatureConfiguration,
-        skylarkCcToolchainProvider,
-        sources,
-        headers,
-        skylarkIncludes,
-        skylarkCopts,
-        /* generateNoPicOutputs= */ "conditionally",
-        /* generatePicOutputs= */ "conditionally",
-        /* skylarkAdditionalCompilationInputs= */ Runtime.NONE,
-        /* skylarkAdditionalIncludeScanningRoots= */ Runtime.NONE,
-        ccCompilationInfos,
-        /* purpose= */ Runtime.NONE);
+  public CppSemantics getSemantics() {
+    return BazelCppSemantics.INSTANCE;
   }
 
   @Override
-  public LinkingInfo link(
-      SkylarkRuleContext skylarkRuleContext,
-      FeatureConfiguration skylarkFeatureConfiguration,
+  public Tuple<Object> compile(
+      SkylarkActionFactory skylarkActionFactoryApi,
+      FeatureConfigurationForStarlark skylarkFeatureConfiguration,
       CcToolchainProvider skylarkCcToolchainProvider,
-      CcCompilationOutputs ccCompilationOutputs,
-      Object skylarkLinkopts,
-      Object dynamicLibrary,
-      SkylarkList<CcLinkingInfo> skylarkCcLinkingInfos,
-      boolean neverLink)
-      throws InterruptedException, EvalException {
-    return BazelCcModule.link(
-        BazelCppSemantics.INSTANCE,
-        skylarkRuleContext,
+      SkylarkList<?> sources, // <Artifact> expected
+      SkylarkList<?> publicHeaders, // <Artifact> expected
+      SkylarkList<?> privateHeaders, // <Artifact> expected
+      SkylarkList<?> includes, // <String> expected
+      SkylarkList<?> quoteIncludes, // <String> expected
+      SkylarkList<?> systemIncludes, // <String> expected
+      SkylarkList<?> frameworkIncludes, // <String> expected
+      SkylarkList<?> defines, // <String> expected
+      SkylarkList<?> localDefines, // <String> expected
+      SkylarkList<?> userCompileFlags, // <String> expected
+      SkylarkList<?> ccCompilationContexts, // <CcCompilationContext> expected
+      String name,
+      boolean disallowPicOutputs,
+      boolean disallowNopicOutputs,
+      SkylarkList<?> additionalInputs, // <Artifact> expected
+      Location location,
+      StarlarkThread thread)
+      throws EvalException, InterruptedException {
+    return compile(
+        skylarkActionFactoryApi,
         skylarkFeatureConfiguration,
         skylarkCcToolchainProvider,
-        ccCompilationOutputs,
-        skylarkLinkopts,
-        /* shouldCreateStaticLibraries= */ true,
-        dynamicLibrary,
-        skylarkCcLinkingInfos,
-        neverLink);
+        sources,
+        publicHeaders,
+        privateHeaders,
+        includes,
+        quoteIncludes,
+        systemIncludes,
+        frameworkIncludes,
+        defines,
+        localDefines,
+        userCompileFlags,
+        ccCompilationContexts,
+        name,
+        disallowPicOutputs,
+        disallowNopicOutputs,
+        /* grepIncludes= */ null,
+        /* headersForClifDoNotUseThisParam= */ ImmutableList.of(),
+        SkylarkList.createImmutable(
+            additionalInputs.getContents(Artifact.class, "additional_inputs")),
+        location,
+        /* thread= */ null);
+  }
+
+  @Override
+  public CcLinkingOutputs link(
+      SkylarkActionFactory actions,
+      FeatureConfigurationForStarlark skylarkFeatureConfiguration,
+      CcToolchainProvider skylarkCcToolchainProvider,
+      Object compilationOutputs,
+      SkylarkList<?> userLinkFlags, // <String> expected
+      SkylarkList<?> linkingContexts, // <CcLinkingContext> expected
+      String name,
+      String language,
+      String outputType,
+      boolean linkDepsStatically,
+      SkylarkList<?> additionalInputs, // <Artifact> expected
+      Location location,
+      StarlarkThread thread)
+      throws InterruptedException, EvalException {
+    return super.link(
+        actions,
+        skylarkFeatureConfiguration,
+        skylarkCcToolchainProvider,
+        convertFromNoneable(compilationOutputs, /* defaultValue= */ null),
+        userLinkFlags,
+        linkingContexts,
+        name,
+        language,
+        outputType,
+        linkDepsStatically,
+        additionalInputs,
+        /* grepIncludes= */ null,
+        location,
+        thread);
+  }
+
+  @Override
+  public CcCompilationOutputs createCompilationOutputsFromSkylark(
+      Object objectsObject, Object picObjectsObject, Location location) throws EvalException {
+    return super.createCompilationOutputsFromSkylark(objectsObject, picObjectsObject, location);
+  }
+
+  @Override
+  public CcCompilationOutputs mergeCcCompilationOutputsFromSkylark(
+      SkylarkList<?> compilationOutputs) throws EvalException {
+    CcCompilationOutputs.Builder ccCompilationOutputsBuilder = CcCompilationOutputs.builder();
+    for (CcCompilationOutputs ccCompilationOutputs :
+        compilationOutputs.getContents(CcCompilationOutputs.class, "compilation_outputs")) {
+      ccCompilationOutputsBuilder.merge(ccCompilationOutputs);
+    }
+    return ccCompilationOutputsBuilder.build();
   }
 }

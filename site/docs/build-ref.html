@@ -15,6 +15,21 @@ title: Concepts and Terminology
   <li><a href="#packages_targets">Workspace, Packages and Targets</a>
     <ul>
       <li><a href="#workspace">Workspace</a></li>
+      <li><a href="#repositories">Repositories</a></li>
+      <li><a href="#packages">Packages</a></li>
+      <li><a href="#targets">Targets</a></li>
+      <li><a href="#labels">Labels</a></li>
+      <li><a href="#lexi">Lexical Specifications of a Label</a></li>
+      <li><a href="#rules">Rules</a></li>
+    </ul>
+  </li>
+  <li><a href="#BUILD_files">BUILD Files</a>
+    <ul>
+      <li><a href="#load">Loading an extension</a></li>
+    </ul>
+  </li>
+  <li><a href="#funcs">Types of Build Rules</a></li>
+
   <li><a href="#dependencies">Dependencies</a>
     <ul>
       <li><a href="#actual_and_declared_dependencies">Actual and Declared Dependencies</a></li>
@@ -38,25 +53,48 @@ title: Concepts and Terminology
 <p>A <em>workspace</em> is a directory on your filesystem that contains the
    source files for the software you want to build, as well as symbolic links
    to directories that contain the build outputs. Each workspace directory has
-   a text file named <code>WORKSPACE</code> which may be empty,  or may contain
+   a text file named <code>WORKSPACE</code> which may be empty, or may contain
    references to <a href="external.html">external dependencies</a>
-   required to build the outputs. See also the <a
-   href="be/workspace.html">Workspace Rules</a> section in the Build
-   Encyclopedia.
-</p>
+   required to build the outputs.</p>
+
+<p>Directories containing a file called
+   <code>WORKSPACE</code> are considered the root of a workspace.
+   Therefore, Bazel ignores any directory trees in a workspace rooted
+   at a subdirectory containing a <code>WORKSPACE</code> file (as they form
+   another workspace).</p>
+
+<h3 id="repositories">Repositories</h3>
+<p>Code is organized in <em>repositories</em>. The directory containing
+   the <code>WORKSPACE</code> file is the root of the main repository, also
+   called <code>@</code>. Other, (external) repositories
+   are defined in the <code>WORKSPACE</code> file using workspace rules.
+
+<p>The workspace rules bundled with Bazel are documented in the
+   <a href="be/workspace.html">Workspace Rules</a> section in the Build
+   Encyclopedia and the documentation on
+   <a href="repo/index.html">embeded Starlark repository rules</a>.</p>
+
+<p>As external repositories are repositories themselves, they often contain
+   a <code>WORKSPACE</code> file as well. However, these additional
+   <code>WORKSPACE</code> files are ignored by Bazel. In particular,
+   repositories depended upon transitively are not added automatically.</p>
+
 <h3 id="packages">Packages</h3>
 <p>
-  The primary unit of code organization in a workspace is
+  The primary unit of code organization in a repository is
   the <i>package</i>.  A package is a collection of related files and a
   specification of the dependencies among them.
 </p>
+
 <p>
   A package is defined as a directory containing a file
-  named <code>BUILD</code>, residing beneath the top-level directory in the
+  named <code>BUILD</code> or <code>BUILD.bazel</code>,
+  residing beneath the top-level directory in the
   workspace.  A package includes all files in its directory, plus all
   subdirectories beneath it, except those which themselves contain a BUILD
   file.
 </p>
+
 <p>
   For example, in the following directory tree
   there are two packages, <code>my/app</code>,
@@ -118,7 +156,7 @@ src/my/app/tests/test.cc
   precise meaning of such relationships is often quite complex and
   language- or rule-dependent, but intuitively it is simple: a C++
   library rule A might have another C++ library rule B for an input.
-  The effect of this dependency is that the B's header files are
+  The effect of this dependency is that B's header files are
   available to A during compilation, B's symbols are available to A
   during linking, and B's runtime data is available to A during
   execution.
@@ -150,6 +188,17 @@ src/my/app/tests/test.cc
   All targets belong to exactly one package.  The name of a target is
   called its <em>label</em>, and a typical label in canonical form
   looks like this:
+</p>
+
+
+<pre>
+@myrepo//my/app/main:app_binary
+</pre>
+
+<p>
+  In the typical case that a label refers to the same repository it occurs
+  in, the repository name may be left out. So, inside <code>@myrepo</code>
+  this label is usually written as
 </p>
 
 <pre>
@@ -267,13 +316,13 @@ testdata/input.txt
 
 <p><code>target-name</code> is the name of the target within the package.
   The name of a rule is the value of the <code>name</code>
-  parameter in the rule's declaration in a BUILD file; the name
+  attribute in the rule's declaration in a BUILD file; the name
   of a file is its pathname relative to the directory containing
   the BUILD file.
   Target names must be composed entirely of
   characters drawn from the set <code>a</code>–<code>z</code>,
   <code>A</code>–<code>Z</code>, <code>0</code>–<code>9</code>,
-  and the punctuation symbols <code>_/.+-=,@~</code>.
+  and the punctuation symbols <code>!%-@^_` "#$&'()*-+,;<=>?[]{|}~</code>.
   Do not use <code>..</code> to refer to files in other packages; use
   <code>//<var>packagename</var>:<var>filename</var></code> instead.
   Filenames must be relative pathnames in normal form, which means
@@ -351,12 +400,23 @@ testdata/input.txt
   the name of the executable produced by the build.
 </p>
 
+<pre>
+cc_binary(
+    name = "my_app",
+    srcs = ["my_app.cc"],
+    deps = [
+        "//absl/base",
+        "//absl/strings",
+    ],
+)
+</pre>
+
 <p>
   Every rule has a set of <i>attributes</i>; the applicable attributes
   for a given rule, and the significance and semantics of each
   attribute are a function of the rule's class; see
   the <a href='be/overview.html'>Build
-  Encyclopedia</a> for the full list of supported rules and their
+  Encyclopedia</a> for a list of rules and their
   corresponding attributes.  Each attribute has a name and a
   type.  Some of the common types an attribute can have are integer,
   label, list of labels, string, list of strings, output label,
@@ -367,7 +427,7 @@ testdata/input.txt
 
 <p>
   The <code>srcs</code> attribute present in many rules has type "list
-  of label"; its value, if present, is a list of labels, each being
+  of labels"; its value, if present, is a list of labels, each being
   the name of a target that is an input to this rule.
 </p>
 
@@ -403,43 +463,105 @@ testdata/input.txt
 
 <p>
   By definition, every package contains a BUILD file, which is a short
-  program.  Most BUILD files
-  appear to be little more than a series of declarations of build
-  rules; indeed, the declarative style is strongly encouraged when
-  writing BUILD files.
+  program.
+  BUILD files are evaluated using an imperative language,
+  <a href="https://github.com/bazelbuild/starlark/">Starlark</a>.
+
+  They are interpreted as a sequential list of statements.
 </p>
 
 <p>
-  However, BUILD files are evaluated using an imperative language,
-
-    <a href="skylark/language.html">Skylark</a>.
-<h3 id="declaring_build_rules">Declaring build rules</h3>
-
-<p>
-  BUILD files use an imperative language, so in general, order
-  does matter: variables must be defined before they are used, for
+  In general, order does matter: variables must be defined before they are used, for
   example.  However, most BUILD files consist only of declarations of
   build rules, and the relative order of these statements is
   immaterial; all that matters is <em>which</em> rules were declared,
   and with what values, by the time package evaluation completes.
 
+  When a build rule function, such as <code>cc_library</code>, is
+  executed, it creates a new target in the graph. This target can later be
+  referred using a label.
+
   So, in simple BUILD files, rule declarations can be re-ordered
   freely without changing the behavior.
 </p>
 
+
 <p>
-  BUILD file authors are encouraged to use comments liberally to
-  document the role of each build target, whether it is intended for
-  public use, and anything else that would help users and future
-  maintainers, including a comment at the top, explaining the role of the
-  package.
+  To encourage a clean separation between code and data, BUILD files cannot
+  contain function definitions, <code>for</code> statements or
+  <code>if</code> statements (but list comprehensions and <code>if</code>
+  expressions are allowed). Functions should be declared in <code>.bzl</code>
+  files instead. Additionally, <code>*args</code> and <code>**kwargs</code>
+  arguments are not allowed in BUILD files; instead list all the arguments
+  explicitly.
 </p>
 
 <p>
-  The Python comment syntax of <code>#...</code> is supported.
-  Triple-quoted string literals may span multiple lines, and can be used
-  for multi-line comments.
+  Crucially, programs in Starlark are unable to perform
+  arbitrary I/O.  This invariant makes the
+  interpretation of BUILD files hermetic, i.e. dependent only on a
+  known set of inputs, which is essential for ensuring that builds are
+  reproducible.
 </p>
+
+<p>
+  BUILD files should be written using only ASCII characters,
+  although technically they are interpreted using the Latin-1
+  character set.
+</p>
+
+<p>
+  Since BUILD files need to be updated whenever the dependencies of the
+  underlying code change, they are typically maintained by multiple
+  people on a team. BUILD file authors are encouraged to use comments
+  liberally to document the role of each build target, whether or not it
+  is intended for public use, and to document the role of the package
+  itself.
+</p>
+
+<h3 id="load">Loading an extension</h3>
+
+Bazel extensions are files ending in <code>.bzl</code>. Use
+the <code>load</code> statement to import a symbol from an extension.
+
+<pre>
+load("//foo/bar:file.bzl", "some_library")
+</pre>
+
+This code will load the file <code>foo/bar/file.bzl</code> and add the
+<code>some_library</code> symbol to the environment. This can be used to load
+new rules, functions or constants (e.g. a string, a list, etc.). Multiple
+symbols can be imported by using additional arguments to the call
+to <code>load</code>. Arguments must be string literals (no variable)
+and <code>load</code> statements must appear at top-level, i.e. they cannot be
+in a function body.
+
+The first argument of <code>load</code> is a <a href="#labels">label</a>
+identifying a <code>.bzl</code> file. If it is a relative label, it is resolved
+with respect to the package (not directory) containing the current
+<code>bzl</code> file. Relative labels in <code>load</code> statements should
+use a leading <code>:</code>.
+
+<code>load</code> also supports aliases, i.e. you can assign different names to
+the imported symbols.
+
+<pre>
+load("//foo/bar:file.bzl", library_alias = "some_library")
+</pre>
+
+You can define multiple aliases within one <code>load</code> statement.
+Moreover, the argument list can contain both aliases and regular symbol names.
+The following example is perfectly legal (please note when to use quotation
+marks).
+
+<pre>
+load(":my_rules.bzl", "some_rule", nice_alias = "some_other_rule")
+</pre>
+
+In a <code>.bzl</code> file, symbols starting with <code>_</code> are not
+exported and cannot be loaded from another file. Visibility doesn't affect
+loading (yet): you don't need to use <code>exports_files</code> to make
+a <code>.bzl</code> file visible.
 
 <h2 id="funcs">Types of build rule</h2>
 
@@ -450,8 +572,9 @@ testdata/input.txt
   and <code>cc_test</code> are the build rules for C++ binaries,
   libraries, and tests, respectively.  Other languages use the same
   naming scheme, with a different prefix, e.g. <code>java_*</code> for
-  Java. These functions are all documented in the
-  <a href="be/overview.html">Build Encyclopedia</a>.
+  Java. Some of these functions are documented in the
+  <a href="be/overview.html">Build Encyclopedia</a>, but it is possible
+  for anyone to create new rules.
 </p>
 
 <ul>
@@ -506,7 +629,8 @@ testdata/input.txt
   A target <code>A</code> <i>depends upon</i> a target
   <code>B</code> if <code>B</code> is needed by <code>A</code> at
   build or execution time.  The <i>depends upon</i> relation induces a
-  directed acyclic graph (DAG) over targets, and we call this a
+  <a href="https://en.wikipedia.org/wiki/Directed_acyclic_graph">Directed
+  Acyclic Graph</a> (DAG) over targets, and we call this a
   <em>dependency graph</em>.
 
   A target's <em>direct</em> dependencies are those other targets
@@ -527,8 +651,8 @@ testdata/input.txt
 
 <p>
   A target <code>X</code> is <i>actually dependent</i> on target
-  <code>Y</code> iff <code>Y</code> must be present, built and
-  up-to-date in order for <code>X</code> to be built correctly.
+  <code>Y</code> if and only if <code>Y</code> must be present, built
+  and up-to-date in order for <code>X</code> to be built correctly.
   "Built" could mean generated, processed, compiled, linked,
   archived, compressed, executed, or any of the other kinds of tasks
   that routinely occur during a build.
@@ -536,8 +660,8 @@ testdata/input.txt
 
 <p>
   A target <code>X</code> has a <i>declared dependency</i> on target
-  <code>Y</code> iff there is a dependency edge from <code>X</code> to
-  <code>Y</code> in the package of <code>X</code>.
+  <code>Y</code> if and only if there is a dependency edge from <code>X</code>
+  to <code>Y</code> in the package of <code>X</code>.
 </p>
 
 <p>
@@ -629,11 +753,28 @@ function foo() {
 }</b>
 </pre>
 </div>
-<pre style="clear: both;">
-Declared dependency graph:  a --&gt; b --&gt; c
-
-Actual dependency graph:    a --&gt; b --&gt; c
-</pre>
+<table style='margin: auto; width: 100%'><tr>
+<td style='padding: 10px; text-align: center'>
+<!-- digraph G {
+  graph [size="4,4"];
+  node [shape=circle];
+  rankdir="LR";
+  a -> b -> c;
+} -->
+<img src="images/a_b_c.svg" alt="a_b_c.svg" style="margin-left=10;" />
+<p><i>Declared dependency graph</i></p>
+</td>
+<td style='padding: 10px; text-align: center'>
+<!-- digraph G {
+  graph [size="4,4"];
+  node [shape=circle];
+  rankdir="LR";
+  a -> b -> c;
+} -->
+<img src="images/a_b_c.svg" alt="a_b_c.svg" style="margin-left=10;" />
+<p><i>Actual dependency graph</i></p>
+</td>
+</tr></table>
 The declared dependencies overapproximate the actual dependencies.
 All is well.
 </div>
@@ -654,12 +795,29 @@ b.foo();
 </pre>
 </div>
 
-<pre style="clear: both;">
-Declared dependency graph:  a --&gt; b --&gt; c
-
-Actual dependency graph:    a --&gt; b --&gt;_c
-                             \_________/|
-</pre>
+<table style='margin: auto; width: 100%'><tr>
+<td style='padding: 10px; text-align: center'>
+<!-- digraph G {
+  graph [size="4,4"];
+  node [shape=circle];
+  rankdir="LR";
+  a -> b -> c;
+} -->
+<img src="images/a_b_c.svg" alt="a_b_c.svg" style="margin-left=10;" />
+<p><i>Declared dependency graph</i></p>
+</td>
+<td style='padding: 10; text-align: center'>
+<!-- digraph G {
+  graph [size="4,4"];
+  node [shape=circle];
+  rankdir="LR";
+  a -> b -> c;
+  a -> c [constraint=false];
+} -->
+<img src="images/a_b_c_ac.svg" alt="a_b_c_ac.svg" style="margin-left=10;" />
+<p><i>Actual dependency graph</i></p>
+</td>
+</tr></table>
 The declared dependencies no longer overapproximate the actual
 dependencies.  This may build ok, because the transitive closures of
 the two graphs are equal, but masks a problem: <code>a</code> has an
@@ -690,12 +848,31 @@ function foo() {
 }
 </pre>
 </div>
-<pre style="clear: both;">
-Declared dependency graph:  a --&gt; b     c
-
-Actual dependency graph:    a --&gt; b    _c
-                             \_________/|
-</pre>
+<table style='margin: auto; width: 100%'><tr>
+<td style='padding: 10px; text-align: center'>
+<!-- digraph G {
+  graph [size="4,4"];
+  node [shape=circle];
+  rankdir="LR";
+  a -> b;
+  b -> c [style=invis];
+} -->
+<img src="images/ab_c.svg" alt="ab_c.svg" style="margin-left=10;" />
+<p><i>Declared dependency graph</i></p>
+</td>
+<td style='padding: 10; text-align: center'>
+<!-- digraph G {
+  graph [size="4,4"];
+  node [shape=circle];
+  rankdir="LR";
+  a -> b;
+  b -> c [style=invis];
+  a -> c [constraint=false];
+} -->
+<img src="images/a_b_a_c.svg" alt="a_b_a_c.svg" style="margin-left=10;" />
+<p><i>Actual dependency graph</i></p>
+</td>
+</tr></table>
 <p>
   The declared dependency graph is now an underapproximation of the
   actual dependencies, even when transitively closed; the build is

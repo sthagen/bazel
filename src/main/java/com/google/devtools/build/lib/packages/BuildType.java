@@ -25,6 +25,10 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.packages.License.LicenseParsingException;
+import com.google.devtools.build.lib.packages.Type.ConversionException;
+import com.google.devtools.build.lib.packages.Type.DictType;
+import com.google.devtools.build.lib.packages.Type.LabelClass;
+import com.google.devtools.build.lib.packages.Type.ListType;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
@@ -33,11 +37,6 @@ import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Printer.BasePrinter;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SelectorValue;
-import com.google.devtools.build.lib.syntax.Type;
-import com.google.devtools.build.lib.syntax.Type.ConversionException;
-import com.google.devtools.build.lib.syntax.Type.DictType;
-import com.google.devtools.build.lib.syntax.Type.LabelClass;
-import com.google.devtools.build.lib.syntax.Type.ListType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -189,8 +188,7 @@ public final class BuildType {
     }
 
     @Override
-    public <T> void visitLabels(LabelVisitor<T> visitor, Object value, T context)
-        throws InterruptedException {
+    public <T> void visitLabels(LabelVisitor<T> visitor, Object value, T context) {
       for (Label label : cast(value).getLabels()) {
         visitor.visit(label, context);
       }
@@ -240,8 +238,7 @@ public final class BuildType {
     }
 
     @Override
-    public <T> void visitLabels(LabelVisitor<T> visitor, Object value, T context)
-        throws InterruptedException {
+    public <T> void visitLabels(LabelVisitor<T> visitor, Object value, T context) {
       visitor.visit(cast(value), context);
     }
 
@@ -310,7 +307,7 @@ public final class BuildType {
     public Map<Label, ValueT> convert(Object x, Object what, Object context)
         throws ConversionException {
       Map<Label, ValueT> result = super.convert(x, what, context);
-      // The input is known to be a map because super.convert succeded; otherwise, a
+      // The input is known to be a map because super.convert succeeded; otherwise, a
       // ConversionException would have been thrown.
       Map<?, ?> input = (Map<?, ?>) x;
 
@@ -443,8 +440,7 @@ public final class BuildType {
     }
 
     @Override
-    public <T> void visitLabels(LabelVisitor<T> visitor, Object value, T context)
-        throws InterruptedException {
+    public <T> void visitLabels(LabelVisitor<T> visitor, Object value, T context) {
       visitor.visit(cast(value), context);
     }
 
@@ -727,12 +723,10 @@ public final class BuildType {
   }
 
   /**
-   * Tristate values are needed for cases where user intent matters.
-   *
-   * <p>Tristate values are not explicitly interchangeable with booleans and are
-   * handled explicitly as TriStates. Prefer Booleans with default values where
-   * possible.  The main use case for TriState values is when a Rule's behavior
-   * must interact with a Flag value in a complicated way.</p>
+   * A TriState value is like a boolean attribute whose default value may be distinguished from
+   * either of the possible explicitly assigned values. TriState attributes may be assigned the
+   * values 0 (NO), 1 (YES), or None (AUTO). TriState is deprecated; use attr.int(values=[-1, 0, 1])
+   * instead.
    */
   private static class TriStateType extends Type<TriState> {
     @Override
@@ -754,7 +748,6 @@ public final class BuildType {
       return "tristate";
     }
 
-    // Like BooleanType, this must handle integers as well.
     @Override
     public TriState convert(Object x, Object what, Object context)
         throws ConversionException {
@@ -762,6 +755,11 @@ public final class BuildType {
         return (TriState) x;
       }
       if (x instanceof Boolean) {
+        // TODO(adonovan): re-enable this under flag control; see b/116691720.
+        // throw new ConversionException(this, x,
+        //   "rule attribute (tristate is being replaced by "
+        //       + "attr.int(values=[-1, 0, 1]), and it no longer accepts Boolean values; "
+        //       + "instead, use 0 or 1, or None for the default)");
         return ((Boolean) x) ? TriState.YES : TriState.NO;
       }
       Integer xAsInteger = INTEGER.convert(x, what, context);

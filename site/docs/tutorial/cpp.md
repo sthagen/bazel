@@ -3,8 +3,7 @@ layout: documentation
 title: Build Tutorial - C++
 ---
 
-Introduction to Bazel: Building a C++ Project
-==========
+# Introduction to Bazel: Building a C++ Project
 
 In this tutorial, you'll learn the basics of building C++ applications with
 Bazel. You will set up your workspace and build a simple C++ project that
@@ -26,20 +25,11 @@ In this tutorial you'll learn how to:
 *  Reference targets through labels
 
 ## Contents
+{:.no_toc}
 
-*  [Before you begin](#before-you-begin)
-   *  [Install Bazel](#install-bazel)
-   *  [Get the sample project](#get-the-sample-project)
-*  [Build with Bazel](#build-with-bazel)
-   *  [Set up the workspace](#set-up-the-workspace)
-   *  [Understand the BUILD file](#understand-the-build-file)
-   *  [Build the project](#build-the-project)
-   *  [Review the dependency graph](#review-the-dependency-graph)
-*  [Refine your Bazel build](#refine-your-bazel-build)
-   *  [Specify multiple build targets](#specify-multiple-build-targets)
-   *  [Use multiple packages](#use-multiple-packages)
-*  [Use labels to reference targets](#use-labels-to-reference-targets)
-*  [Further reading](#further-reading)
+* ToC
+{:toc}
+
 
 ## Before you begin
 
@@ -182,7 +172,7 @@ Let's visualize our sample project's dependencies. First, generate a text
 representation of the dependency graph (run the command at the workspace root):
 
 ```
-bazel query --nohost_deps --noimplicit_deps 'deps(//main:hello-world)' \
+bazel query --notool_deps --noimplicit_deps 'deps(//main:hello-world)' \
   --output graph
 ```
 
@@ -203,7 +193,7 @@ Then you can generate and view the graph by piping the text output above
 straight to xdot:
 
 ```
-xdot <(bazel query --nohost_deps --noimplicit_deps 'deps(//main:hello-world)' \
+xdot <(bazel query --notool_deps --noimplicit_deps 'deps(//main:hello-world)' \
   --output graph)
 ```
 
@@ -244,7 +234,7 @@ cc_binary(
 ```
 
 With this `BUILD` file, Bazel first builds the `hello-greet` library
-(using Bazel's built-in [`cc_library` rule](../be/c-cpp.html#cc_library),
+(using Bazel's built-in [`cc_library` rule](../be/c-cpp.html#cc_library)),
 then the `hello-world` binary. The `deps` attribute in the `hello-world` target
 tells Bazel that the `hello-greet` library is required to build the `hello-world`
 binary.
@@ -285,7 +275,7 @@ builds two additional source files.
 
 ### Use multiple packages
 
-Let’s now split the project into multiple packages. Take a look at the contents
+Let's now split the project into multiple packages. Take a look at the contents
 of the `cpp-tutorial/stage3` directory:
 
 ```
@@ -388,8 +378,8 @@ target in the `BUILD` file (the `name` attribute). If the target is a file
 target, then `path/to/package` is the path to the root of the package, and
 `target-name` is the name of the target file, including its full path.
 
-When referencing targets within the same package, you can skip the package path
-and just use `//:target-name`. When referencing targets within the same `BUILD`
+When referencing targets at the repository root, the package path is empty,
+just use `//:target-name`. When referencing targets within the same `BUILD`
 file, you can even skip the `//` workspace root identifier and just use
 `:target-name`.
 
@@ -403,7 +393,7 @@ Then, check out the following:
 *  [External Dependencies](../external.html) to learn more about working with
    local and remote repositories.
 
-*  The [Build Encyclopedia](../be/overview.html) to learn more about Bazel.
+*  The [other rules](../rules.html) to learn more about Bazel.
 
 *  The [Java build tutorial](java.md) to get started with
    building Java applications with Bazel.

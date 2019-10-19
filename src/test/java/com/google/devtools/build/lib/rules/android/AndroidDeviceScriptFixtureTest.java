@@ -28,6 +28,11 @@ import org.junit.runners.JUnit4;
 public class AndroidDeviceScriptFixtureTest extends AndroidBuildViewTestCase {
 
   @Before
+  public void setupCcToolchain() throws Exception {
+    getAnalysisMock().ccSupport().setupCcToolchainConfigForCpu(mockToolsConfig, "armeabi-v7a");
+  }
+
+  @Before
   public void setup() throws Exception {
     scratch.file("scripts/BUILD", "exports_files(['my_script.sh'])");
     scratch.file(

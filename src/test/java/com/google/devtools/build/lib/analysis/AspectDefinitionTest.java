@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -60,7 +60,10 @@ public class AspectDefinitionTest {
 
     @Override
     public ConfiguredAspect create(
-        ConfiguredTargetAndData ctadBase, RuleContext context, AspectParameters parameters) {
+        ConfiguredTargetAndData ctadBase,
+        RuleContext context,
+        AspectParameters parameters,
+        String toolsRepository) {
       throw new IllegalStateException();
     }
 
@@ -91,29 +94,29 @@ public class AspectDefinitionTest {
 
   @Test
   public void testAspectWithDuplicateAttribute_FailsToAdd() throws Exception {
-    try {
-      new AspectDefinition.Builder(TEST_ASPECT_CLASS)
-          .add(attr("$runtime", BuildType.LABEL).value(Label.parseAbsoluteUnchecked("//run:time")))
-          .add(attr("$runtime", BuildType.LABEL).value(Label.parseAbsoluteUnchecked("//oops")));
-      fail(); // expected IllegalArgumentException
-    } catch (IllegalArgumentException e) {
-      // expected
-    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new AspectDefinition.Builder(TEST_ASPECT_CLASS)
+                .add(
+                    attr("$runtime", BuildType.LABEL)
+                        .value(Label.parseAbsoluteUnchecked("//run:time")))
+                .add(
+                    attr("$runtime", BuildType.LABEL)
+                        .value(Label.parseAbsoluteUnchecked("//oops"))));
   }
 
   @Test
   public void testAspectWithUserVisibleAttribute_FailsToAdd() throws Exception {
-    try {
-      new AspectDefinition.Builder(TEST_ASPECT_CLASS)
-          .add(
-              attr("invalid", BuildType.LABEL)
-                  .value(Label.parseAbsoluteUnchecked("//run:time"))
-                  .allowedFileTypes(FileTypeSet.NO_FILE))
-          .build();
-      fail(); // expected IllegalArgumentException
-    } catch (IllegalArgumentException e) {
-      // expected
-    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new AspectDefinition.Builder(TEST_ASPECT_CLASS)
+                .add(
+                    attr("invalid", BuildType.LABEL)
+                        .value(Label.parseAbsoluteUnchecked("//run:time"))
+                        .allowedFileTypes(FileTypeSet.NO_FILE))
+                .build());
   }
 
   @Test
@@ -123,10 +126,8 @@ public class AspectDefinitionTest {
         .propagateAlongAttribute("deps")
         .build();
 
-    assertThat(withAspects.propagateAlong(createLabelListAttribute("srcs")))
-        .isTrue();
-    assertThat(withAspects.propagateAlong(createLabelListAttribute("deps")))
-        .isTrue();
+    assertThat(withAspects.propagateAlong("srcs")).isTrue();
+    assertThat(withAspects.propagateAlong("deps")).isTrue();
   }
 
   @Test
@@ -135,17 +136,8 @@ public class AspectDefinitionTest {
         .propagateAlongAllAttributes()
         .build();
 
-    assertThat(withAspects.propagateAlong(createLabelListAttribute("srcs")))
-        .isTrue();
-    assertThat(withAspects.propagateAlong(createLabelListAttribute("deps")))
-        .isTrue();
-  }
-
-
-  private static Attribute createLabelListAttribute(String name) {
-    return Attribute.attr(name, BuildType.LABEL_LIST)
-        .allowedFileTypes(FileTypeSet.ANY_FILE)
-        .build();
+    assertThat(withAspects.propagateAlong("srcs")).isTrue();
+    assertThat(withAspects.propagateAlong("deps")).isTrue();
   }
 
   @Test

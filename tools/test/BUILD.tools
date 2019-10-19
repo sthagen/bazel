@@ -35,13 +35,28 @@ filegroup(
 
 filegroup(
     name = "coverage_report_generator",
-    srcs = ["@bazel_tools//tools/test/LcovMerger/java/com/google/devtools/lcovmerger:Main"],
+    srcs = ["@bazel_tools//tools/test/CoverageOutputGenerator/java/com/google/devtools/coverageoutputgenerator:Main"],
 )
 
 filegroup(
     name = "test_wrapper",
+    # "tw" is the Windows-native test wrapper. It has a short name because paths
+    # have short limits on Windows.
+    # On other platforms this binary is a no-op.
+    # See https://github.com/bazelbuild/bazel/issues/5508
     srcs = select({
-        "@bazel_tools//src/conditions:windows": ["test_wrapper_bin.exe"],
-        "//conditions:default": ["test_wrapper_bin"],
+        "@bazel_tools//src/conditions:windows": ["tw.exe"],
+        "//conditions:default": ["tw"],
+    }),
+)
+
+filegroup(
+    name = "xml_writer",
+    # "xml" is the Windows-native test XML writer. It has a short name because
+    # paths have short limits on Windows.
+    # On other platforms this binary is a no-op.
+    srcs = select({
+        "@bazel_tools//src/conditions:windows": ["xml.exe"],
+        "//conditions:default": ["xml"],
     }),
 )

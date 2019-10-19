@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.Map;
@@ -27,7 +28,7 @@ import java.util.Map;
 public interface RunfilesSupplier {
 
   /** @return the contained artifacts */
-  Iterable<Artifact> getArtifacts();
+  NestedSet<Artifact> getArtifacts();
 
   /** @return the runfiles' root directories. */
   ImmutableSet<PathFragment> getRunfilesDirs();
@@ -35,11 +36,30 @@ public interface RunfilesSupplier {
   /**
    * Returns mappings from runfiles directories to artifact mappings in that directory.
    *
+   * @param resolver used when reading a {@link com.google.devtools.build.lib.analysis.Runfiles}
+   *     pruning manifest
    * @return runfiles' mappings
    * @throws IOException
    */
-  ImmutableMap<PathFragment, Map<PathFragment, Artifact>> getMappings() throws IOException;
+  ImmutableMap<PathFragment, Map<PathFragment, Artifact>> getMappings(ArtifactPathResolver resolver)
+      throws IOException;
 
   /** @return the runfiles manifest artifacts, if any. */
   ImmutableList<Artifact> getManifests();
+
+  /**
+   * Returns whether for a given {@code runfilesDir} the runfile symlinks are materialized during
+   * build. Also returns {@code false} if the runfiles supplier doesn't know about the directory.
+   *
+   * @param runfilesDir runfiles directory relative to the exec root
+   */
+  boolean isBuildRunfileLinks(PathFragment runfilesDir);
+
+  /**
+   * Returns whether it's allowed to create runfile symlinks in the {@code runfilesDir}. Also
+   * returns {@code false} if the runfiles supplier doesn't know about the directory.
+   *
+   * @param runfilesDir runfiles directory relative to the exec root
+   */
+  boolean isRunfileLinksEnabled(PathFragment runfilesDir);
 }

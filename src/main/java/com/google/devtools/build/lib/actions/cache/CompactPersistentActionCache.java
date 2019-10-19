@@ -370,17 +370,17 @@ public class CompactPersistentActionCache implements ActionCache {
       // Estimate the size of the buffer:
       //   5 bytes max for the actionKey length
       // + the actionKey itself
-      // + 16 bytes for the digest
+      // + 32 bytes for the digest
       // + 5 bytes max for the file list length
       // + 5 bytes max for each file id
-      // + 16 bytes for the environment digest
+      // + 32 bytes for the environment digest
       int maxSize =
           VarInt.MAX_VARINT_SIZE
               + actionKeyBytes.length
-              + Md5Digest.MD5_SIZE
+              + DigestUtils.ESTIMATED_SIZE
               + VarInt.MAX_VARINT_SIZE
               + files.size() * VarInt.MAX_VARINT_SIZE
-              + Md5Digest.MD5_SIZE;
+              + DigestUtils.ESTIMATED_SIZE;
       ByteArrayOutputStream sink = new ByteArrayOutputStream(maxSize);
 
       VarInt.putVarInt(actionKeyBytes.length, sink);
@@ -415,29 +415,29 @@ public class CompactPersistentActionCache implements ActionCache {
       source.get(actionKeyBytes);
       String actionKey = new String(actionKeyBytes, ISO_8859_1);
 
-      Md5Digest md5Digest = DigestUtils.read(source);
+      byte[] digest = DigestUtils.read(source);
 
       int count = VarInt.getVarInt(source);
-      ImmutableList.Builder<String> builder = new ImmutableList.Builder<>();
-      for (int i = 0; i < count; i++) {
-        int id = VarInt.getVarInt(source);
-        String filename = (id >= 0 ? indexer.getStringForIndex(id) : null);
-        if (filename == null) {
-          throw new IOException("Corrupted file index");
+      ImmutableList<String> files = null;
+      if (count != NO_INPUT_DISCOVERY_COUNT) {
+        ImmutableList.Builder<String> builder = ImmutableList.builderWithExpectedSize(count);
+        for (int i = 0; i < count; i++) {
+          int id = VarInt.getVarInt(source);
+          String filename = (id >= 0 ? indexer.getStringForIndex(id) : null);
+          if (filename == null) {
+            throw new IOException("Corrupted file index");
+          }
+          builder.add(filename);
         }
-        builder.add(filename);
+        files = builder.build();
       }
 
-      Md5Digest usedClientEnvDigest = DigestUtils.read(source);
+      byte[] usedClientEnvDigest = DigestUtils.read(source);
 
       if (source.remaining() > 0) {
         throw new IOException("serialized entry data has not been fully decoded");
       }
-      return new ActionCache.Entry(
-          actionKey,
-          usedClientEnvDigest,
-          count == NO_INPUT_DISCOVERY_COUNT ? null : builder.build(),
-          md5Digest);
+      return new ActionCache.Entry(actionKey, usedClientEnvDigest, files, digest);
     } catch (BufferUnderflowException e) {
       throw new IOException("encoded entry data is incomplete", e);
     }

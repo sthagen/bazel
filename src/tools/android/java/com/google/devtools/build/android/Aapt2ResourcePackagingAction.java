@@ -28,6 +28,7 @@ import com.google.devtools.build.android.aapt2.StaticLibrary;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.ShellQuotedParamsFilePreProcessor;
 import com.google.devtools.common.options.TriState;
+import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -62,9 +63,10 @@ public class Aapt2ResourcePackagingAction {
   public static void main(String[] args) throws Exception {
     Profiler profiler = InMemoryProfiler.createAndStart("setup");
     OptionsParser optionsParser =
-        OptionsParser.newOptionsParser(Options.class, Aapt2ConfigOptions.class);
-    optionsParser.enableParamsFileSupport(
-        new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()));
+        OptionsParser.builder()
+            .optionsClasses(Options.class, Aapt2ConfigOptions.class)
+            .argsPreProcessor(new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()))
+            .build();
     optionsParser.parseAndExitUponError(args);
     aaptConfigOptions = optionsParser.getOptions(Aapt2ConfigOptions.class);
     options = optionsParser.getOptions(Options.class);
@@ -81,9 +83,7 @@ public class Aapt2ResourcePackagingAction {
       final Path compiledResources = Files.createDirectories(tmp.resolve("compiled"));
       final Path linkedOut = Files.createDirectories(tmp.resolve("linked"));
       final AndroidDataDeserializer dataDeserializer =
-          aaptConfigOptions.useCompiledResourcesForMerge
-              ? AndroidCompiledDataDeserializer.withFilteredResources(options.prefilteredResources)
-              : AndroidParsedDataDeserializer.withFilteredResources(options.prefilteredResources);
+          AndroidCompiledDataDeserializer.withFilteredResources(options.prefilteredResources);
       final ResourceCompiler compiler =
           ResourceCompiler.create(
               executorService,
@@ -119,13 +119,10 @@ public class Aapt2ResourcePackagingAction {
       final Path symbolsBin =
           AndroidResourceMerger.mergeDataToSymbols(
               ParsedAndroidData.loadedFrom(
+                  DependencyInfo.DependencyType.PRIMARY,
                   ImmutableList.of(SerializedAndroidData.from(compiled)),
                   executorService,
-                  // TODO(b/112848607): Remove when compiled merging is the default for aapt2.
-                  aaptConfigOptions.useCompiledResourcesForMerge
-                      ? dataDeserializer
-                      : AndroidCompiledDataDeserializer.withFilteredResources(
-                          options.prefilteredResources)),
+                  dataDeserializer),
               new DensitySpecificManifestProcessor(options.densities, densityManifest)
                   .process(options.primaryData.getManifest()),
               ImmutableList.<SerializedAndroidData>builder()
@@ -158,15 +155,18 @@ public class Aapt2ResourcePackagingAction {
               .map(DependencyAndroidData::getCompiledSymbols)
               .collect(toList());
 
+      // NB: "-A" options are in *decreasing* precedence, while "-R" options are in *increasing*
+      // precedence.  While this is internally inconsistent, it matches AAPTv1's treatment of "-A".
       List<Path> assetDirs =
           concat(
-                  options.transitiveData.stream(),
-                  options.transitiveAssets.stream(),
-                  options.directData.stream(),
-                  options.directAssets.stream())
-              .flatMap(dep -> dep.assetDirs.stream())
+                  options.primaryData.assetDirs.stream(),
+                  concat(
+                          options.directData.stream(),
+                          options.directAssets.stream(),
+                          options.transitiveData.stream(),
+                          options.transitiveAssets.stream())
+                      .flatMap(dep -> dep.assetDirs.stream()))
               .collect(toList());
-      assetDirs.addAll(options.primaryData.assetDirs);
 
       final PackagedResources packagedResources =
           ResourceLinker.create(aaptConfigOptions.aapt2, executorService, linkedOut)
@@ -179,19 +179,35 @@ public class Aapt2ResourcePackagingAction {
               .buildVersion(aaptConfigOptions.buildToolsVersion)
               .conditionalKeepRules(aaptConfigOptions.conditionalKeepRules == TriState.YES)
               .filterToDensity(options.densities)
+              .storeUncompressed(aaptConfigOptions.uncompressedExtensions)
               .debug(aaptConfigOptions.debug)
               .includeGeneratedLocales(aaptConfigOptions.generatePseudoLocale)
               .includeOnlyConfigs(aaptConfigOptions.resourceConfigs)
-              .link(compiled)
-              .copyPackageTo(options.packagePath)
-              .copyProguardTo(options.proguardOutput)
-              .copyMainDexProguardTo(options.mainDexProguardOutput)
-              .createSourceJar(options.srcJarOutput)
-              .copyRTxtTo(options.rOutput);
+              .link(compiled);
       profiler.recordEndOf("link");
+
+      copy(packagedResources.apk(), options.packagePath);
+      if (options.proguardOutput != null) {
+        copy(packagedResources.proguardConfig(), options.proguardOutput);
+      }
+      if (options.mainDexProguardOutput != null) {
+        copy(packagedResources.mainDexProguard(), options.mainDexProguardOutput);
+      }
+      if (options.srcJarOutput != null) {
+        AndroidResourceOutputs.createSrcJar(
+            packagedResources.javaSourceDirectory(), options.srcJarOutput, /* staticIds= */ false);
+      }
+      if (options.rOutput != null) {
+        copy(packagedResources.rTxt(), options.rOutput);
+      }
       if (options.resourcesOutput != null) {
         packagedResources.asArchive().writeTo(options.resourcesOutput, /* compress= */ false);
       }
     }
+  }
+
+  private static void copy(Path from, Path out) throws IOException {
+    Files.createDirectories(out.getParent());
+    Files.copy(from, out);
   }
 }

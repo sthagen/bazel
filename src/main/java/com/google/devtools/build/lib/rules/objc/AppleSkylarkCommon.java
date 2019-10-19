@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.rules.objc;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
@@ -26,7 +27,6 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.Attribute.SplitTransitionProvider;
 import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
@@ -43,13 +43,15 @@ import com.google.devtools.build.lib.rules.apple.XcodeVersionProperties;
 import com.google.devtools.build.lib.rules.objc.AppleBinary.AppleBinaryOutput;
 import com.google.devtools.build.lib.rules.objc.ObjcProvider.Key;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkRuleContextApi;
+import com.google.devtools.build.lib.skylarkbuildapi.SplitTransitionProviderApi;
 import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleCommonApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
+import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -173,35 +175,28 @@ public class AppleSkylarkCommon
   }
 
   @Override
-  public SplitTransitionProvider getMultiArchSplitProvider() {
+  public SplitTransitionProviderApi getMultiArchSplitProvider() {
     return new MultiArchSplitTransitionProvider();
   }
 
   @Override
   // This method is registered statically for skylark, and never called directly.
   public ObjcProvider newObjcProvider(
-      Boolean usesSwift,
-      SkylarkDict<?, ?> kwargs,
-      Environment environment) {
-    boolean disableObjcResourceKeys =
-        environment.getSemantics().incompatibleDisableObjcProviderResources();
-    ObjcProvider.Builder resultBuilder = new ObjcProvider.Builder(environment.getSemantics());
+      Boolean usesSwift, SkylarkDict<?, ?> kwargs, StarlarkThread thread) throws EvalException {
+    ObjcProvider.Builder resultBuilder = new ObjcProvider.Builder(thread.getSemantics());
     if (usesSwift) {
       resultBuilder.add(ObjcProvider.FLAG, ObjcProvider.Flag.USES_SWIFT);
     }
     for (Map.Entry<?, ?> entry : kwargs.entrySet()) {
       Key<?> key = ObjcProvider.getSkylarkKeyForString((String) entry.getKey());
       if (key != null) {
-        if (disableObjcResourceKeys && ObjcProvider.isDeprecatedResourceKey(key)) {
-          throw new IllegalArgumentException(String.format(BAD_KEY_ERROR, entry.getKey()));
-        }
         resultBuilder.addElementsFromSkylark(key, entry.getValue());
       } else if (entry.getKey().equals("providers")) {
         resultBuilder.addProvidersFromSkylark(entry.getValue());
       } else if (entry.getKey().equals("direct_dep_providers")) {
         resultBuilder.addDirectDepProvidersFromSkylark(entry.getValue());
       } else {
-        throw new IllegalArgumentException(String.format(BAD_KEY_ERROR, entry.getKey()));
+        throw new EvalException(null, String.format(BAD_KEY_ERROR, entry.getKey()));
       }
     }
     return resultBuilder.build();
@@ -209,46 +204,60 @@ public class AppleSkylarkCommon
 
   @Override
   public AppleDynamicFrameworkInfo newDynamicFrameworkProvider(
-      Artifact dylibBinary,
+      Object dylibBinary,
       ObjcProvider depsObjcProvider,
       Object dynamicFrameworkDirs,
-      Object dynamicFrameworkFiles) {
+      Object dynamicFrameworkFiles)
+      throws EvalException {
     NestedSet<PathFragment> frameworkDirs;
     if (dynamicFrameworkDirs == Runtime.NONE) {
       frameworkDirs = NestedSetBuilder.<PathFragment>emptySet(Order.STABLE_ORDER);
     } else {
+      SkylarkNestedSet frameworkDirsSet = (SkylarkNestedSet) dynamicFrameworkDirs;
       Iterable<String> pathStrings =
-          ((SkylarkNestedSet) dynamicFrameworkDirs).getSet(String.class);
+          frameworkDirsSet.getSetFromParam(String.class, "framework_dirs");
       frameworkDirs =
           NestedSetBuilder.<PathFragment>stableOrder()
               .addAll(Iterables.transform(pathStrings, PathFragment::create))
               .build();
     }
     NestedSet<Artifact> frameworkFiles =
-        dynamicFrameworkFiles != Runtime.NONE
-            ? ((SkylarkNestedSet) dynamicFrameworkFiles).getSet(Artifact.class)
-            : NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER);
+        SkylarkNestedSet.getSetFromNoneableParam(
+            dynamicFrameworkFiles, Artifact.class, "framework_files");
+    Artifact binary = (dylibBinary != Runtime.NONE) ? (Artifact) dylibBinary : null;
+
     return new AppleDynamicFrameworkInfo(
-        dylibBinary, depsObjcProvider, frameworkDirs, frameworkFiles);
+        binary, depsObjcProvider, frameworkDirs, frameworkFiles);
   }
 
   @Override
   public StructImpl linkMultiArchBinary(
-      SkylarkRuleContextApi skylarkRuleContextApi, Environment environment)
+      SkylarkRuleContextApi skylarkRuleContextApi,
+      SkylarkList<?> extraLinkopts,
+      SkylarkList<?> extraLinkInputs,
+      StarlarkThread thread)
       throws EvalException, InterruptedException {
     SkylarkRuleContext skylarkRuleContext = (SkylarkRuleContext) skylarkRuleContextApi;
     try {
       RuleContext ruleContext = skylarkRuleContext.getRuleContext();
-      AppleBinaryOutput appleBinaryOutput = AppleBinary.linkMultiArchBinary(ruleContext);
-      return createAppleBinaryOutputSkylarkStruct(appleBinaryOutput, environment);
+      AppleBinaryOutput appleBinaryOutput =
+          AppleBinary.linkMultiArchBinary(
+              ruleContext,
+              ImmutableList.copyOf(extraLinkopts.getContents(String.class, "extra_linkopts")),
+              SkylarkList.castList(extraLinkInputs, Artifact.class, "extra_link_inputs"));
+      return createAppleBinaryOutputSkylarkStruct(appleBinaryOutput, thread);
     } catch (RuleErrorException | ActionConflictException exception) {
       throw new EvalException(null, exception);
     }
   }
 
   @Override
-  public DottedVersion dottedVersion(String version) {
-    return DottedVersion.fromString(version);
+  public DottedVersion dottedVersion(String version) throws EvalException {
+    try {
+      return DottedVersion.fromString(version);
+    } catch (DottedVersion.InvalidDottedVersionException e) {
+      throw new EvalException(null, e.getMessage());
+    }
   }
 
   @Override
@@ -261,7 +270,7 @@ public class AppleSkylarkCommon
    * function.
    */
   private StructImpl createAppleBinaryOutputSkylarkStruct(
-      AppleBinaryOutput output, Environment environment) {
+      AppleBinaryOutput output, StarlarkThread thread) {
     Provider constructor =
         new NativeProvider<StructImpl>(StructImpl.class, "apple_binary_output") {};
     // We have to transform the output group dictionary into one that contains SkylarkValues instead
@@ -274,7 +283,7 @@ public class AppleSkylarkCommon
         ImmutableMap.of(
             "binary_provider", output.getBinaryInfoProvider(),
             "debug_outputs_provider", output.getDebugOutputsProvider(),
-            "output_groups", SkylarkDict.copyOf(environment, outputGroups));
+            "output_groups", SkylarkDict.copyOf(thread, outputGroups));
     return SkylarkInfo.createSchemaless(constructor, fields, Location.BUILTIN);
   }
 }

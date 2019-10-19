@@ -40,7 +40,7 @@ import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -197,16 +197,24 @@ public class ResourceShrinkerAction {
     public Path log;
 
     @Option(
-      name = "packageType",
-      defaultValue = "DEFAULT",
-      converter = VariantTypeConverter.class,
-      category = "config",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "Variant configuration type for packaging the resources."
-              + " Acceptible values DEFAULT, LIBRARY, ANDROID_TEST, UNIT_TEST"
-    )
+        name = "resourcesConfigOutput",
+        defaultValue = "null",
+        converter = PathConverter.class,
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help = "Path to where the list of resources configuration directives should be written.")
+    public Path resourcesConfigOutput;
+
+    @Option(
+        name = "packageType",
+        defaultValue = "DEFAULT",
+        converter = VariantTypeConverter.class,
+        category = "config",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "Variant configuration type for packaging the resources."
+                + " Acceptable values DEFAULT, LIBRARY, ANDROID_TEST, UNIT_TEST")
     public VariantType packageType;
   }
 
@@ -221,7 +229,7 @@ public class ResourceShrinkerAction {
 
   private static Set<String> getManifestPackages(Path primaryManifest, List<Path> otherManifests)
       throws SAXException, IOException, StreamException, ParserConfigurationException {
-    Set<String> manifestPackages = new HashSet<>();
+    Set<String> manifestPackages = new LinkedHashSet<>();
     manifestPackages.add(getManifestPackage(primaryManifest));
     for (Path manifest : otherManifests) {
       manifestPackages.add(getManifestPackage(manifest));
@@ -233,9 +241,10 @@ public class ResourceShrinkerAction {
     final Stopwatch timer = Stopwatch.createStarted();
     // Parse arguments.
     OptionsParser optionsParser =
-        OptionsParser.newOptionsParser(Options.class, AaptConfigOptions.class);
-    optionsParser.enableParamsFileSupport(
-        new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()));
+        OptionsParser.builder()
+            .optionsClasses(Options.class, AaptConfigOptions.class)
+            .argsPreProcessor(new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()))
+            .build();
     optionsParser.parseAndExitUponError(args);
     aaptConfigOptions = optionsParser.getOptions(AaptConfigOptions.class);
     options = optionsParser.getOptions(Options.class);
@@ -301,7 +310,6 @@ public class ResourceShrinkerAction {
           null /* packageForR */,
           new FlagAaptOptions(aaptConfigOptions),
           aaptConfigOptions.resourceConfigs,
-          aaptConfigOptions.splits,
           new MergedAndroidData(
               shrunkResources, resourceFiles.resolve("assets"), options.primaryManifest),
           ImmutableList.<DependencyAndroidData>of() /* libraries */,

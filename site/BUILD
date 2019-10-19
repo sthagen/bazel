@@ -1,5 +1,6 @@
-load("//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("//scripts/docs:jekyll.bzl", "jekyll_build")
+load("//scripts/docs:doc_versions.bzl", "DOC_VERSIONS")
 
 exports_files(
     [
@@ -99,7 +100,6 @@ pkg_tar(
 pkg_tar(
     name = "skylark-rule-docs",
     srcs = [
-        "//tools/build_defs/docker:README.md",
         "//tools/build_defs/pkg:README.md",
     ],
     strip_prefix = "/tools/build_defs",
@@ -126,6 +126,7 @@ tar cf $$origdir/$@ *
     tools = ["//scripts/docs:generate_dot_graphs"],
 )
 
+# Generate the documentation tree in the current git worktree
 genrule(
     name = "jekyll-tree",
     srcs = [
@@ -134,6 +135,7 @@ genrule(
         "//src/main/java/com/google/devtools/build/lib:gen_buildencyclopedia",
         "//src/main/java/com/google/devtools/build/lib:gen_skylarklibrary",
         "//src/main/java/com/google/devtools/build/lib:gen_command-line-reference",
+        "//tools/build_defs/repo:doc",
     ],
     outs = ["jekyll-tree.tar"],
     cmd = ("$(location jekyll-tree.sh) $@ " +
@@ -141,7 +143,8 @@ genrule(
            "$(location :skylark-rule-docs) " +
            "$(location //src/main/java/com/google/devtools/build/lib:gen_buildencyclopedia) " +
            "$(location //src/main/java/com/google/devtools/build/lib:gen_skylarklibrary) " +
-           "$(location //src/main/java/com/google/devtools/build/lib:gen_command-line-reference)"),
+           "$(location //src/main/java/com/google/devtools/build/lib:gen_command-line-reference) " +
+           "$(location //tools/build_defs/repo:doc)"),
     tools = [
         "jekyll-tree.sh",
     ],
@@ -149,6 +152,9 @@ genrule(
 
 jekyll_build(
     name = "site",
-    srcs = [":jekyll-tree"],
+    srcs = [
+        "@jekyll_tree_%s//file" % DOC_VERSION["version"].replace(".", "_")
+        for DOC_VERSION in DOC_VERSIONS
+    ] + [":jekyll-tree"],  # jekyll-tree *must* come last to be the default.
     bucket = "docs.bazel.build",
 )

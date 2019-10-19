@@ -16,17 +16,14 @@ package com.google.devtools.build.lib.bazel.rules.java;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
-import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
-import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
-import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
+import static com.google.devtools.build.lib.packages.Type.STRING;
 
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
-import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.bazel.rules.java.BazelJavaRuleClasses.BaseJavaBinaryRule;
-import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.TriState;
@@ -54,26 +51,14 @@ public final class BazelJavaTestRule implements RuleDefinition {
     return builder
         .requiresConfigurationFragments(JavaConfiguration.class, CppConfiguration.class)
         .setImplicitOutputsFunction(BazelJavaRuleClasses.JAVA_BINARY_IMPLICIT_OUTPUTS)
-        // Proguard can be run over java_test targets using the --java_optimization_mode flag.
-        // Primarily this is intended to help test changes to Proguard.
-        .add(
-            attr(":proguard", LABEL)
-                .cfg(HostTransition.INSTANCE)
-                .value(JavaSemantics.PROGUARD)
-                .exec())
-        .add(attr(":extra_proguard_specs", LABEL_LIST).value(JavaSemantics.EXTRA_PROGUARD_SPECS))
         .override(attr("stamp", TRISTATE).value(TriState.NO))
         .override(attr("use_testrunner", BOOLEAN).value(true))
         .override(attr(":java_launcher", LABEL).value(JavaSemantics.JAVA_LAUNCHER))
         // Input files for test actions collecting code coverage
-        .add(
-            attr("$lcov_merger", LABEL)
-                .value(
-                    Label.parseAbsoluteUnchecked(
-                        "@bazel_tools//tools/test/LcovMerger/java/com/google/devtools/lcovmerger:Main")))
+        .add(attr(":lcov_merger", LABEL).value(BaseRuleClasses.getCoverageOutputGeneratorLabel()))
         .add(
             attr("$jacocorunner", LABEL)
-                .value(Label.parseAbsoluteUnchecked("@bazel_tools//tools/jdk:JacocoCoverage")))
+                .value(env.getToolsLabel("//tools/jdk:JacocoCoverageRunner")))
         /* <!-- #BLAZE_RULE(java_test).ATTRIBUTE(test_class) -->
         The Java class to be loaded by the test runner.<br/>
         <p>
@@ -83,9 +68,11 @@ public final class BazelJavaTestRule implements RuleDefinition {
         </p>
         <p>
           This attribute specifies the name of a Java class to be run by
-          this test. It is rare to need to set this. If this argument is omitted, the Java class
-          whose name corresponds to the <code>name</code> of this
-          <code>java_test</code> rule will be used.
+          this test. It is rare to need to set this. If this argument is omitted,
+          it will be inferred using the target's <code>name</code> and its
+          source-root-relative path. If the test is located outside a known
+          source root, Bazel will report an error if <code>test_class</code>
+          is unset.
         </p>
         <p>
           For JUnit3, the test class needs to either be a subclass of

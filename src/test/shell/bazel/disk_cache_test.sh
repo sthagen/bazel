@@ -32,7 +32,7 @@ function test_local_action_cache() {
   rm -rf $cache
   mkdir $cache
 
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   # No sandboxing, side effect is needed to detect action execution
   cat > BUILD <<EOF
 genrule(
@@ -40,7 +40,7 @@ genrule(
     cmd = "echo run > $execution_file && cat \$< >\$@",
     srcs = ["$input_file"],
     outs = ["foo.txt"],
-    tags = ["local"],
+    tags = ["no-sandbox"],
 )
 EOF
 

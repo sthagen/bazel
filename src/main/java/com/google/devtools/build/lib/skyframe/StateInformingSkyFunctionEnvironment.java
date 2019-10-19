@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.skyframe.SkyFunction;
@@ -23,6 +24,7 @@ import com.google.devtools.build.skyframe.ValueOrException2;
 import com.google.devtools.build.skyframe.ValueOrException3;
 import com.google.devtools.build.skyframe.ValueOrException4;
 import com.google.devtools.build.skyframe.ValueOrException5;
+import com.google.devtools.build.skyframe.Version;
 import java.util.Map;
 import javax.annotation.Nullable;
 
@@ -260,7 +262,17 @@ class StateInformingSkyFunctionEnvironment implements SkyFunction.Environment {
     return delegate.getTemporaryDirectDeps();
   }
 
+  @Override
+  public void injectVersionForNonHermeticFunction(Version version) {
+    delegate.injectVersionForNonHermeticFunction(version);
+  }
+
   interface Informee {
     void inform() throws InterruptedException;
+  }
+
+  @Override
+  public void dependOnFuture(ListenableFuture<?> future) {
+    delegate.dependOnFuture(future);
   }
 }

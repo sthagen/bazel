@@ -15,27 +15,31 @@
 package com.google.devtools.build.lib.exec;
 
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
-import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
+import com.google.devtools.build.lib.actions.RunningActionEvent;
 import com.google.devtools.build.lib.actions.SandboxedSpawnActionContext;
+import com.google.devtools.build.lib.actions.SchedulingActionEvent;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
 import com.google.devtools.build.lib.actions.Spawns;
+import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.exec.SpawnCache.CacheHandle;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
+import com.google.devtools.build.lib.profiler.Profiler;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
@@ -45,13 +49,21 @@ import java.time.Duration;
 import java.util.List;
 import java.util.SortedMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import javax.annotation.Nullable;
 
 /** Abstract common ancestor for spawn strategies implementing the common parts. */
 public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionContext {
+
+  /**
+   * Last unique identifier assigned to a spawn by this strategy.
+   *
+   * <p>These identifiers must be unique per strategy within the context of a Bazel server instance
+   * to avoid cross-contamination across actions in case we perform asynchronous deletions.
+   */
+  private static final AtomicInteger execCount = new AtomicInteger();
+
   private final SpawnInputExpander spawnInputExpander;
   private final SpawnRunner spawnRunner;
-  private final AtomicInteger execCount = new AtomicInteger();
 
   public AbstractSpawnStrategy(Path execRoot, SpawnRunner spawnRunner) {
     this.spawnInputExpander = new SpawnInputExpander(execRoot, false);
@@ -76,17 +88,21 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
   }
 
   @Override
+  public boolean canExec(Spawn spawn) {
+    return spawnRunner.canExec(spawn);
+  }
+
+  @Override
   public List<SpawnResult> exec(
       Spawn spawn,
       ActionExecutionContext actionExecutionContext,
-      AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles)
+      @Nullable StopConcurrentSpawns stopConcurrentSpawns)
       throws ExecException, InterruptedException {
-
     actionExecutionContext.maybeReportSubcommand(spawn);
 
     final Duration timeout = Spawns.getTimeout(spawn);
     SpawnExecutionContext context =
-        new SpawnExecutionContextImpl(spawn, actionExecutionContext, writeOutputFiles, timeout);
+        new SpawnExecutionContextImpl(spawn, actionExecutionContext, stopConcurrentSpawns, timeout);
     // TODO(ulfjack): Provide a way to disable the cache. We don't want the RemoteSpawnStrategy to
     // check the cache twice. Right now that can't happen because this is hidden behind an
     // experimental flag.
@@ -98,20 +114,18 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
     }
     SpawnResult spawnResult;
     ExecException ex = null;
-    try {
-      try (CacheHandle cacheHandle = cache.lookup(spawn, context)) {
-        if (cacheHandle.hasResult()) {
-          spawnResult = Preconditions.checkNotNull(cacheHandle.getResult());
-        } else {
-          // Actual execution.
-          spawnResult = spawnRunner.exec(spawn, context);
-          if (cacheHandle.willStore()) {
-            cacheHandle.store(spawnResult);
-          }
+    try (CacheHandle cacheHandle = cache.lookup(spawn, context)) {
+      if (cacheHandle.hasResult()) {
+        spawnResult = Preconditions.checkNotNull(cacheHandle.getResult());
+      } else {
+        // Actual execution.
+        spawnResult = spawnRunner.execAsync(spawn, context).get();
+        if (cacheHandle.willStore()) {
+          cacheHandle.store(spawnResult);
         }
       }
     } catch (IOException e) {
-      throw new EnvironmentalExecException("Unexpected IO error.", e);
+      throw new EnvironmentalExecException(e);
     } catch (SpawnExecException e) {
       ex = e;
       spawnResult = e.getSpawnResult();
@@ -124,7 +138,7 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
         spawnLogContext.logSpawn(
             spawn,
             actionExecutionContext.getMetadataProvider(),
-            context.getInputMapping(),
+            context.getInputMapping(true),
             context.getTimeout(),
             spawnResult);
       } catch (IOException e) {
@@ -142,13 +156,14 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
       String cwd = actionExecutionContext.getExecRoot().getPathString();
       String resultMessage = spawnResult.getFailureMessage();
       String message =
-          resultMessage != ""
+          !Strings.isNullOrEmpty(resultMessage)
               ? resultMessage
               : CommandFailureUtils.describeCommandFailure(
                   actionExecutionContext.getVerboseFailures(),
                   spawn.getArguments(),
                   spawn.getEnvironment(),
-                  cwd);
+                  cwd,
+                  spawn.getExecutionPlatform());
       throw new SpawnExecException(message, spawnResult, /*forciblyRunRemotely=*/false);
     }
     return ImmutableList.of(spawnResult);
@@ -157,7 +172,7 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
   private final class SpawnExecutionContextImpl implements SpawnExecutionContext {
     private final Spawn spawn;
     private final ActionExecutionContext actionExecutionContext;
-    private final AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles;
+    @Nullable private final StopConcurrentSpawns stopConcurrentSpawns;
     private final Duration timeout;
 
     private final int id = execCount.incrementAndGet();
@@ -168,11 +183,11 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
     public SpawnExecutionContextImpl(
         Spawn spawn,
         ActionExecutionContext actionExecutionContext,
-        AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles,
+        @Nullable StopConcurrentSpawns stopConcurrentSpawns,
         Duration timeout) {
       this.spawn = spawn;
       this.actionExecutionContext = actionExecutionContext;
-      this.writeOutputFiles = writeOutputFiles;
+      this.stopConcurrentSpawns = stopConcurrentSpawns;
       this.timeout = timeout;
     }
 
@@ -182,18 +197,22 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
     }
 
     @Override
-    public void prefetchInputs() throws IOException {
+    public void prefetchInputs() throws IOException, InterruptedException {
       if (Spawns.shouldPrefetchInputsForLocalExecution(spawn)) {
-        // TODO(philwo): Benchmark whether using an ExecutionService to do multiple operations in
-        // parallel speeds up prefetching of inputs.
-        // TODO(philwo): Do we have to expand middleman artifacts here?
-        actionExecutionContext.getActionInputPrefetcher().prefetchFiles(getInputMapping().values());
+        actionExecutionContext
+            .getActionInputPrefetcher()
+            .prefetchFiles(getInputMapping(true).values(), getMetadataProvider());
       }
     }
 
     @Override
     public MetadataProvider getMetadataProvider() {
       return actionExecutionContext.getMetadataProvider();
+    }
+
+    @Override
+    public MetadataHandler getMetadataInjector() {
+      return actionExecutionContext.getMetadataHandler();
     }
 
     @Override
@@ -208,17 +227,14 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
 
     @Override
     public void lockOutputFiles() throws InterruptedException {
-      Class<? extends SpawnActionContext> token = AbstractSpawnStrategy.this.getClass();
-      if (writeOutputFiles != null
-          && writeOutputFiles.get() != token
-          && !writeOutputFiles.compareAndSet(null, token)) {
-        throw new InterruptedException();
+      if (stopConcurrentSpawns != null) {
+        stopConcurrentSpawns.stop();
       }
     }
 
     @Override
     public boolean speculating() {
-      return writeOutputFiles != null;
+      return stopConcurrentSpawns != null;
     }
 
     @Override
@@ -232,13 +248,19 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
     }
 
     @Override
-    public SortedMap<PathFragment, ActionInput> getInputMapping() throws IOException {
+    public SortedMap<PathFragment, ActionInput> getInputMapping(
+        boolean expandTreeArtifactsInRunfiles) throws IOException {
       if (lazyInputMapping == null) {
-        lazyInputMapping =
-            spawnInputExpander.getInputMapping(
-                spawn,
-                actionExecutionContext.getArtifactExpander(),
-                actionExecutionContext.getMetadataProvider());
+        try (SilentCloseable c =
+            Profiler.instance().profile("AbstractSpawnStrategy.getInputMapping")) {
+          lazyInputMapping =
+              spawnInputExpander.getInputMapping(
+                  spawn,
+                  actionExecutionContext.getArtifactExpander(),
+                  actionExecutionContext.getPathResolver(),
+                  actionExecutionContext.getMetadataProvider(),
+                  expandTreeArtifactsInRunfiles);
+        }
       }
       return lazyInputMapping;
     }
@@ -250,15 +272,21 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
         return;
       }
 
+      // TODO(djasper): This should not happen as per the contract of ActionExecutionMetadata, but
+      // there are implementations that violate the contract. Remove when those are gone.
+      if (action.getPrimaryOutput() == null) {
+        return;
+      }
+
       // TODO(ulfjack): We should report more details to the UI.
-      EventBus eventBus = actionExecutionContext.getEventBus();
+      ExtendedEventHandler eventHandler = actionExecutionContext.getEventHandler();
       switch (state) {
         case EXECUTING:
         case CHECKING_CACHE:
-          eventBus.post(ActionStatusMessage.runningStrategy(action, name));
+          eventHandler.post(new RunningActionEvent(action, name));
           break;
         case SCHEDULING:
-          eventBus.post(ActionStatusMessage.schedulingStrategy(action));
+          eventHandler.post(new SchedulingActionEvent(action, name));
           break;
         default:
           break;

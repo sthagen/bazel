@@ -43,7 +43,16 @@ public class MetricsModule extends BlazeModule {
 
   @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
-    return ImmutableList.of(Options.class);
+    return "build".equals(command.name()) ? ImmutableList.of(Options.class) : ImmutableList.of();
+  }
+
+  /**
+   * Informs the Blaze runtime that this module will post the BuildMetricsEvent and the runtime does
+   * not need to supply its own such module.
+   */
+  @Override
+  public boolean postsBuildMetricsEvent() {
+    return true;
   }
 
   @Override

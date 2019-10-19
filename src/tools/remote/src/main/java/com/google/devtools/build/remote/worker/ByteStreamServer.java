@@ -26,7 +26,6 @@ import com.google.bytestream.ByteStreamProto.WriteRequest;
 import com.google.bytestream.ByteStreamProto.WriteResponse;
 import com.google.devtools.build.lib.remote.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.Chunker;
-import com.google.devtools.build.lib.remote.SimpleBlobStoreActionCache;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -34,7 +33,6 @@ import io.grpc.Status;
 import io.grpc.protobuf.StatusProto;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -43,11 +41,12 @@ import javax.annotation.Nullable;
 /** A basic implementation of a {@link ByteStreamImplBase} service. */
 final class ByteStreamServer extends ByteStreamImplBase {
   private static final Logger logger = Logger.getLogger(ByteStreamServer.class.getName());
-  private final SimpleBlobStoreActionCache cache;
+  private final OnDiskBlobStoreActionCache cache;
   private final Path workPath;
   private final DigestUtil digestUtil;
 
-  static @Nullable Digest parseDigestFromResourceName(String resourceName) {
+  @Nullable
+  static Digest parseDigestFromResourceName(String resourceName) {
     try {
       String[] tokens = resourceName.split("/");
       if (tokens.length < 2) {
@@ -61,7 +60,7 @@ final class ByteStreamServer extends ByteStreamImplBase {
     }
   }
 
-  public ByteStreamServer(SimpleBlobStoreActionCache cache, Path workPath, DigestUtil digestUtil) {
+  public ByteStreamServer(OnDiskBlobStoreActionCache cache, Path workPath, DigestUtil digestUtil) {
     this.cache = cache;
     this.workPath = workPath;
     this.digestUtil = digestUtil;
@@ -81,10 +80,7 @@ final class ByteStreamServer extends ByteStreamImplBase {
     try {
       // This still relies on the blob size to be small enough to fit in memory.
       // TODO(olaola): refactor to fix this if the need arises.
-      Chunker c =
-          Chunker.builder(digestUtil)
-              .setInput(digest, getFromFuture(cache.downloadBlob(digest)))
-              .build();
+      Chunker c = Chunker.builder().setInput(getFromFuture(cache.downloadBlob(digest))).build();
       while (c.hasNext()) {
         responseObserver.onNext(
             ReadResponse.newBuilder().setData(c.next().getData()).build());
@@ -138,21 +134,10 @@ final class ByteStreamServer extends ByteStreamImplBase {
         }
 
         if (offset == 0) {
-          try {
-            if (cache.containsKey(digest)) {
-              responseObserver.onNext(
-                  WriteResponse.newBuilder().setCommittedSize(digest.getSizeBytes()).build());
-              responseObserver.onCompleted();
-              closed = true;
-              return;
-            }
-          } catch (InterruptedException e) {
-            responseObserver.onError(StatusUtils.interruptedError(digest));
-            Thread.currentThread().interrupt();
-            closed = true;
-            return;
-          } catch (IOException e) {
-            responseObserver.onError(StatusUtils.internalError(e));
+          if (cache.containsKey(digest)) {
+            responseObserver.onNext(
+                WriteResponse.newBuilder().setCommittedSize(digest.getSizeBytes()).build());
+            responseObserver.onCompleted();
             closed = true;
             return;
           }
@@ -234,9 +219,7 @@ final class ByteStreamServer extends ByteStreamImplBase {
 
         try {
           Digest d = digestUtil.compute(temp);
-          try (InputStream in = temp.getInputStream()) {
-            cache.uploadStream(d, in);
-          }
+          getFromFuture(cache.uploadFile(d, temp));
           try {
             temp.delete();
           } catch (IOException e) {

@@ -14,8 +14,10 @@
 package com.google.devtools.build.lib.exec.util;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
@@ -34,11 +36,32 @@ public final class FakeOwner implements ActionExecutionMetadata {
   private final String mnemonic;
   private final String progressMessage;
   @Nullable private final String ownerLabel;
+  @Nullable private final PlatformInfo platform;
+  ImmutableMap<String, String> execProperties;
 
-  public FakeOwner(String mnemonic, String progressMessage, @Nullable String ownerLabel) {
+  public FakeOwner(
+      String mnemonic,
+      String progressMessage,
+      @Nullable String ownerLabel,
+      @Nullable PlatformInfo platform,
+      ImmutableMap<String, String> execProperties) {
     this.mnemonic = mnemonic;
     this.progressMessage = progressMessage;
     this.ownerLabel = ownerLabel;
+    this.platform = platform;
+    this.execProperties = execProperties;
+  }
+
+  public FakeOwner(
+      String mnemonic,
+      String progressMessage,
+      @Nullable String ownerLabel,
+      @Nullable PlatformInfo platform) {
+    this(mnemonic, progressMessage, ownerLabel, platform, ImmutableMap.of());
+  }
+
+  public FakeOwner(String mnemonic, String progressMessage, @Nullable String ownerLabel) {
+    this(mnemonic, progressMessage, ownerLabel, null);
   }
 
   public FakeOwner(String mnemonic, String progressMessage) {
@@ -56,7 +79,13 @@ public final class FakeOwner implements ActionExecutionMetadata {
         "configurationChecksum",
         /* configuration=*/ null,
         "additionalProgressInfo",
+        /* execProperties=*/ ImmutableMap.of(),
         null);
+  }
+
+  @Override
+  public boolean isShareable() {
+    return false;
   }
 
   @Override
@@ -160,9 +189,14 @@ public final class FakeOwner implements ActionExecutionMetadata {
     throw new UnsupportedOperationException();
   }
 
+  @Override
+  public ImmutableMap<String, String> getExecProperties() {
+    return execProperties;
+  }
+
   @Nullable
   @Override
   public PlatformInfo getExecutionPlatform() {
-    return null;
+    return platform;
   }
 }

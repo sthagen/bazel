@@ -14,15 +14,22 @@
 
 package com.google.devtools.build.lib.testutil;
 
+import static com.google.devtools.build.lib.rules.cpp.CppRuleClasses.CROSSTOOL_LABEL;
+
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.packages.BuilderFactoryForTesting;
-import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 
 /**
  * Various constants required by the tests.
  */
 public class TestConstants {
+
+  public static final String LOAD_PROTO_LIBRARY =
+      "load('@rules_proto//proto:defs.bzl', 'proto_library')";
+  public static final String LOAD_PROTO_LANG_TOOLCHAIN =
+      "load('@rules_proto//proto:defs.bzl', 'proto_lang_toolchain')";
+
   private TestConstants() {
   }
 
@@ -77,9 +84,13 @@ public class TestConstants {
   public static final String TEST_RULE_CLASS_PROVIDER =
       "com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider";
   public static final String TEST_RULE_MODULE =
-        "com.google.devtools.build.lib.bazel.rules.BazelRulesModule";
+      "com.google.devtools.build.lib.bazel.rules.BazelRulesModule";
+  public static final String TEST_STRATEGY_MODULE =
+      "com.google.devtools.build.lib.bazel.rules.BazelStrategyModule";
   public static final String TEST_REAL_UNIX_FILE_SYSTEM =
       "com.google.devtools.build.lib.unix.UnixFileSystem";
+  public static final String TEST_WORKSPACE_STATUS_MODULE =
+      "com.google.devtools.build.lib.bazel.BazelWorkspaceStatusModule";
 
   public static void processSkyframeExecutorForTesting(SkyframeExecutor skyframeExecutor) {}
 
@@ -110,11 +121,39 @@ public class TestConstants {
   public static final ImmutableList<String> OSX_CROSSTOOL_FLAGS =
       ImmutableList.of();
 
-  public static final InvocationPolicy TEST_INVOCATION_POLICY =
-      InvocationPolicy.getDefaultInstance();
+  /**
+   * Flags that must be set for Bazel to work properly, if the default values are unusable for some
+   * reason.
+   */
+  public static final ImmutableList<String> PRODUCT_SPECIFIC_FLAGS =
+      ImmutableList.of(
+          "--target_platform_fallback=@bazel_tools//platforms:default_target",
+          "--platforms=@bazel_tools//platforms:default_target",
+          "--host_platform=@bazel_tools//platforms:default_host",
+          // TODO(#7903): Remove once our own tests are migrated.
+          "--incompatible_py3_is_default=false",
+          "--incompatible_py2_outputs_are_suffixed=false",
+          // TODO(#7899): Remove once we flip the flag default.
+          "--incompatible_use_python_toolchains=true",
+          // TODO(#7849): Remove after flag flip.
+          "--incompatible_use_toolchain_resolution_for_java_rules");
 
   public static final BuilderFactoryForTesting PACKAGE_FACTORY_BUILDER_FACTORY_FOR_TESTING =
       PackageFactoryBuilderFactoryForBazelUnitTests.INSTANCE;
+
+  /** Partial query to filter out implicit dependencies of C/C++ rules. */
+  public static final String CC_DEPENDENCY_CORRECTION =
+      " - deps(" + TOOLS_REPOSITORY + CROSSTOOL_LABEL + ")";
+
+  public static final String PLATFORM_PACKAGE_ROOT = "@bazel_tools//platforms";
+  public static final String CONSTRAINTS_PACKAGE_ROOT = "@platforms//";
+
+  public static final String PLATFORMS_PATH = "/bazel_tools_workspace/platforms";
+  public static final String CONSTRAINTS_PATH = "/platforms";
+  public static final String LOCAL_CONFIG_PLATFORM_PATH = "/local_config_platform_workspace";
+
+  public static final String PLATFORM_LABEL =
+      PLATFORM_PACKAGE_ROOT + ":default_host + " + PLATFORM_PACKAGE_ROOT + ":default_target";
 
   /** A choice of test execution mode, only varies internally. */
   public enum InternalTestExecutionMode {

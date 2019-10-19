@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library", "java_test")
+
 package(
     default_testonly = 1,
     default_visibility = ["//src:__subpackages__"],
@@ -22,9 +24,9 @@ java_test(
     resources = [
         "//tools/build_defs/cc:action_names.bzl",
         "//tools/cpp:cc_toolchain_config_lib.bzl",
-        "//tools/cpp:crosstool_utils",
         "//tools/cpp:lib_cc_configure",
     ],
+    shard_count = 5,
     tags = ["rules"],
     test_class = "com.google.devtools.build.lib.AllTests",
     deps = [
@@ -35,10 +37,13 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib:core-rules",
         "//src/main/java/com/google/devtools/build/lib:core-workspace-rules",
+        "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:io",
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
+        "//src/main/java/com/google/devtools/build/lib:syntax",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/actions:localhost_capacity",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
@@ -104,6 +109,7 @@ java_library(
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
         "//src/test/java/com/google/devtools/build/lib:packages_testutil",
+        "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",
     ],

@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.analysis.util.ActionTester;
 import com.google.devtools.build.lib.analysis.util.ActionTester.ActionCombinationFactory;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
 import com.google.devtools.build.lib.util.io.FileOutErr;
@@ -52,7 +53,7 @@ public class LtoBackendActionTest extends BuildViewTestCase {
   private Artifact imports1Artifact;
   private Artifact imports2Artifact;
   private Artifact destinationArtifact;
-  private Map<PathFragment, Artifact> allBitcodeFiles;
+  private BitcodeFiles allBitcodeFiles;
   private AnalysisTestUtil.CollectingAnalysisEnvironment collectingAnalysisEnvironment;
   private Executor executor;
   private ActionExecutionContext context;
@@ -70,9 +71,12 @@ public class LtoBackendActionTest extends BuildViewTestCase {
     imports1Artifact = getSourceArtifact("bitcode1.imports");
     imports2Artifact = getSourceArtifact("bitcode2.imports");
     destinationArtifact = getBinArtifactWithNoOwner("output");
-    allBitcodeFiles = new HashMap<>();
-    allBitcodeFiles.put(bitcode1Artifact.getExecPath(), bitcode1Artifact);
-    allBitcodeFiles.put(bitcode2Artifact.getExecPath(), bitcode2Artifact);
+    allBitcodeFiles =
+        new BitcodeFiles(
+            ImmutableMap.<PathFragment, Artifact>builder()
+                .put(bitcode1Artifact.getExecPath(), bitcode1Artifact)
+                .put(bitcode2Artifact.getExecPath(), bitcode2Artifact)
+                .build());
   }
 
   @Before
@@ -82,14 +86,15 @@ public class LtoBackendActionTest extends BuildViewTestCase {
     context =
         new ActionExecutionContext(
             executor,
-            null,
+            /*actionInputFileCache=*/ null,
             ActionInputPrefetcher.NONE,
             actionKeyContext,
-            null,
+            /*metadataHandler=*/ null,
             new FileOutErr(),
-            ImmutableMap.<String, String>of(),
-            ImmutableMap.of(),
-            null,
+            new StoredEventHandler(),
+            /*clientEnv=*/ ImmutableMap.of(),
+            /*topLevelFilesets=*/ ImmutableMap.of(),
+            /*artifactExpander=*/ null,
             /*actionFileSystem=*/ null,
             /*skyframeDepsResult=*/ null);
   }
@@ -104,7 +109,7 @@ public class LtoBackendActionTest extends BuildViewTestCase {
             .addOutput(destinationArtifact)
             .setExecutable(scratch.file("/bin/clang").asFragment())
             .setProgressMessage("Test")
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, collectingAnalysisEnvironment, targetConfig);
+            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
     collectingAnalysisEnvironment.registerAction(actions);
     LtoBackendAction action = (LtoBackendAction) actions[0];
     assertThat(action.getOwner().getLabel())
@@ -133,7 +138,7 @@ public class LtoBackendActionTest extends BuildViewTestCase {
             .addOutput(destinationArtifact)
             .setExecutable(scratch.file("/bin/clang").asFragment())
             .setProgressMessage("Test")
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, collectingAnalysisEnvironment, targetConfig);
+            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
     collectingAnalysisEnvironment.registerAction(actions);
     LtoBackendAction action = (LtoBackendAction) actions[0];
     assertThat(action.getOwner().getLabel())
@@ -185,19 +190,29 @@ public class LtoBackendActionTest extends BuildViewTestCase {
             builder.setExecutable(executable);
 
             if (attributesToFlip.contains(KeyAttributes.IMPORTS_INFO)) {
-              builder.addImportsInfo(new HashMap<PathFragment, Artifact>(), artifactAimports);
+              builder.addImportsInfo(new BitcodeFiles(ImmutableMap.of()), artifactAimports);
             } else {
-              builder.addImportsInfo(new HashMap<PathFragment, Artifact>(), artifactBimports);
+              builder.addImportsInfo(new BitcodeFiles(ImmutableMap.of()), artifactBimports);
             }
 
             builder.setMnemonic(attributesToFlip.contains(KeyAttributes.MNEMONIC) ? "a" : "b");
 
             if (attributesToFlip.contains(KeyAttributes.RUNFILES_SUPPLIER)) {
               builder.addRunfilesSupplier(
-                  new RunfilesSupplierImpl(PathFragment.create("a"), Runfiles.EMPTY, artifactA));
+                  new RunfilesSupplierImpl(
+                      PathFragment.create("a"),
+                      Runfiles.EMPTY,
+                      artifactA,
+                      /* buildRunfileLinks= */ false,
+                      /* runfileLinksEnabled= */ false));
             } else {
               builder.addRunfilesSupplier(
-                  new RunfilesSupplierImpl(PathFragment.create("a"), Runfiles.EMPTY, artifactB));
+                  new RunfilesSupplierImpl(
+                      PathFragment.create("a"),
+                      Runfiles.EMPTY,
+                      artifactB,
+                      /* buildRunfileLinks= */ false,
+                      /* runfileLinksEnabled= */ false));
             }
 
             if (attributesToFlip.contains(KeyAttributes.INPUT)) {
@@ -215,9 +230,7 @@ public class LtoBackendActionTest extends BuildViewTestCase {
               builder.setInheritedEnvironment(Arrays.asList("baz"));
             }
 
-            Action[] actions =
-                builder.build(
-                    ActionsTestUtil.NULL_ACTION_OWNER, collectingAnalysisEnvironment, targetConfig);
+            Action[] actions = builder.build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
             collectingAnalysisEnvironment.registerAction(actions);
             return actions[0];
           }

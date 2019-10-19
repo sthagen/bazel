@@ -17,7 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.CompileOnlyTestCase;
-
+import com.google.devtools.build.lib.packages.util.Crosstool.CcToolchainConfig;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -30,6 +30,10 @@ public class CcCompileOnlyTest extends CompileOnlyTestCase {
 
   @Test
   public void testCcCompileOnly() throws Exception {
+    getAnalysisMock()
+        .ccSupport()
+        .setupCcToolchainConfig(
+            mockToolsConfig, CcToolchainConfig.builder().withFeatures(CppRuleClasses.SUPPORTS_PIC));
     useConfiguration("--cpu=k8");
     scratch.file("package/BUILD",
         "cc_binary(name='foo', srcs=['foo.cc', ':bar'], deps = [':foolib'])",

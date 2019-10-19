@@ -23,24 +23,24 @@ import com.google.common.eventbus.Subscribe;
 import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
+import com.google.devtools.build.lib.analysis.platform.PlatformUtils;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.exec.TreeDeleter;
 import com.google.devtools.build.lib.exec.local.LocalEnvProvider;
-import com.google.devtools.build.lib.exec.local.PosixLocalEnvProvider;
+import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.runtime.CommandCompleteEvent;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.ProcessWrapperUtil;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxOutputs;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.ProcessUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.protobuf.TextFormat;
-import com.google.protobuf.TextFormat.ParseException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -49,9 +49,11 @@ import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -60,7 +62,7 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   // The name of the container image entry in the Platform proto
   // (see third_party/googleapis/devtools/remoteexecution/*/remote_execution.proto and
-  // experimental_remote_platform_override in
+  // remote_default_exec_properties in
   // src/main/java/com/google/devtools/build/lib/remote/RemoteOptions.java)
   private static final String CONTAINER_IMAGE_ENTRY_NAME = "container-image";
   private static final String DOCKER_IMAGE_PREFIX = "docker://";
@@ -145,9 +147,10 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   private final String commandId;
   private final Reporter reporter;
   private final boolean useCustomizedImages;
+  private final TreeDeleter treeDeleter;
   private final int uid;
   private final int gid;
-  private final List<UUID> containersToCleanup;
+  private final Set<UUID> containersToCleanup;
   private final CommandEnvironment cmdEnv;
 
   /**
@@ -159,6 +162,7 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
    * @param defaultImage the Docker image to use if the platform doesn't specify one
    * @param timeoutKillDelay an additional grace period before killing timing out commands
    * @param useCustomizedImages whether to use customized images for execution
+   * @param treeDeleter scheduler for tree deletions
    */
   DockerSandboxedSpawnRunner(
       CommandEnvironment cmdEnv,
@@ -166,7 +170,8 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       Path sandboxBase,
       String defaultImage,
       Duration timeoutKillDelay,
-      boolean useCustomizedImages) {
+      boolean useCustomizedImages,
+      TreeDeleter treeDeleter) {
     super(cmdEnv);
     this.execRoot = cmdEnv.getExecRoot();
     this.allowNetwork = SandboxHelpers.shouldAllowNetwork(cmdEnv.getOptions());
@@ -174,11 +179,12 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     this.processWrapper = ProcessWrapperUtil.getProcessWrapper(cmdEnv);
     this.sandboxBase = sandboxBase;
     this.defaultImage = defaultImage;
-    this.localEnvProvider = new PosixLocalEnvProvider(cmdEnv.getClientEnv());
+    this.localEnvProvider = LocalEnvProvider.forCurrentOs(cmdEnv.getClientEnv());
     this.timeoutKillDelay = timeoutKillDelay;
     this.commandId = cmdEnv.getCommandId().toString();
     this.reporter = cmdEnv.getReporter();
     this.useCustomizedImages = useCustomizedImages;
+    this.treeDeleter = treeDeleter;
     this.cmdEnv = cmdEnv;
     if (OS.getCurrent() == OS.LINUX) {
       this.uid = ProcessUtils.getuid();
@@ -187,14 +193,14 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       this.uid = -1;
       this.gid = -1;
     }
-    this.containersToCleanup = Collections.synchronizedList(new ArrayList<>());
+    this.containersToCleanup = Collections.synchronizedSet(new HashSet<>());
 
     cmdEnv.getEventBus().register(this);
   }
 
   @Override
-  protected SpawnResult actuallyExec(Spawn spawn, SpawnExecutionContext context)
-      throws IOException, ExecException, InterruptedException {
+  protected SandboxedSpawn prepareSpawn(Spawn spawn, SpawnExecutionContext context)
+      throws IOException, ExecException {
     // Each invocation of "exec" gets its own sandbox base, execroot and temporary directory.
     Path sandboxPath =
         sandboxBase.getRelative(getName()).getRelative(Integer.toString(context.getId()));
@@ -208,9 +214,9 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     sandboxExecRoot.createDirectory();
 
     Map<String, String> environment =
-        localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), execRoot, "/tmp");
+        localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), binTools, "/tmp");
 
-    ImmutableSet<PathFragment> outputs = SandboxHelpers.getOutputFiles(spawn);
+    SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
     Duration timeout = context.getTimeout();
 
     UUID uuid = UUID.randomUUID();
@@ -237,6 +243,7 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
         .setImageName(customizedImageName)
         .setCommandArguments(spawn.getArguments())
         .setSandboxExecRoot(sandboxExecRoot)
+        .setAdditionalMounts(getSandboxOptions().sandboxAdditionalMounts)
         .setPrivileged(getSandboxOptions().dockerPrivileged)
         .setEnvironmentVariables(environment)
         .setKillDelay(timeoutKillDelay)
@@ -257,27 +264,28 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       cmdLine.setTimeout(timeout);
     }
 
-    SandboxedSpawn sandbox =
-        new CopyingSandboxedSpawn(
-            sandboxPath,
-            sandboxExecRoot,
-            cmdLine.build(),
-            cmdEnv.getClientEnv(),
-            SandboxHelpers.processInputFiles(spawn, context, execRoot),
-            outputs,
-            ImmutableSet.of());
-
-    try {
-      return runSpawn(spawn, sandbox, context, execRoot, timeout, null);
-    } catch (InterruptedException e) {
-      // If we were interrupted, it is possible that "docker run" gets killed in exactly the moment
-      // between the create and the start call, leaving behind a container that is created but never
-      // ran. This means that Docker won't automatically clean it up (as --rm only affects the start
-      // phase and has no effect on the create phase of "docker run").
-      // We add the container UUID to a list and clean them up after the execution is over.
-      containersToCleanup.add(uuid);
-      throw e;
-    }
+    // If we were interrupted, it is possible that "docker run" gets killed in exactly the moment
+    // between the create and the start call, leaving behind a container that is created but never
+    // ran. This means that Docker won't automatically clean it up (as --rm only affects the start
+    // phase and has no effect on the create phase of "docker run").
+    // We register the container UUID for cleanup, but remove the UUID if the process ran
+    // successfully.
+    containersToCleanup.add(uuid);
+    return new CopyingSandboxedSpawn(
+        sandboxPath,
+        sandboxExecRoot,
+        cmdLine.build(),
+        cmdEnv.getClientEnv(),
+        SandboxHelpers.processInputFiles(
+            spawn,
+            context,
+            execRoot,
+            getSandboxOptions().symlinkedSandboxExpandsTreeArtifactsInRunfilesTree),
+        outputs,
+        ImmutableSet.of(),
+        treeDeleter,
+        /*statisticsPath=*/ null,
+        () -> containersToCleanup.remove(uuid));
   }
 
   private String getOrCreateCustomizedImage(String baseImage) {
@@ -358,28 +366,15 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     try {
       cmd.executeAsync(stdIn, stdOut, stdErr, Command.KILL_SUBPROCESS_ON_INTERRUPT).get();
     } catch (CommandException e) {
-      throw new UserExecException("Running command " + cmd.toDebugString() + " failed: " + stdErr);
+      throw new UserExecException(
+          "Running command " + cmd.toDebugString() + " failed: " + stdErr, e);
     }
     return stdOut.toString().trim();
   }
 
-  private Optional<String> dockerContainerFromSpawn(Spawn spawn) {
-    Platform platform = null;
-    // TODO(philwo) Figure out if this is the right mechanism to specify a Docker image per action.
-    String platformDescription = spawn.getExecutionPlatform().remoteExecutionProperties();
-    if (platformDescription != null) {
-      try {
-        Platform.Builder platformBuilder = Platform.newBuilder();
-        TextFormat.getParser().merge(platformDescription, platformBuilder);
-        platform = platformBuilder.build();
-      } catch (ParseException e) {
-        throw new IllegalArgumentException(
-            String.format(
-                "Failed to parse remote_execution_properties from platform %s",
-                spawn.getExecutionPlatform().label()),
-            e);
-      }
-    }
+  private Optional<String> dockerContainerFromSpawn(Spawn spawn) throws ExecException {
+    Platform platform =
+        PlatformUtils.getPlatformProto(spawn, cmdEnv.getOptions().getOptions(RemoteOptions.class));
 
     if (platform != null) {
       try {
@@ -395,7 +390,8 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
         throw new IllegalArgumentException(
             String.format(
                 "Platform %s contained multiple container-image entries, but only one is allowed.",
-                spawn.getExecutionPlatform().label()));
+                spawn.getExecutionPlatform().label()),
+            e);
       }
     } else {
       return Optional.empty();

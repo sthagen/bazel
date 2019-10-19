@@ -23,10 +23,8 @@ import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.longrunning.Operation;
-import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.rpc.Status;
 import io.grpc.CallCredentials;
-import io.grpc.ManagedChannel;
 import io.grpc.Status.Code;
 import io.grpc.StatusRuntimeException;
 import java.io.IOException;
@@ -39,14 +37,16 @@ import javax.annotation.Nullable;
 @ThreadSafe
 class GrpcRemoteExecutor {
 
-  private final ManagedChannel channel;
+  private final ReferenceCountedChannel channel;
   private final CallCredentials callCredentials;
   private final RemoteRetrier retrier;
 
   private final AtomicBoolean closed = new AtomicBoolean();
 
   public GrpcRemoteExecutor(
-      ManagedChannel channel, @Nullable CallCredentials callCredentials, RemoteRetrier retrier) {
+      ReferenceCountedChannel channel,
+      @Nullable CallCredentials callCredentials,
+      RemoteRetrier retrier) {
     this.channel = channel;
     this.callCredentials = callCredentials;
     this.retrier = retrier;
@@ -65,29 +65,20 @@ class GrpcRemoteExecutor {
     throw new ExecutionStatusException(statusProto, resp);
   }
 
-  private @Nullable ExecuteResponse getOperationResponse(Operation op) throws IOException {
+  @Nullable
+  private ExecuteResponse getOperationResponse(Operation op) throws IOException {
     if (op.getResultCase() == Operation.ResultCase.ERROR) {
       handleStatus(op.getError(), null);
     }
     if (op.getDone()) {
       Preconditions.checkState(op.getResultCase() != Operation.ResultCase.RESULT_NOT_SET);
-      try {
-        ExecuteResponse resp = op.getResponse().unpack(ExecuteResponse.class);
-        if (resp.hasStatus()) {
-          handleStatus(resp.getStatus(), resp);
-        }
-        Preconditions.checkState(
-            resp.hasResult(), "Unexpected result of remote execution: no result");
-        if (resp.getResult().getExitCode() == 0) {
-          Preconditions.checkState(
-              resp.getResult().getOutputFilesCount() + resp.getResult().getOutputDirectoriesCount()
-                  > 0,
-              "Unexpected result of remote execution: no output files.");
-        }
-        return resp;
-      } catch (InvalidProtocolBufferException e) {
-        throw new IOException(e);
+      ExecuteResponse resp = op.getResponse().unpack(ExecuteResponse.class);
+      if (resp.hasStatus()) {
+        handleStatus(resp.getStatus(), resp);
       }
+      Preconditions.checkState(
+          resp.hasResult(), "Unexpected result of remote execution: no result");
+      return resp;
     }
     return null;
   }
@@ -135,58 +126,73 @@ class GrpcRemoteExecutor {
         new AtomicReference<>(Operation.getDefaultInstance());
     final AtomicBoolean waitExecution =
         new AtomicBoolean(false); // Whether we should call WaitExecution.
-    return retrier.execute(
-        () -> {
-          final Iterator<Operation> replies;
-          if (waitExecution.get()) {
-            WaitExecutionRequest wr =
-                WaitExecutionRequest.newBuilder().setName(operation.get().getName()).build();
-            replies = execBlockingStub().waitExecution(wr);
-          } else {
-            replies = execBlockingStub().execute(request);
-          }
-          try {
-            while (replies.hasNext()) {
-              Operation o = replies.next();
-              operation.set(o);
-              waitExecution.set(!operation.get().getDone());
-              ExecuteResponse r = getOperationResponse(o);
-              if (r != null) {
-                return r;
+    try {
+      return retrier.execute(
+          () -> {
+            // Retry calls to Execute()/WaitExecute() "infinitely" if the server terminates one of
+            // them status OK and an Operation that does not have done=True set. This is legal
+            // according to the remote execution protocol i.e. if the execution takes longer
+            // than a connection timeout. This is not an error condition and is thus handled
+            // outside of the retrier.
+            while (true) {
+              final Iterator<Operation> replies;
+              if (waitExecution.get()) {
+                WaitExecutionRequest wr =
+                    WaitExecutionRequest.newBuilder().setName(operation.get().getName()).build();
+                replies = execBlockingStub().waitExecution(wr);
+              } else {
+                replies = execBlockingStub().execute(request);
+              }
+              try {
+                while (replies.hasNext()) {
+                  Operation o = replies.next();
+                  operation.set(o);
+                  waitExecution.set(!operation.get().getDone());
+                  ExecuteResponse r = getOperationResponse(o);
+                  if (r != null) {
+                    return r;
+                  }
+                }
+                // The operation completed successfully but without a result.
+                if (!waitExecution.get()) {
+                  throw new IOException(
+                      String.format(
+                          "Remote server error: execution request for %s terminated with no"
+                              + " result.",
+                          operation.get().getName()));
+                }
+              } catch (StatusRuntimeException e) {
+                if (e.getStatus().getCode() == Code.NOT_FOUND) {
+                  // Operation was lost on the server. Retry Execute.
+                  waitExecution.set(false);
+                }
+                throw e;
+              } finally {
+                // The blocking streaming call closes correctly only when trailers and a Status
+                // are received from the server so that onClose() is called on this call's
+                // CallListener. Under normal circumstances (no cancel/errors), these are
+                // guaranteed to be sent by the server only if replies.hasNext() has been called
+                // after all replies from the stream have been consumed.
+                try {
+                  while (replies.hasNext()) {
+                    replies.next();
+                  }
+                } catch (StatusRuntimeException e) {
+                  // Cleanup: ignore exceptions, because the meaningful errors have already been
+                  // propagated.
+                }
               }
             }
-          } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() == Code.NOT_FOUND) {
-              // Operation was lost on the server. Retry Execute.
-              waitExecution.set(false);
-            }
-            throw e;
-          } finally {
-            // The blocking streaming call closes correctly only when trailers and a Status
-            // are received from the server so that onClose() is called on this call's
-            // CallListener. Under normal circumstances (no cancel/errors), these are
-            // guaranteed to be sent by the server only if replies.hasNext() has been called
-            // after all replies from the stream have been consumed.
-            try {
-              while (replies.hasNext()) {
-                replies.next();
-              }
-            } catch (StatusRuntimeException e) {
-              // Cleanup: ignore exceptions, because the meaningful errors have already been
-              // propagated.
-            }
-          }
-          throw new IOException(
-              String.format(
-                  "Remote server error: execution request for %s terminated with no result.",
-                  operation.get().getName()));
-        });
+          });
+    } catch (StatusRuntimeException e) {
+      throw new IOException(e);
+    }
   }
 
   public void close() {
     if (closed.getAndSet(true)) {
       return;
     }
-    channel.shutdown();
+    channel.release();
   }
 }

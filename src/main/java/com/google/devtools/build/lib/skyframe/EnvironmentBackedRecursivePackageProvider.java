@@ -21,6 +21,8 @@ import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.InconsistentFilesystemException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.concurrent.ParallelVisitor.UnusedException;
+import com.google.devtools.build.lib.concurrent.ThreadSafeBatchCallback;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
@@ -36,9 +38,9 @@ import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A {@link RecursivePackageProvider} backed by an {@link Environment}. Its methods may throw {@link
@@ -52,20 +54,39 @@ public final class EnvironmentBackedRecursivePackageProvider
     extends AbstractRecursivePackageProvider {
 
   private final Environment env;
+  private final AtomicBoolean encounteredPackageErrors = new AtomicBoolean(false);
 
   EnvironmentBackedRecursivePackageProvider(Environment env) {
     this.env = env;
+  }
+
+  /**
+   * Whether any of the calls to {@link #getPackage}, {@link #getTarget}, {@link #bulkGetPackages},
+   * or {@link RecursivePackageProvider#streamPackagesUnderDirectory} encountered a package in
+   * error.
+   *
+   * <p>The client of {@link EnvironmentBackedRecursivePackageProvider} may want to check this. See
+   * comments in {@link #getPackage} for details.
+   */
+  boolean encounteredPackageErrors() {
+    return encounteredPackageErrors.get();
   }
 
   @Override
   public Package getPackage(ExtendedEventHandler eventHandler, PackageIdentifier packageName)
       throws NoSuchPackageException, MissingDepException, InterruptedException {
     SkyKey pkgKey = PackageValue.key(packageName);
-    PackageValue pkgValue =
-        (PackageValue) env.getValueOrThrow(pkgKey, NoSuchPackageException.class);
-    if (pkgValue == null) {
-      throw new MissingDepException();
+    PackageValue pkgValue;
+    try {
+      pkgValue = (PackageValue) env.getValueOrThrow(pkgKey, NoSuchPackageException.class);
+      if (pkgValue == null) {
+        throw new MissingDepException();
+      }
+    } catch (NoSuchPackageException e) {
+      encounteredPackageErrors.set(true);
+      throw e;
     }
+
     Package pkg = pkgValue.getPackage();
     if (pkg.containsErrors()) {
       // If this is a nokeep_going build, we must shut the build down by throwing an exception. To
@@ -77,7 +98,11 @@ public final class EnvironmentBackedRecursivePackageProvider
         Preconditions.checkState(env.valuesMissing(), "Should have thrown for %s", packageName);
         throw new MissingDepException();
       } catch (BuildFileContainsErrorsException e) {
-        // Expected.
+        // If this is a keep_going build, then the user of this RecursivePackageProvider has two
+        // options for handling the "package in error" case. The user must either inspect the
+        // package returned by this method, or else determine whether any errors have been seen via
+        // the "encounteredPackageErrors" method.
+        encounteredPackageErrors.set(true);
       }
     }
     return pkgValue.getPackage();
@@ -99,20 +124,25 @@ public final class EnvironmentBackedRecursivePackageProvider
     SkyKey packageLookupKey = PackageLookupValue.key(packageId);
     try {
       PackageLookupValue packageLookupValue =
-          (PackageLookupValue) env.getValueOrThrow(packageLookupKey, NoSuchPackageException.class,
-              InconsistentFilesystemException.class);
+          (PackageLookupValue)
+              env.getValueOrThrow(
+                  packageLookupKey,
+                  NoSuchPackageException.class,
+                  InconsistentFilesystemException.class);
       if (packageLookupValue == null) {
         throw new MissingDepException();
       }
       return packageLookupValue.packageExists();
     } catch (NoSuchPackageException | InconsistentFilesystemException e) {
       env.getListener().handle(Event.error(e.getMessage()));
+      encounteredPackageErrors.set(true);
       return false;
     }
   }
 
   @Override
-  public Iterable<PathFragment> getPackagesUnderDirectory(
+  public void streamPackagesUnderDirectory(
+      ThreadSafeBatchCallback<PackageIdentifier, UnusedException> results,
       ExtendedEventHandler eventHandler,
       RepositoryName repository,
       PathFragment directory,
@@ -136,21 +166,20 @@ public final class EnvironmentBackedRecursivePackageProvider
 
       if (!repositoryValue.repositoryExists()) {
         eventHandler.handle(Event.error(String.format("No such repository '%s'", repository)));
-        return ImmutableList.of();
+        return;
       }
       roots.add(Root.fromPath(repositoryValue.getPath()));
     }
 
     if (blacklistedSubdirectories.contains(directory)) {
-      return ImmutableList.of();
+      return;
     }
-    ImmutableSet filteredBlacklistedSubdirectories =
+    ImmutableSet<PathFragment> filteredBlacklistedSubdirectories =
         ImmutableSet.copyOf(
             Iterables.filter(
                 blacklistedSubdirectories,
                 path -> !path.equals(directory) && path.startsWith(directory)));
 
-    LinkedHashSet<PathFragment> packageNames = new LinkedHashSet<>();
     for (Root root : roots) {
       RecursivePkgValue lookup =
           (RecursivePkgValue)
@@ -169,19 +198,19 @@ public final class EnvironmentBackedRecursivePackageProvider
         // the exception types it can accept.
         throw new MissingDepException();
       }
+      if (lookup.hasErrors()) {
+        encounteredPackageErrors.set(true);
+      }
 
       for (String packageName : lookup.getPackages()) {
         // TODO(bazel-team): Make RecursivePkgValue return NestedSet<PathFragment> so this transform
         // is unnecessary.
         PathFragment packageNamePathFragment = PathFragment.create(packageName);
-        if (!Iterables.any(
-            excludedSubdirectories,
-            excludedSubdirectory -> packageNamePathFragment.startsWith(excludedSubdirectory))) {
-          packageNames.add(packageNamePathFragment);
+        if (!Iterables.any(excludedSubdirectories, packageNamePathFragment::startsWith)) {
+          results.process(
+              ImmutableList.of(PackageIdentifier.create(repository, packageNamePathFragment)));
         }
       }
     }
-
-    return packageNames;
   }
 }

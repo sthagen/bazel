@@ -16,11 +16,11 @@ package com.google.devtools.build.lib.packages.util;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
-import com.google.devtools.build.lib.packages.AttributeContainer;
 import com.google.devtools.build.lib.packages.CachingPackageLocator;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.packages.GlobCache;
@@ -29,16 +29,17 @@ import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.LegacyGlobber;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
-import com.google.devtools.build.lib.packages.SkylarkSemanticsOptions;
-import com.google.devtools.build.lib.syntax.BuildFileAST;
-import com.google.devtools.build.lib.syntax.Environment.Extension;
-import com.google.devtools.build.lib.syntax.ParserInputSource;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
+import com.google.devtools.build.lib.syntax.ParserInput;
+import com.google.devtools.build.lib.syntax.StarlarkFile;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkThread.Extension;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.common.options.OptionsParser;
 import java.io.IOException;
 
@@ -58,7 +59,6 @@ public class PackageFactoryApparatus {
     factory =
         new PackageFactory(
             ruleClassProvider,
-            AttributeContainer::new,
             ImmutableList.copyOf(environmentExtensions),
             "test",
             Package.Builder.DefaultHelper.INSTANCE);
@@ -78,11 +78,11 @@ public class PackageFactoryApparatus {
   }
 
   /** Parses and evaluates {@code buildFile} and returns the resulting {@link Package} instance. */
-  public Package createPackage(String packageName, Path buildFile) throws Exception {
+  public Package createPackage(String packageName, RootedPath buildFile) throws Exception {
     return createPackage(PackageIdentifier.createInMainRepo(packageName), buildFile, eventHandler);
   }
 
-  public Package createPackage(String packageName, Path buildFile, String skylarkOption)
+  public Package createPackage(String packageName, RootedPath buildFile, String skylarkOption)
       throws Exception {
     return createPackage(
         PackageIdentifier.createInMainRepo(packageName), buildFile, eventHandler, skylarkOption);
@@ -94,24 +94,30 @@ public class PackageFactoryApparatus {
    */
   public Package createPackage(
       PackageIdentifier packageIdentifier,
-      Path buildFile,
+      RootedPath buildFile,
       ExtendedEventHandler reporter,
       String skylarkOption)
       throws Exception {
 
-    OptionsParser parser = OptionsParser.newOptionsParser(SkylarkSemanticsOptions.class);
+    OptionsParser parser =
+        OptionsParser.builder().optionsClasses(StarlarkSemanticsOptions.class).build();
     parser.parse(
         skylarkOption == null
             ? ImmutableList.<String>of()
             : ImmutableList.<String>of(skylarkOption));
-    SkylarkSemantics semantics =
-        parser.getOptions(SkylarkSemanticsOptions.class).toSkylarkSemantics();
+    StarlarkSemantics semantics =
+        parser.getOptions(StarlarkSemanticsOptions.class).toSkylarkSemantics();
 
     try {
       Package externalPkg =
           factory
               .newExternalPackageBuilder(
-                  buildFile.getRelative(Label.WORKSPACE_FILE_NAME), "TESTING")
+                  RootedPath.toRootedPath(
+                      buildFile.getRoot(),
+                      buildFile
+                          .getRootRelativePath()
+                          .getRelative(LabelConstants.WORKSPACE_FILE_NAME)),
+                  "TESTING")
               .build();
       Package pkg =
           factory.createPackageForTesting(
@@ -123,28 +129,28 @@ public class PackageFactoryApparatus {
   }
 
   public Package createPackage(
-      PackageIdentifier packageIdentifier, Path buildFile, ExtendedEventHandler reporter)
+      PackageIdentifier packageIdentifier, RootedPath buildFile, ExtendedEventHandler reporter)
       throws Exception {
     return createPackage(packageIdentifier, buildFile, reporter, null);
   }
 
-  /**
-   * Parses the {@code buildFile} into a {@link BuildFileAST}.
-   */
-  public BuildFileAST ast(Path buildFile) throws IOException {
+  /** Parses the {@code buildFile} into a {@link StarlarkFile}. */
+  public StarlarkFile ast(Path buildFile) throws IOException {
     byte[] bytes = FileSystemUtils.readWithKnownFileSize(buildFile, buildFile.getFileSize());
-    ParserInputSource inputSource = ParserInputSource.create(bytes, buildFile.asFragment());
-    return BuildFileAST.parseBuildFile(inputSource, eventHandler);
+    ParserInput input = ParserInput.create(bytes, buildFile.asFragment());
+    StarlarkFile file = StarlarkFile.parse(input);
+    Event.replayEventsOn(eventHandler, file.errors());
+    return file;
   }
 
   /** Evaluates the {@code buildFileAST} into a {@link Package}. */
   public Pair<Package, GlobCache> evalAndReturnGlobCache(
-      String packageName, Path buildFile, BuildFileAST buildFileAST)
+      String packageName, RootedPath buildFile, StarlarkFile buildFileAST)
       throws InterruptedException, NoSuchPackageException {
     PackageIdentifier packageId = PackageIdentifier.createInMainRepo(packageName);
     GlobCache globCache =
         new GlobCache(
-            buildFile.getParentDirectory(),
+            buildFile.asPath().getParentDirectory(),
             packageId,
             getPackageLocator(),
             null,
@@ -152,8 +158,12 @@ public class PackageFactoryApparatus {
             -1);
     LegacyGlobber globber = PackageFactory.createLegacyGlobber(globCache);
     Package externalPkg =
-        factory.newExternalPackageBuilder(
-                buildFile.getParentDirectory().getRelative("WORKSPACE"), "TESTING")
+        factory
+            .newExternalPackageBuilder(
+                RootedPath.toRootedPath(
+                    buildFile.getRoot(),
+                    buildFile.getRootRelativePath().getParentDirectory().getRelative("WORKSPACE")),
+                "TESTING")
             .build();
     Package.Builder resultBuilder =
         factory.evaluateBuildFile(
@@ -165,7 +175,7 @@ public class PackageFactoryApparatus {
             ImmutableList.<Event>of(),
             ImmutableList.<Postable>of(),
             ConstantRuleVisibility.PUBLIC,
-            SkylarkSemantics.DEFAULT_SEMANTICS,
+            StarlarkSemantics.DEFAULT_SEMANTICS,
             ImmutableMap.<String, Extension>of(),
             ImmutableList.<Label>of(),
             /*repositoryMapping=*/ ImmutableMap.of());
@@ -181,15 +191,15 @@ public class PackageFactoryApparatus {
     return Pair.of(result, globCache);
   }
 
-  public Package eval(String packageName, Path buildFile, BuildFileAST buildFileAST)
+  public Package eval(String packageName, RootedPath buildFile, StarlarkFile buildFileAST)
       throws InterruptedException, NoSuchPackageException {
     return evalAndReturnGlobCache(packageName, buildFile, buildFileAST).first;
   }
 
   /** Evaluates the {@code buildFileAST} into a {@link Package}. */
-  public Package eval(String packageName, Path buildFile)
+  public Package eval(String packageName, RootedPath buildFile)
       throws InterruptedException, IOException, NoSuchPackageException {
-    return eval(packageName, buildFile, ast(buildFile));
+    return eval(packageName, buildFile, ast(buildFile.asPath()));
   }
 
   /**

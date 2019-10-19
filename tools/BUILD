@@ -8,10 +8,12 @@ filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
         "//tools/android:srcs",
+        "//tools/aquery_differ:srcs",
         "//tools/bash:srcs",
         "//tools/buildstamp:srcs",
         "//tools/build_defs:srcs",
         "//tools/build_rules:srcs",
+        "//tools/config:srcs",
         "//tools/coverage:srcs",
         "//tools/java:srcs",
         "//tools/jdk:srcs",
@@ -20,14 +22,13 @@ filegroup(
         "//tools/platforms:srcs",
         "//tools/genrule:srcs",
         "//tools/cpp:srcs",
-        "//tools/cpp/runfiles:srcs",
         "//tools/j2objc:srcs",
         "//tools/objc:srcs",
         "//tools/osx:srcs",
         "//tools/osx/crosstool:srcs",
         "//tools/test:srcs",
-        "//tools/test/LcovMerger/java/com/google/devtools/lcovmerger:srcs",
-        "//tools/test/LcovMerger/javatests/com/google/devtools/lcovmerger:srcs",
+        "//tools/test/CoverageOutputGenerator/java/com/google/devtools/coverageoutputgenerator:srcs",
+        "//tools/test/CoverageOutputGenerator/javatests/com/google/devtools/coverageoutputgenerator:srcs",
         "//tools/python:srcs",
         "//tools/runfiles:srcs",
         "//tools/sh:srcs",
@@ -36,6 +37,7 @@ filegroup(
     ],
 )
 
+# Sources in the built in repo '@bazel_tools'
 filegroup(
     name = "embedded_tools_srcs",
     srcs = glob(["**"]) + [
@@ -44,9 +46,9 @@ filegroup(
         "//tools/build_defs:embedded_tools",
         "//tools/build_rules:embedded_tools_srcs",
         "//tools/buildstamp:srcs",
+        "//tools/config:srcs",
         "//tools/coverage:srcs",
-        "//tools/cpp:srcs",
-        "//tools/cpp/runfiles:embedded_tools",
+        "//tools/cpp:embedded_tools",
         "//tools/genrule:srcs",
         "//tools/java:embedded_tools",
         "//tools/j2objc:srcs",
@@ -59,7 +61,7 @@ filegroup(
         "//tools/python:embedded_tools",
         "//tools/runfiles:embedded_tools",
         "//tools/test:embedded_tools",
-        "//tools/test/LcovMerger/java/com/google/devtools/lcovmerger:embedded_tools",
+        "//tools/test/CoverageOutputGenerator/java/com/google/devtools/coverageoutputgenerator:embedded_tools",
         "//tools/osx/crosstool:srcs",
         "//tools/osx:srcs",
         "//tools/sh:embedded_tools",
@@ -68,10 +70,27 @@ filegroup(
     ],
 )
 
+# All bzl files in the built in repo '@bazel_tools'.
+filegroup(
+    name = "bzl_srcs",
+    srcs = [
+        "//tools/android:bzl_srcs",
+        "//tools/build_defs:bzl_srcs",
+        "//tools/build_rules:bzl_srcs",
+        "//tools/config:common_settings.bzl",
+        "//tools/cpp:bzl_srcs",
+        "//tools/jdk:bzl_srcs",
+        "//tools/osx:bzl_srcs",
+        "//tools/python:bzl_srcs",
+        "//tools/sh:bzl_srcs",
+    ],
+)
+
 test_suite(
     name = "all_windows_tests",
     tests = [
         "//tools/android:all_windows_tests",
+        "//tools/aquery_differ:aquery_differ_test",
         "//tools/bash:all_windows_tests",
         "//tools/build_defs:all_windows_tests",
         "//tools/cpp/runfiles:all_windows_tests",
@@ -81,4 +100,9 @@ test_suite(
         "//tools/test:all_windows_tests",
     ],
     visibility = ["//src:__pkg__"],
+)
+
+sh_binary(
+    name = "upload_bazel_mirror",
+    srcs = ["upload_bazel_mirror.sh"],
 )

@@ -14,9 +14,13 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.UserExecException;
@@ -24,6 +28,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction;
 import com.google.devtools.build.lib.rules.cpp.IncludeProcessing;
 import com.google.devtools.build.lib.rules.cpp.IncludeScanner.IncludeScannerSupplier;
+import com.google.devtools.build.lib.rules.cpp.IncludeScanner.IncludeScanningHeaderData;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -71,16 +76,24 @@ public class HeaderThinning implements IncludeProcessing {
   }
 
   @Override
-  public Iterable<Artifact> determineAdditionalInputs(
+  public ListenableFuture<Iterable<Artifact>> determineAdditionalInputs(
       @Nullable IncludeScannerSupplier includeScannerSupplier,
       CppCompileAction action,
-      ActionExecutionContext actionExecutionContext)
+      ActionExecutionContext actionExecutionContext,
+      IncludeScanningHeaderData includeScanningHeaderData)
       throws ExecException {
     Artifact headersListFile = findHeadersListFile(action.getMandatoryInputs());
     if (headersListFile == null) {
       return null;
     }
-    return findRequiredHeaderInputs(action.getSourceFile(), headersListFile, getAllowedInputsMap());
+    return Futures.immediateFuture(
+        findRequiredHeaderInputs(
+            action.getSourceFile(),
+            headersListFile,
+            getAllowedInputsMap(),
+            actionExecutionContext == null
+                ? ArtifactPathResolver.IDENTITY
+                : actionExecutionContext.getPathResolver()));
   }
 
   /**
@@ -89,17 +102,20 @@ public class HeaderThinning implements IncludeProcessing {
    * @param sourceFile the source that requires these headers
    * @param headersListFile .headers_list file output from header_scanner tool to be read
    * @param inputArtifactsMap map of PathFragment to Artifact of possible headers
+   * @param pathResolver used to read the headersListFile
    * @return collection of header artifacts that are required for {@code action} to compile
    * @throws ExecException on environmental (IO) or user errors
    */
-  public static Iterable<Artifact> findRequiredHeaderInputs(
-      Artifact sourceFile, Artifact headersListFile, Map<PathFragment, Artifact> inputArtifactsMap)
+  @VisibleForTesting
+  static Iterable<Artifact> findRequiredHeaderInputs(
+      Artifact sourceFile, Artifact headersListFile, Map<PathFragment, Artifact> inputArtifactsMap,
+      ArtifactPathResolver pathResolver)
       throws ExecException {
     try {
       ImmutableList.Builder<Artifact> includeBuilder = ImmutableList.builder();
       List<PathFragment> missing = new ArrayList<>();
       for (String line :
-          FileSystemUtils.readLines(headersListFile.getPath(), StandardCharsets.UTF_8)) {
+          FileSystemUtils.readLines(pathResolver.toPath(headersListFile), StandardCharsets.UTF_8)) {
         if (line.isEmpty()) {
           continue;
         }

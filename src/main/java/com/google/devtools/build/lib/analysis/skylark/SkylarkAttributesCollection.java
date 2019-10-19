@@ -24,15 +24,15 @@ import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.StructProvider;
+import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAttributesCollectionApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkType;
-import com.google.devtools.build.lib.syntax.Type;
-import com.google.devtools.build.lib.syntax.Type.LabelClass;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,6 +48,9 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
   private final ImmutableMap<Artifact, FilesToRunProvider> executableRunfilesMap;
   private final String ruleClassName;
 
+  static final String ERROR_MESSAGE_FOR_NO_ATTR =
+      "No attribute '%s' in attr. Make sure you declared a rule attribute with this name.";
+
   private SkylarkAttributesCollection(
       SkylarkRuleContext skylarkRuleContext,
       String ruleClassName,
@@ -58,10 +61,7 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
       ImmutableMap<Artifact, FilesToRunProvider> executableRunfilesMap) {
     this.skylarkRuleContext = skylarkRuleContext;
     this.ruleClassName = ruleClassName;
-    attrObject =
-        StructProvider.STRUCT.create(
-            attrs,
-            "No attribute '%s' in attr. Make sure you declared a rule attribute with this name.");
+    attrObject = StructProvider.STRUCT.create(attrs, ERROR_MESSAGE_FOR_NO_ATTR);
     executableObject =
         StructProvider.STRUCT.create(
             executables,
@@ -71,7 +71,7 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
         StructProvider.STRUCT.create(
             singleFiles,
             "No attribute '%s' in file. Make sure there is a label type attribute marked "
-                + "as 'single_file' with this name");
+                + "as 'allow_single_file' with this name");
     filesObject =
         StructProvider.STRUCT.create(
             files,
@@ -155,7 +155,13 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
         return;
       }
 
-      // TODO(mstaib): Remove the LABEL_DICT_UNARY special case of this conditional
+      // Some legacy native attribute types do not have a valid Starlark type. Avoid exposing
+      // these to Starlark.
+      if (type == BuildType.DISTRIBUTIONS || type == BuildType.TRISTATE) {
+        return;
+      }
+
+      // TODO(b/140636597): Remove the LABEL_DICT_UNARY special case of this conditional
       // LABEL_DICT_UNARY was previously not treated as a dependency-bearing type, and was put into
       // Skylark as a Map<String, Label>; this special case preserves that behavior temporarily.
       if (type.getLabelClass() != LabelClass.DEPENDENCY || type == BuildType.LABEL_DICT_UNARY) {
@@ -164,7 +170,7 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
             val == null
                 ? Runtime.NONE
                 // Attribute values should be type safe
-                : SkylarkType.convertToSkylark(val, (Environment) null));
+                : SkylarkType.convertToSkylark(val, (StarlarkThread) null));
         return;
       }
       if (a.isExecutable()) {
@@ -202,14 +208,14 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
           skyname,
           context.getRuleContext().getPrerequisiteArtifacts(a.getName(), Mode.DONT_CHECK).list());
 
-      if (type == BuildType.LABEL && !a.hasSplitConfigurationTransition()) {
+      if (type == BuildType.LABEL && !a.getTransitionFactory().isSplit()) {
         Object prereq = context.getRuleContext().getPrerequisite(a.getName(), Mode.DONT_CHECK);
         if (prereq == null) {
           prereq = Runtime.NONE;
         }
         attrBuilder.put(skyname, prereq);
       } else if (type == BuildType.LABEL_LIST
-          || (type == BuildType.LABEL && a.hasSplitConfigurationTransition())) {
+          || (type == BuildType.LABEL && a.getTransitionFactory().isSplit())) {
         List<?> allPrereq = context.getRuleContext().getPrerequisites(a.getName(), Mode.DONT_CHECK);
         attrBuilder.put(skyname, SkylarkList.createImmutable(allPrereq));
       } else if (type == BuildType.LABEL_KEYED_STRING_DICT) {
@@ -220,7 +226,8 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
         for (TransitiveInfoCollection prereq : allPrereq) {
           builder.put(prereq, original.get(AliasProvider.getDependencyLabel(prereq)));
         }
-        attrBuilder.put(skyname, SkylarkType.convertToSkylark(builder.build(), (Environment) null));
+        attrBuilder.put(
+            skyname, SkylarkType.convertToSkylark(builder.build(), (StarlarkThread) null));
       } else if (type == BuildType.LABEL_DICT_UNARY) {
         Map<Label, TransitiveInfoCollection> prereqsByLabel = new LinkedHashMap<>();
         for (TransitiveInfoCollection target :
@@ -238,7 +245,7 @@ class SkylarkAttributesCollection implements SkylarkAttributesCollectionApi {
                 + a.getName()
                 + " of type "
                 + type
-                + " to a Skylark object");
+                + " to a Starlark object");
       }
     }
 

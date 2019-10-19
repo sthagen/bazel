@@ -63,7 +63,7 @@ is_absolute "$TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR" ||
 
 is_absolute "$TEST_SRCDIR" || TEST_SRCDIR="$PWD/$TEST_SRCDIR"
 is_absolute "$TEST_TMPDIR" || TEST_TMPDIR="$PWD/$TEST_TMPDIR"
-is_absolute "$HOME" || HOME="$PWD/$TEST_TMPDIR"
+is_absolute "$HOME" || HOME="$TEST_TMPDIR"
 is_absolute "$XML_OUTPUT_FILE" || XML_OUTPUT_FILE="$PWD/$XML_OUTPUT_FILE"
 
 # Set USER to the current user, unless passed by Bazel via --test_env.
@@ -126,11 +126,11 @@ function rlocation() {
 
 export -f rlocation
 export -f is_absolute
-# If the runfiles manifest exists, then test programs should use it to find
-# runfiles.
-if [[ -e "$RUNFILES_MANIFEST_FILE" ]]; then
+# If RUNFILES_MANIFEST_ONLY is set to 1 and the manifest file does exist,
+# then test programs should use manifest file to find runfiles.
+if [[ "${RUNFILES_MANIFEST_ONLY:-}" == "1" && -e "${RUNFILES_MANIFEST_FILE:-}" ]]; then
   export RUNFILES_MANIFEST_FILE
-  export RUNFILES_MANIFEST_ONLY=1
+  export RUNFILES_MANIFEST_ONLY
 fi
 
 DIR="$TEST_SRCDIR"
@@ -153,12 +153,25 @@ if [[ -z "$no_echo" ]]; then
 fi
 
 # Unused if EXPERIMENTAL_SPLIT_XML_GENERATION is set.
+function encode_stream {
+  # See generate-xml.sh for documentation.
+  LC_ALL=C sed -E \
+      -e 's/.*/& /g' \
+      -e 's/(('\
+"$(echo -e '[\x9\x20-\x7f]')|"\
+"$(echo -e '[\xc0-\xdf][\x80-\xbf]')|"\
+"$(echo -e '[\xe0-\xec][\x80-\xbf][\x80-\xbf]')|"\
+"$(echo -e '[\xed][\x80-\x9f][\x80-\xbf]')|"\
+"$(echo -e '[\xee-\xef][\x80-\xbf][\x80-\xbf]')|"\
+"$(echo -e '[\xf0][\x80-\x8f][\x80-\xbf][\x80-\xbf]')"\
+')*)./\1?/g' \
+      -e 's/(.*)\?/\1/g' \
+      -e 's|]]>|]]>]]<![CDATA[>|g'
+}
+
 function encode_output_file {
   if [ -f "$1" ]; then
-    # Replace invalid XML characters and invalid sequence in CDATA
-    # cf. https://stackoverflow.com/a/7774512/4717701
-    perl -CSDA -pe's/[^\x9\xA\xD\x20-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]+/?/g;' "$1" \
-      | sed 's|]]>|]]>]]<![CDATA[>|g'
+    cat "$1" | encode_stream
   fi
 }
 
@@ -194,7 +207,9 @@ function write_xml_output_file {
 <testsuites>
   <testsuite name="$test_name" tests="1" failures="0" errors="${errors}">
     <testcase name="$test_name" status="run" duration="${duration}" time="${duration}">${error_msg}</testcase>
-    <system-out><![CDATA[$(encode_output_file "${XML_OUTPUT_FILE}.log")]]></system-out>
+    <system-out>Generated test.log (if the file is not UTF-8, then this may be unreadable):
+      <![CDATA[$(encode_output_file "${XML_OUTPUT_FILE}.log")]]>
+    </system-out>
   </testsuite>
 </testsuites>
 EOF
@@ -247,9 +262,19 @@ fi
 
 exitCode=0
 signals="$(trap -l | sed -E 's/[0-9]+\)//g')"
-for signal in $signals; do
-  trap "write_xml_output_file ${signal}" ${signal}
-done
+if [[ "${EXPERIMENTAL_SPLIT_XML_GENERATION}" == "1" ]]; then
+  # If we trap here, then bash forwards the signal to the subprocess, at least
+  # for bash version 4.4.12(1) on Linux. If we don't trap here, then bash does
+  # not forward the signal. This seems to contradict the bash documentation, and
+  # also seems to contradict bug #7119, which reports the opposite behavior.
+  trap 'echo "-- Test timed out at $(date +"%F %T %Z") --"' SIGTERM
+else
+  for signal in $signals; do
+    # SIGCHLD is expected when a subprocess dies
+    [ "${signal}" = "SIGCHLD" ] && continue
+    trap "write_xml_output_file ${signal}" ${signal}
+  done
+fi
 start=$(date +%s)
 
 # Check if we have tail --pid option
@@ -258,31 +283,29 @@ pid=$!
 has_tail=true
 tail -fq --pid $pid -s 0.001 /dev/null &> /dev/null || has_tail=false
 
-if [ "$has_tail" == true ] && [  -z "$no_echo" ]; then
+if [[ "${EXPERIMENTAL_SPLIT_XML_GENERATION}" == "1" ]]; then
+  if [ -z "$COVERAGE_DIR" ]; then
+    "${TEST_PATH}" "$@" 2>&1 || exitCode=$?
+  else
+    "$1" "$TEST_PATH" "${@:3}" 2>&1 || exitCode=$?
+  fi
+elif [ "$has_tail" == true ] && [  -z "$no_echo" ]; then
   touch "${XML_OUTPUT_FILE}.log"
   if [ -z "$COVERAGE_DIR" ]; then
-    ("${TEST_PATH}" "$@" &>"${XML_OUTPUT_FILE}.log") &
+    ("${TEST_PATH}" "$@" &>"${XML_OUTPUT_FILE}.log") <&0 &
     pid=$!
   else
-    ("$1" "$TEST_PATH" "${@:3}" &> "${XML_OUTPUT_FILE}.log") &
+    ("$1" "$TEST_PATH" "${@:3}" &> "${XML_OUTPUT_FILE}.log") <&0 &
     pid=$!
   fi
   tail -fq --pid $pid -s 0.001 "${XML_OUTPUT_FILE}.log"
   wait $pid
   exitCode=$?
 else
-  if [[ "${EXPERIMENTAL_SPLIT_XML_GENERATION}" == "1" ]]; then
-    if [ -z "$COVERAGE_DIR" ]; then
-      "${TEST_PATH}" "$@" 2>&1 || exitCode=$?
-    else
-      "$1" "$TEST_PATH" "${@:3}" 2>&1 || exitCode=$?
-    fi
+  if [ -z "$COVERAGE_DIR" ]; then
+    "${TEST_PATH}" "$@" 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
   else
-    if [ -z "$COVERAGE_DIR" ]; then
-      "${TEST_PATH}" "$@" 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
-    else
-      "$1" "$TEST_PATH" "${@:3}" 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
-    fi
+    "$1" "$TEST_PATH" "${@:3}" 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
   fi
 fi
 
@@ -290,6 +313,8 @@ for signal in $signals; do
   trap - ${signal}
 done
 if [[ "${EXPERIMENTAL_SPLIT_XML_GENERATION}" != "1" ]]; then
+  # This call to write_xml_output_file does nothing if a a test.xml already
+  # exists, e.g., because we received SIGTERM and the trap handler created it.
   write_xml_output_file
 fi
 
@@ -329,10 +354,14 @@ fi
 
 # Zip up undeclared outputs.
 if [[ -n "$TEST_UNDECLARED_OUTPUTS_ZIP" ]] && cd "$TEST_UNDECLARED_OUTPUTS_DIR"; then
-  (
-   shopt -s dotglob failglob
-   zip -qr "$TEST_UNDECLARED_OUTPUTS_ZIP" -- *
-  ) 2> /dev/null
+  shopt -s dotglob
+  if [[ "$(echo *)" != "*" ]]; then
+    # If * found nothing, echo printed the literal *.
+    # Otherwise echo printed the top-level files and directories.
+    # Pass files to zip with *, so paths with spaces aren't broken up.
+    zip -qr "$TEST_UNDECLARED_OUTPUTS_ZIP" -- * 2>/dev/null || \
+        echo >&2 "Could not create \"$TEST_UNDECLARED_OUTPUTS_ZIP\": zip not found or failed"
+  fi
 fi
 
 exit $exitCode

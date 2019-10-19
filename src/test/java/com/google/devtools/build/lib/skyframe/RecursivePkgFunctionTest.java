@@ -26,11 +26,10 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
-import com.google.devtools.build.skyframe.BuildDriver;
+import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.WalkableGraph;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -46,13 +45,6 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class RecursivePkgFunctionTest extends BuildViewTestCase {
-
-  private SkyframeExecutor skyframeExecutor;
-
-  @Before
-  public final void createSkyframeExecutor() throws Exception {
-    skyframeExecutor = getSkyframeExecutor();
-  }
 
   private SkyKey buildRecursivePkgKey(
       Path root, PathFragment rootRelativePath, ImmutableSet<PathFragment> excludedPaths) {
@@ -75,13 +67,14 @@ public class RecursivePkgFunctionTest extends BuildViewTestCase {
 
   private EvaluationResult<RecursivePkgValue> getEvaluationResult(SkyKey key)
       throws InterruptedException {
-    BuildDriver driver = skyframeExecutor.getDriverForTesting();
+    EvaluationContext evaluationContext =
+        EvaluationContext.newBuilder()
+            .setKeepGoing(false)
+            .setNumThreads(SequencedSkyframeExecutor.DEFAULT_THREAD_COUNT)
+            .setEventHander(reporter)
+            .build();
     EvaluationResult<RecursivePkgValue> evaluationResult =
-        driver.evaluate(
-            ImmutableList.of(key),
-            /*keepGoing=*/ false,
-            SequencedSkyframeExecutor.DEFAULT_THREAD_COUNT,
-            reporter);
+        skyframeExecutor.getDriver().evaluate(ImmutableList.of(key), evaluationContext);
     Preconditions.checkState(!evaluationResult.hasError());
     return evaluationResult;
   }

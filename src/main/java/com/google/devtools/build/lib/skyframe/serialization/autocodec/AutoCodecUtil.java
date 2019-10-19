@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.skyframe.serialization.SerializationContext
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
 import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
+import com.squareup.javapoet.AnnotationSpec;
 import com.squareup.javapoet.ClassName;
 import com.squareup.javapoet.MethodSpec;
 import com.squareup.javapoet.ParameterizedTypeName;
@@ -80,13 +81,17 @@ class AutoCodecUtil {
             .addModifiers(Modifier.PUBLIC)
             .returns(void.class)
             .addAnnotation(Override.class)
+            .addAnnotation(
+                AnnotationSpec.builder(ClassName.get(SuppressWarnings.class))
+                    .addMember("value", "$S", "unchecked")
+                    .build())
             .addException(SerializationException.class)
             .addException(IOException.class)
             .addParameter(SerializationContext.class, "context")
             .addParameter(TypeName.get(env.getTypeUtils().erasure(encodedType.asType())), "input")
             .addParameter(CodedOutputStream.class, "codedOut");
     if (annotation.checkClassExplicitlyAllowed()) {
-      builder.addStatement("context.checkClassExplicitlyAllowed(getEncodedClass())");
+      builder.addStatement("context.checkClassExplicitlyAllowed(getEncodedClass(), input)");
     }
     List<? extends TypeMirror> explicitlyAllowedClasses;
     try {
@@ -147,7 +152,7 @@ class AutoCodecUtil {
   }
 
   static TypeMirror getType(Class<?> clazz, ProcessingEnvironment env) {
-    return env.getElementUtils().getTypeElement((clazz.getCanonicalName())).asType();
+    return env.getElementUtils().getTypeElement(clazz.getCanonicalName()).asType();
   }
 
   static boolean isSubType(TypeMirror type, Class<?> clazz, ProcessingEnvironment env) {

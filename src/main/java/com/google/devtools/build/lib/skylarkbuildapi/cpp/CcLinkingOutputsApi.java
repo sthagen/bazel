@@ -14,24 +14,29 @@
 
 package com.google.devtools.build.lib.skylarkbuildapi.cpp;
 
+import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.syntax.SkylarkList;
 
 /** Interface for a structured representation of the linking outputs of a C++ rule. */
 @SkylarkModule(
     name = "CcLinkingOutputs",
     category = SkylarkModuleCategory.BUILTIN,
-    documented = false,
+    documented = true,
     doc = "Helper class containing CC compilation outputs.")
-public interface CcLinkingOutputsApi {
-  @SkylarkCallable(name = "dynamic_libraries_for_linking", documented = false)
-  SkylarkList<LibraryToLinkApi> getSkylarkDynamicLibrariesForLinking();
+public interface CcLinkingOutputsApi<FileT extends FileApi> {
+  @SkylarkCallable(
+      name = "library_to_link",
+      structField = true,
+      allowReturnNones = true,
+      documented = false)
+  LibraryToLinkApi<FileT> getLibraryToLink();
 
-  @SkylarkCallable(name = "static_libraries", documented = false)
-  SkylarkList<LibraryToLinkApi> getSkylarkStaticLibraries();
-
-  @SkylarkCallable(name = "pic_static_libraries", documented = false)
-  SkylarkList<LibraryToLinkApi> getSkylarkPicStaticLibraries();
+  @SkylarkCallable(
+      name = "executable",
+      structField = true,
+      allowReturnNones = true,
+      documented = false)
+  FileT getExecutable();
 }

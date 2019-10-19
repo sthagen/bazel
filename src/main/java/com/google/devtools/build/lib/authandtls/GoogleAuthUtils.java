@@ -18,6 +18,7 @@ import com.google.auth.Credentials;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import io.grpc.CallCredentials;
 import io.grpc.ClientInterceptor;
 import io.grpc.ManagedChannel;
@@ -25,7 +26,13 @@ import io.grpc.auth.MoreCallCredentials;
 import io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.NegotiationType;
 import io.grpc.netty.NettyChannelBuilder;
-import io.grpc.util.RoundRobinLoadBalancerFactory;
+import io.netty.channel.epoll.Epoll;
+import io.netty.channel.epoll.EpollDomainSocketChannel;
+import io.netty.channel.epoll.EpollEventLoopGroup;
+import io.netty.channel.kqueue.KQueue;
+import io.netty.channel.kqueue.KQueueDomainSocketChannel;
+import io.netty.channel.kqueue.KQueueEventLoopGroup;
+import io.netty.channel.unix.DomainSocketAddress;
 import io.netty.handler.ssl.SslContext;
 import java.io.File;
 import java.io.FileInputStream;
@@ -43,21 +50,23 @@ public final class GoogleAuthUtils {
    *
    * @throws IOException in case the channel can't be constructed.
    */
-  public static ManagedChannel newChannel(String target, AuthAndTLSOptions options,
-      ClientInterceptor... interceptors)
+  public static ManagedChannel newChannel(
+      String target, String proxy, AuthAndTLSOptions options, ClientInterceptor... interceptors)
       throws IOException {
     Preconditions.checkNotNull(target);
     Preconditions.checkNotNull(options);
     Preconditions.checkNotNull(interceptors);
 
     final SslContext sslContext =
-        options.tlsEnabled ? createSSlContext(options.tlsCertificate) : null;
+        isTlsEnabled(target) ? createSSlContext(options.tlsCertificate) : null;
+
+    String targetUrl = convertTargetScheme(target);
 
     try {
       NettyChannelBuilder builder =
-          NettyChannelBuilder.forTarget(target)
-              .negotiationType(options.tlsEnabled ? NegotiationType.TLS : NegotiationType.PLAINTEXT)
-              .loadBalancerFactory(RoundRobinLoadBalancerFactory.getInstance())
+          newNettyChannelBuilder(targetUrl, proxy)
+              .negotiationType(
+                  isTlsEnabled(target) ? NegotiationType.TLS : NegotiationType.PLAINTEXT)
               .intercept(interceptors);
       if (sslContext != null) {
         builder.sslContext(sslContext);
@@ -70,8 +79,25 @@ public final class GoogleAuthUtils {
       // gRPC might throw all kinds of RuntimeExceptions: StatusRuntimeException,
       // IllegalStateException, NullPointerException, ...
       String message = "Failed to connect to '%s': %s";
-      throw new IOException(String.format(message, target, e.getMessage()));
+      throw new IOException(String.format(message, targetUrl, e.getMessage()));
     }
+  }
+
+  /**
+   * Converts 'grpc(s)' into an empty protocol, because 'grpc(s)' is not a widely supported scheme
+   * and is interpreted as 'dns' under the hood.
+   *
+   * @return target URL with converted scheme
+   */
+  private static String convertTargetScheme(String target) {
+    return target.replace("grpcs://", "").replace("grpc://", "");
+  }
+
+  private static boolean isTlsEnabled(String target) {
+    // 'grpcs://' or empty prefix => TLS-enabled
+    // when no schema prefix is provided in URL, bazel will treat it as a gRPC request with TLS
+    // enabled
+    return !target.startsWith("grpc://");
   }
 
   private static SslContext createSSlContext(@Nullable String rootCert) throws IOException {
@@ -91,6 +117,33 @@ public final class GoogleAuthUtils {
         throw new IOException(message, e);
       }
     }
+  }
+
+  private static NettyChannelBuilder newNettyChannelBuilder(String targetUrl, String proxy)
+      throws IOException {
+    if (Strings.isNullOrEmpty(proxy)) {
+      return NettyChannelBuilder.forTarget(targetUrl).defaultLoadBalancingPolicy("round_robin");
+    }
+
+    if (!proxy.startsWith("unix:")) {
+      throw new IOException("Remote proxy unsupported: " + proxy);
+    }
+
+    DomainSocketAddress address = new DomainSocketAddress(proxy.replaceFirst("^unix:", ""));
+    NettyChannelBuilder builder =
+        NettyChannelBuilder.forAddress(address).overrideAuthority(targetUrl);
+    if (KQueue.isAvailable()) {
+      return builder
+          .channelType(KQueueDomainSocketChannel.class)
+          .eventLoopGroup(new KQueueEventLoopGroup());
+    }
+    if (Epoll.isAvailable()) {
+      return builder
+          .channelType(EpollDomainSocketChannel.class)
+          .eventLoopGroup(new EpollEventLoopGroup());
+    }
+
+    throw new IOException("Unix domain sockets are unsupported on this platform");
   }
 
   /**

@@ -1,17 +1,180 @@
 ---
 layout: documentation
-title: Compiling Bazel from Source
+title: Compiling Bazel from source
 ---
 
-# <a name="compiling-from-source"></a>Compiling Bazel from Source (bootstrapping)
+<h1 id="compiling-from-source">Compiling Bazel from source</h1>
 
-You can build Bazel from source without using an existing Bazel binary.
+To build Bazel from source, you can do one of the following:
 
-### 1.  Install the prerequisites
+*   Build it [using an existing Bazel binary](#build-bazel-using-bazel)
 
-#### Unix-like systems
+*   Build it [without an existing Bazel binary](#bootstrap-bazel) which is known
+    as _bootstraping_.
 
-Ensure you have installed:
+<h2 id="build-bazel-using-bazel">Build Bazel using Bazel</h2>
+
+TL;DR:
+
+1.  [Get the latest Bazel release](https://github.com/bazelbuild/bazel/releases)
+
+2.  [Download Bazel's sources from GitHub](https://github.com/bazelbuild/bazel/archive/master.zip)
+    and extract somewhere.
+    Alternatively you can git clone the source tree from https://github.com/bazelbuild/bazel
+
+3.  Install the same prerequisites as for bootstrapping (see
+    [for Unix-like systems](#bootstrap-unix-prereq) or
+    [for Windows](#bootstrap-windows-prereq))
+
+4.  Build Bazel using Bazel: `bazel build //src:bazel`
+    (or `bazel build //src:bazel-dev.exe` on Windows)
+
+5.  The resulting binary is at `bazel-bin/src/bazel`
+    (or `bazel-bin\src\bazel-dev.exe` on Windows). You can copy it wherever you
+    like and use immediately without further installation.
+
+Detailed instructions follow below.
+
+<h3 id="build-bazel-install-bazel">1. Get the latest Bazel release</h3>
+
+**Goal**: Install or download a release version of Bazel. Make sure you can run
+it by typing `bazel` in a terminal.
+
+**Reason**: To build Bazel from a GitHub source tree, you need a pre-existing
+Bazel binary. You can install one from a package manager or download one from
+GitHub. See <a href="install.html">Installing Bazel</a>. (Or you can [build from
+scratch (bootstrap)](#bootstrap-bazel).)
+
+**Troubleshooting**:
+
+*   If you cannot run Bazel by typing `bazel` in a terminal:
+
+    *   Maybe your Bazel binary's directory is not on the PATH.
+
+        This is not a big problem. Instead of typing `bazel`, you will need to
+        type the full path.
+
+    *   Maybe the Bazel binary itself is not called `bazel` (on Unixes) or
+        `bazel.exe` (on Windows).
+
+        This is not a big problem. You can either rename the binary, or type the
+        binary's name instead of `bazel`.
+
+    *   Maybe the binary is not executable (on Unixes).
+
+        You must make the binary executable by running `chmod +x /path/to/bazel`.
+
+<h3 id="build-bazel-git">2. Download Bazel's sources from GitHub</h3>
+
+If you are familiar with Git, then just git clone https://github.com/bazelbuild/bazel
+
+Otherwise:
+
+1.  Download the
+    [latest sources as a zip file](https://github.com/bazelbuild/bazel/archive/master.zip).
+
+2.  Extract the contents somewhere.
+
+    For example create a `bazel-src` directory under your home directory and
+    extract there.
+
+<h3 id="build-bazel-prerequisites">3. Install prerequisites</h3>
+
+Install the same prerequisites as for bootstrapping (see below) -- JDK, C++
+compiler, MSYS2 (if you are building on Windows), etc.
+
+<h3 id="build-bazel-on-unixes">4. Build Bazel on Ubuntu Linux, macOS, and other
+Unix-like systems</h3>
+
+([Scroll down](#build-bazel-on-windows) for instructions for Windows.)
+
+**Goal**: Run Bazel to build a custom Bazel binary (`bazel-bin/src/bazel`).
+
+**Instructions**:
+
+1.  Start a Bash terminal
+
+2.  `cd` into the directory where you extracted (or cloned) Bazel's sources.
+
+    For example if you extracted the sources under your home directory, run:
+
+        cd ~/bazel-src
+
+3.  Build Bazel from source:
+
+        bazel build //src:bazel
+
+4.  The output will be at `bazel-bin/src/bazel`
+
+<h3 id="build-bazel-on-windows">4. Build Bazel on Windows</h3>
+
+([Scroll up](#build-bazel-on-unixes) for instructions for Linux, macOS, and other
+Unix-like systems.)
+
+**Goal**: Run Bazel to build a custom Bazel binary
+(`bazel-bin\src\bazel-dev.exe`).
+
+**Instructions**:
+
+1.  Start Command Prompt (Start Menu &gt; Run &gt; "cmd.exe")
+
+2.  `cd` into the directory where you extracted (or cloned) Bazel's sources.
+
+    For example if you extracted the sources under your home directory, run:
+
+        cd %USERPROFILE%\bazel-src
+
+3.  Build Bazel from source:
+
+        bazel build //src:bazel-dev.exe
+
+    Alternatively you can build `//src:bazel.exe` -- that yields a smaller
+    binary but it's slower to build.
+
+4.  The output will be at `bazel-bin\src\bazel-dev.exe`
+
+<h3 id="build-bazel-install">5. Install the built binary</h3>
+
+Actually, there's nothing to install.
+
+The output of the previous step is a self-contained Bazel binary. You can copy
+it to any directory and use immediately. (It's useful if that directory is on
+your PATH so that you can run "bazel" everywhere.)
+
+---
+
+<h2 id="bootstrap-bazel">Build Bazel from scratch (bootstrapping)</h2>
+
+You can also build Bazel from scratch, without using an existing Bazel binary.
+
+<h3 id="download-distfile">1. Download Bazel's sources (distribution archive)</h3>
+
+(This step is the same for all platforms.)
+
+1.  Download `bazel-<version>-dist.zip` from
+    [GitHub](https://github.com/bazelbuild/bazel/releases), for example
+    `bazel-0.28.1-dist.zip`.
+
+    **Attention**:
+
+    -   There is a **single, architecture-independent** distribution archive.
+        There are no architecture-specific or OS-specific distribution archives.
+    -   These sources are **not the same as the GitHub source tree**. You
+        have to use the distribution archive to bootstrap Bazel. You cannot
+        use a source tree cloned from GitHub. (The distribution archive contains
+        generated source files that are required for bootstrapping and are not part
+        of the normal Git source tree.)
+
+2.  Unpack the distribution archive somewhere on disk.
+
+    We recommend to also verify the signature made by our
+    [release key](https://bazel.build/bazel-release.pub.gpg) 3D5919B448457EE0.
+
+<h3 id="bootstrap-unix">2. Bootstrap Bazel on Ubuntu Linux, macOS, and other Unix-like systems</h3>
+
+([Scroll down](#bootstrap-windows) for instructions for Windows.)
+
+<h4 id="bootstrap-unix-prereq">2.1. Install the prerequisites</h4>
 
 *   **Bash**
 
@@ -22,25 +185,46 @@ Ensure you have installed:
 *   **JDK 8.** You must install version 8 of the JDK. Versions other than 8 are
     *not* supported.
 
-*   **Python**. Versions 2 and 3 are supported.
+*   **Python**. Versions 2 and 3 are supported, installing one of them is
+    enough.
 
-For example on Ubuntu Linux you can install these requirements using the following command:
+For example on Ubuntu Linux you can install these requirements using the
+following command:
 
 ```sh
 sudo apt-get install build-essential openjdk-8-jdk python zip unzip
 ```
 
-#### Windows
+<h4 id="bootstrap-unix-bootstrap">2.2. Bootstrap Bazel</h4>
 
-Ensure you have installed:
+1.  Open a shell or Terminal window.
+
+3.  `cd` to the directory where you unpacked the distribution archive.
+
+3.  Run the compilation script: `env EXTRA_BAZEL_ARGS="--host_javabase=@local_jdk//:jdk" bash ./compile.sh`.
+
+The compiled output is placed into `output/bazel`. This is a self-contained
+Bazel binary, without an embedded JDK. You can copy it anywhere or use it
+in-place. For convenience we recommend copying this binary to a directory that's
+on your `PATH` (such as `/usr/local/bin` on Linux).
+
+To build the `bazel` binary in a reproducible way, also set
+[`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/specs/source-date-epoch/)
+in the "Run the compilation script" step.
+
+<h3 id="bootstrap-windows">2. Bootstrap Bazel on Windows</h3>
+
+([Scroll up](#bootstrap-unix) for instructions for Linux, macOS, and other
+Unix-like systems.)
+
+<h4 id="bootstrap-windows-prereq">2.1. Install the prerequisites</h4>
 
 *   [MSYS2 shell](https://msys2.github.io/)
 
-*   **The required MSYS2 packages.** Run the following command in the MSYS2
-    shell:
+*   **The MSYS2 packages for zip and unzip.** Run the following command in the MSYS2 shell:
 
     ```
-    pacman -Syu zip unzip
+    pacman -S zip unzip patch
     ```
 
 *   **The Visual C++ compiler.** Install the Visual C++ compiler either as part
@@ -50,45 +234,12 @@ Ensure you have installed:
 *   **JDK 8.** You must install version 8 of the JDK. Versions other than 8 are
     *not* supported.
 
-*   **Python**. Versions 2 and 3 are supported. You need the
-    Windows-native version (downloadable from [https://www.python.org](https://www.python.org)).
-    Versions installed via pacman in MSYS2 will not work.
+*   **Python**. Versions 2 and 3 are supported, installing one of them is
+    enough. You need the Windows-native version (downloadable from
+    [https://www.python.org](https://www.python.org)).  Versions installed via
+    pacman in MSYS2 will not work.
 
-### 2.  Download and unpack Bazel's source files (distribution archive)
-
-Download `bazel-<version>-dist.zip` from [GitHub](https://github.com/bazelbuild/bazel/releases)
-(for example, `bazel-0.15.2-dist.zip`). If you want to build a development snapshot of
-Bazel, download the archive for the latest release before the snapshot
-you are interested in as you need to bootstrap that version of Bazel
-first in order to build the snapshot version.
-
-**Note:** There is a **single, architecture-independent** distribution archive. There are no architecture-specific or OS-specific distribution archives.
-
-**Note:** You have to use the distribution archive to build Bazel from source.
-You cannot use a source tree cloned from GitHub. (The distribution archive
-contains generated source files that are required for bootstrapping and are not
-part of the normal Git source tree.)
-
-We recommend to also verify the signature made by our
-[release key](https://bazel.build/bazel-release.pub.gpg) 48457EE0.
-
-### 3.  Bootstrap Bazel
-
-#### Unix-like systems
-
-On Unix-like systems such as Ubuntu Linux or macOS, do the following:
-
-1.  Open a shell or Terminal window.
-
-2.  Change into the directory where you unpacked the distribution archive.
-
-3.  Run the compilation script: `bash ./compile.sh`.
-
-The compiled output is placed into `output/bazel`. This is a self-contained
-Bazel binary, without an embedded JDK. You can copy it to a directory in the
-`PATH` variable (such as `/usr/local/bin` on Linux) or use it in-place.
-
-#### Windows
+<h4 id="bootstrap-windows-bootstrap">2.2. Bootstrap Bazel</h4>
 
 1.  Open the MSYS2 shell.
 
@@ -105,7 +256,7 @@ Bazel binary, without an embedded JDK. You can copy it to a directory in the
     *   `PATH`: Add the Python directory.
     *   `JAVA_HOME`: Set to the JDK directory.
 
-    For example (using BAZEL\_V<b>S</b>):
+    **Example** (using BAZEL\_V<b>S</b>):
 
         export BAZEL_VS="C:/Program Files (x86)/Microsoft Visual Studio/2017/BuildTools"
         export BAZEL_SH="$(cygpath -m $(realpath $(which bash)))"
@@ -119,19 +270,18 @@ Bazel binary, without an embedded JDK. You can copy it to a directory in the
         export PATH="/c/python27:$PATH"
         export JAVA_HOME="C:/Program Files/Java/jdk1.8.0_112"
 
-3.  Change into the directory where you unpacked the distribution archive.
+3.  `cd` to the directory where you unpacked the distribution archive.
 
-4.  Run the compilation script: `./compile.sh`
+4.  Run the compilation script: `env EXTRA_BAZEL_ARGS="--host_javabase=@local_jdk//:jdk" ./compile.sh`
 
 The compiled output is placed into `output/bazel.exe`. This is a self-contained
-Bazel binary, without an embedded JDK. You can copy it to a directory within the
-`%PATH%` variable or use it in-place.
+Bazel binary, without an embedded JDK. You can copy it anywhere or use it
+in-place. For convenience we recommend copying this binary to a directory that's
+on your `PATH`.
+
+To build the `bazel.exe` binary in a reproducible way, also set
+[`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/specs/source-date-epoch/)
+in the "Run the compilation script" step.
 
 You don't need to run Bazel from the MSYS2 shell. You can run Bazel from the
 Command Prompt (`cmd.exe`) or PowerShell.
-
-### 4. Development snapshots of Bazel
-
-Once you have a reasonably new working `bazel` binary, you can also build
-snapshot versions of Bazel by checking out the commit you're interested in
-and build a new version of Bazel by `bazel build //src:bazel`.

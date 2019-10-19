@@ -14,23 +14,21 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.devtools.build.lib.analysis.AnalysisResult;
-import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.query2.NamedThreadSafeOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.PostAnalysisQueryEnvironment;
+import com.google.devtools.build.lib.query2.PostAnalysisQueryEnvironment.TopLevelConfigurations;
 import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
-import com.google.devtools.build.lib.query2.engine.TargetLiteral;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.runtime.QueryRuntimeHelper;
+import com.google.devtools.build.lib.runtime.QueryRuntimeHelper.Factory.CommandLineException;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutorWrappingWalkableGraph;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import java.io.IOException;
-import java.util.Collection;
-import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * Version of {@link BuildTool} that handles all work for queries based on results from the analysis
@@ -55,24 +53,28 @@ public abstract class PostAnalysisQueryBuildTool<T> extends BuildTool {
     // will also pick up any nodes that are in the graph from prior builds. This makes the results
     // not reproducible at the level of a single command. Either tolerate, or wipe the analysis
     // graph beforehand if this option is specified, or add another option to wipe if desired
-    // (SkyframeExecutor#handleConfiguredTargetChange should be sufficient).
+    // (SkyframeExecutor#handleAnalysisInvalidatingChange should be sufficient).
     if (queryExpression != null) {
       if (!env.getSkyframeExecutor().tracksStateForIncrementality()) {
         throw new PostAnalysisQueryCommandLineException(
             "Queries based on analysis results are not allowed "
                 + "if incrementality state is not being kept");
       }
-      try {
+      try (QueryRuntimeHelper queryRuntimeHelper =
+          env.getRuntime().getQueryRuntimeHelperFactory().create(env)) {
         doPostAnalysisQuery(
             request,
             analysisResult.getConfigurationCollection().getHostConfiguration(),
-            analysisResult.getTopLevelTargetsWithConfigs(),
+            new TopLevelConfigurations(analysisResult.getTopLevelTargetsWithConfigs()),
+            queryRuntimeHelper,
             queryExpression);
       } catch (QueryException | IOException e) {
         if (!request.getKeepGoing()) {
           throw new ViewCreationFailedException("Error doing post analysis query", e);
         }
         env.getReporter().error(null, "Error doing post analysis query", e);
+      } catch (CommandLineException e) {
+        throw new PostAnalysisQueryCommandLineException(e.getMessage());
       }
     }
   }
@@ -80,58 +82,27 @@ public abstract class PostAnalysisQueryBuildTool<T> extends BuildTool {
   protected abstract PostAnalysisQueryEnvironment<T> getQueryEnvironment(
       BuildRequest request,
       BuildConfiguration hostConfiguration,
-      BuildConfiguration targetConfig,
+      TopLevelConfigurations topLevelConfigurations,
       WalkableGraph walkableGraph);
-
-  private BuildConfiguration getBuildConfiguration(
-      Collection<TargetAndConfiguration> topLevelTargetsWithConfigs,
-      QueryExpression queryExpression)
-          throws QueryException {
-    // Currently, CTQE assumes that all top level targets take on the same default config and we
-    // don't have the ability to map multiple configs to multiple top level targets.
-    // So for now, we only allow multiple targets when they all carry the same config.
-    // TODO: b/71508373 - fully support multiple top level targets
-    List<TargetAndConfiguration> nonNullTargets =
-        topLevelTargetsWithConfigs
-            .stream()
-            .filter(targetAndConfig -> targetAndConfig.getConfiguration() != null)
-            .collect(Collectors.toList());
-    BuildConfiguration targetConfig = null;
-    if (!nonNullTargets.isEmpty()) {
-      targetConfig = nonNullTargets.get(0).getConfiguration();
-      for (TargetAndConfiguration targAndConfig : topLevelTargetsWithConfigs) {
-        if (targAndConfig.getConfiguration() != null
-            && !targAndConfig.getConfiguration().equals(targetConfig)) {
-          throw new QueryException(
-              new TargetLiteral(queryExpression.toString()),
-              String.format(
-                  "Top-level targets %s and %s have different configurations (top-level "
-                      + "targets with different configurations is not supported)",
-                  nonNullTargets.get(0).getLabel(), targAndConfig.getLabel()));
-        }
-      }
-    }
-    return targetConfig;
-  }
 
   private void doPostAnalysisQuery(
       BuildRequest request,
       BuildConfiguration hostConfiguration,
-      Collection<TargetAndConfiguration> topLevelTargetsWithConfigs,
+      TopLevelConfigurations topLevelConfigurations,
+      QueryRuntimeHelper queryRuntimeHelper,
       QueryExpression queryExpression)
       throws InterruptedException, QueryException, IOException {
-    BuildConfiguration targetConfig =
-        getBuildConfiguration(topLevelTargetsWithConfigs, queryExpression);
-
     WalkableGraph walkableGraph =
         SkyframeExecutorWrappingWalkableGraph.of(env.getSkyframeExecutor());
 
     PostAnalysisQueryEnvironment<T> postAnalysisQueryEnvironment =
-        getQueryEnvironment(request, hostConfiguration, targetConfig, walkableGraph);
+        getQueryEnvironment(request, hostConfiguration, topLevelConfigurations, walkableGraph);
+
     Iterable<NamedThreadSafeOutputFormatterCallback<T>> callbacks =
         postAnalysisQueryEnvironment.getDefaultOutputFormatters(
             postAnalysisQueryEnvironment.getAccessor(),
             env.getReporter(),
+            queryRuntimeHelper.getOutputStreamForQueryOutput(),
             env.getSkyframeExecutor(),
             hostConfiguration,
             runtime.getRuleClassProvider().getTrimmingTransitionFactory(),
@@ -149,10 +120,12 @@ public abstract class PostAnalysisQueryBuildTool<T> extends BuildTool {
                       NamedThreadSafeOutputFormatterCallback.callbackNames(callbacks))));
       return;
     }
-    QueryEvalResult result = postAnalysisQueryEnvironment.evaluateQuery(queryExpression, callback);
+    QueryEvalResult result =
+        postAnalysisQueryEnvironment.evaluateQuery(queryExpression, callback);
     if (result.isEmpty()) {
       env.getReporter().handle(Event.info("Empty query results"));
     }
+    queryRuntimeHelper.afterQueryOutputIsWritten();
   }
 
   /** Post analysis query specific command line exception. */

@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_plugin")
+
 # Description:
 #   A preprocessor for skylarkinterface annotations.
 package(default_visibility = [
@@ -19,6 +21,7 @@ java_plugin(
     srcs = glob(["*.java"]),
     processor_class = "com.google.devtools.build.lib.skylarkinterface.processor.SkylarkCallableProcessor",
     deps = [
+        "//src/main/java/com/google/devtools/build/lib:skylark_semantics",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface_internal",
         "//third_party:guava",
     ],

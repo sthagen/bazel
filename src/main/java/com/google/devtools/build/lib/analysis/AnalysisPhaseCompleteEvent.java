@@ -26,9 +26,11 @@ public class AnalysisPhaseCompleteEvent {
 
   private final Collection<ConfiguredTarget> topLevelTargets;
   private final long timeInMs;
-  private int targetsVisited;
+  private int targetsLoaded;
+  private int targetsConfigured;
   private final PackageManagerStatistics pkgManagerStats;
   private final int actionsConstructed;
+  private final boolean analysisCacheDropped;
 
   /**
    * Construct the event.
@@ -37,30 +39,37 @@ public class AnalysisPhaseCompleteEvent {
    */
   public AnalysisPhaseCompleteEvent(
       Collection<? extends ConfiguredTarget> topLevelTargets,
-      int targetsVisited,
+      int targetsLoaded,
+      int targetsConfigured,
       long timeInMs,
       PackageManagerStatistics pkgManagerStats,
-      int actionsConstructed) {
+      int actionsConstructed,
+      boolean analysisCacheDropped) {
     this.timeInMs = timeInMs;
     this.topLevelTargets = ImmutableList.copyOf(topLevelTargets);
-    this.targetsVisited = targetsVisited;
+    this.targetsLoaded = targetsLoaded;
+    this.targetsConfigured = targetsConfigured;
     this.pkgManagerStats = pkgManagerStats;
     this.actionsConstructed = actionsConstructed;
+    this.analysisCacheDropped = analysisCacheDropped;
   }
 
   /**
-   * @return The set of active topLevelTargets remaining, which is a subset
-   *     of the topLevelTargets we attempted to analyze.
+   * Returns the set of active topLevelTargets remaining, which is a subset of the topLevelTargets
+   * we attempted to analyze.
    */
   public Collection<ConfiguredTarget> getTopLevelTargets() {
     return topLevelTargets;
   }
 
-  /**
-   * @return The number of topLevelTargets freshly visited during analysis
-   */
-  public int getTargetsVisited() {
-    return targetsVisited;
+  /** Returns the number of targets loaded during analysis */
+  public int getTargetsLoaded() {
+    return targetsLoaded;
+  }
+
+  /** Returns the number of targets configured during analysis */
+  public int getTargetsConfigured() {
+    return targetsConfigured;
   }
 
   public long getTimeInMs() {
@@ -69,6 +78,10 @@ public class AnalysisPhaseCompleteEvent {
 
   public int getActionsConstructed() {
     return actionsConstructed;
+  }
+
+  public boolean wasAnalysisCacheDropped() {
+    return analysisCacheDropped;
   }
 
   /**

@@ -21,6 +21,7 @@ import static java.util.logging.Level.SEVERE;
 
 import build.bazel.remote.execution.v2.ActionCacheGrpc.ActionCacheImplBase;
 import build.bazel.remote.execution.v2.ActionResult;
+import build.bazel.remote.execution.v2.CapabilitiesGrpc.CapabilitiesImplBase;
 import build.bazel.remote.execution.v2.ContentAddressableStorageGrpc.ContentAddressableStorageImplBase;
 import build.bazel.remote.execution.v2.ExecutionGrpc.ExecutionImplBase;
 import com.google.bytestream.ByteStreamGrpc.ByteStreamImplBase;
@@ -30,14 +31,7 @@ import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
-import com.google.devtools.build.lib.remote.RemoteOptions;
-import com.google.devtools.build.lib.remote.RemoteRetrier;
-import com.google.devtools.build.lib.remote.Retrier;
-import com.google.devtools.build.lib.remote.SimpleBlobStoreActionCache;
-import com.google.devtools.build.lib.remote.SimpleBlobStoreFactory;
-import com.google.devtools.build.lib.remote.blobstore.ConcurrentMapBlobStore;
-import com.google.devtools.build.lib.remote.blobstore.OnDiskBlobStore;
-import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.sandbox.LinuxSandboxUtil;
@@ -54,11 +48,13 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.remote.worker.http.HttpCacheServerInitializer;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import io.grpc.Server;
 import io.grpc.ServerInterceptor;
 import io.grpc.ServerInterceptors;
+import io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.NettyServerBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -67,6 +63,9 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -95,6 +94,7 @@ public final class RemoteWorker {
   private final ByteStreamImplBase bsServer;
   private final ContentAddressableStorageImplBase casServer;
   private final ExecutionImplBase execServer;
+  private final CapabilitiesImplBase capabilitiesServer;
 
   static FileSystem getFileSystem() {
     final DigestHashFunction hashFunction;
@@ -103,7 +103,7 @@ public final class RemoteWorker {
       value = System.getProperty("bazel.DigestFunction", "SHA256");
       hashFunction = new DigestFunctionConverter().convert(value);
     } catch (OptionsParsingException e) {
-      throw new Error("The specified hash function '" + value + "' is not supported.");
+      throw new Error("The specified hash function '" + value + "' is not supported.", e);
     }
     return new JavaIoFileSystem(hashFunction);
   }
@@ -111,7 +111,7 @@ public final class RemoteWorker {
   public RemoteWorker(
       FileSystem fs,
       RemoteWorkerOptions workerOptions,
-      SimpleBlobStoreActionCache cache,
+      OnDiskBlobStoreActionCache cache,
       Path sandboxPath,
       DigestUtil digestUtil)
       throws IOException {
@@ -146,6 +146,7 @@ public final class RemoteWorker {
     } else {
       execServer = null;
     }
+    this.capabilitiesServer = new CapabilitiesServer(digestUtil, execServer != null);
   }
 
   public Server startServer() throws IOException {
@@ -154,7 +155,12 @@ public final class RemoteWorker {
         NettyServerBuilder.forPort(workerOptions.listenPort)
             .addService(ServerInterceptors.intercept(actionCacheServer, headersInterceptor))
             .addService(ServerInterceptors.intercept(bsServer, headersInterceptor))
-            .addService(ServerInterceptors.intercept(casServer, headersInterceptor));
+            .addService(ServerInterceptors.intercept(casServer, headersInterceptor))
+            .addService(ServerInterceptors.intercept(capabilitiesServer, headersInterceptor));
+
+    if (workerOptions.tlsCertificate != null) {
+      b.sslContext(getSslContextBuilder(workerOptions).build());
+    }
 
     if (execServer != null) {
       b.addService(ServerInterceptors.intercept(execServer, headersInterceptor));
@@ -167,6 +173,13 @@ public final class RemoteWorker {
     server.start();
 
     return server;
+  }
+
+  private SslContextBuilder getSslContextBuilder(RemoteWorkerOptions workerOptions) {
+    SslContextBuilder sslClientContextBuilder =
+        SslContextBuilder.forServer(
+            new File(workerOptions.tlsCertificate), new File(workerOptions.tlsPrivateKey));
+    return GrpcSslContexts.configure(sslClientContextBuilder, SslProvider.OPENSSL);
   }
 
   private void createPidFile() throws IOException {
@@ -198,7 +211,9 @@ public final class RemoteWorker {
   @SuppressWarnings("FutureReturnValueIgnored")
   public static void main(String[] args) throws Exception {
     OptionsParser parser =
-        OptionsParser.newOptionsParser(RemoteOptions.class, RemoteWorkerOptions.class);
+        OptionsParser.builder()
+            .optionsClasses(RemoteOptions.class, RemoteWorkerOptions.class)
+            .build();
     parser.parseAndExitUponError(args);
     RemoteOptions remoteOptions = parser.getOptions(RemoteOptions.class);
     RemoteWorkerOptions remoteWorkerOptions = parser.getOptions(RemoteWorkerOptions.class);
@@ -228,52 +243,27 @@ public final class RemoteWorker {
       sandboxPath = prepareSandboxRunner(fs, remoteWorkerOptions);
     }
 
-    logger.info("Initializing in-memory cache server.");
-    boolean usingRemoteCache = SimpleBlobStoreFactory.isRemoteCacheOptions(remoteOptions);
-    if (!usingRemoteCache) {
-      logger.warning("Not using remote cache. This should be used for testing only!");
-    }
-    if ((remoteWorkerOptions.casPath != null)
-        && (!PathFragment.create(remoteWorkerOptions.casPath).isAbsolute()
+    if (remoteWorkerOptions.casPath == null
+        || (!PathFragment.create(remoteWorkerOptions.casPath).isAbsolute()
             || !fs.getPath(remoteWorkerOptions.casPath).exists())) {
-      logger.severe("--cas_path must refer to an existing, absolute path!");
+      logger.severe("--cas_path must be specified and refer to an exiting absolut path.");
       System.exit(1);
       return;
     }
 
-    // The instance of SimpleBlobStore used is based on these criteria in order:
-    // 1. If remote cache or local disk cache is specified then use it first.
-    // 2. Finally use a ConcurrentMap to back the blob store.
-    final SimpleBlobStore blobStore;
-    if (usingRemoteCache) {
-      blobStore = SimpleBlobStoreFactory.create(remoteOptions, null, null);
-    } else if (remoteWorkerOptions.casPath != null) {
-      blobStore = new OnDiskBlobStore(fs.getPath(remoteWorkerOptions.casPath));
-    } else {
-      blobStore = new ConcurrentMapBlobStore(new ConcurrentHashMap<>());
-    }
-
+    Path casPath =
+        remoteWorkerOptions.casPath != null ? fs.getPath(remoteWorkerOptions.casPath) : null;
+    DigestUtil digestUtil = new DigestUtil(fs.getDigestFunction());
+    OnDiskBlobStoreActionCache cache =
+        new OnDiskBlobStoreActionCache(remoteOptions, casPath, digestUtil);
     ListeningScheduledExecutorService retryService =
         MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
-
-    RemoteRetrier retrier =
-        new RemoteRetrier(
-            remoteOptions,
-            RemoteRetrier.RETRIABLE_GRPC_ERRORS,
-            retryService,
-            Retrier.ALLOW_ALL_CALLS);
-    DigestUtil digestUtil = new DigestUtil(fs.getDigestFunction());
-    RemoteWorker worker =
-        new RemoteWorker(
-            fs,
-            remoteWorkerOptions,
-            new SimpleBlobStoreActionCache(remoteOptions, blobStore, retrier, digestUtil),
-            sandboxPath,
-            digestUtil);
+    RemoteWorker worker = new RemoteWorker(fs, remoteWorkerOptions, cache, sandboxPath, digestUtil);
 
     final Server server = worker.startServer();
 
-    EventLoopGroup bossGroup = null, workerGroup = null;
+    EventLoopGroup bossGroup = null;
+    EventLoopGroup workerGroup = null;
     Channel ch = null;
     if (remoteWorkerOptions.httpListenPort != 0) {
       // Configure the server.

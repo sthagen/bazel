@@ -13,6 +13,8 @@
 # limitations under the License.
 """Rules to create RPM archives."""
 
+load("//tools/config:common_settings.bzl", "BuildSettingInfo")
+
 rpm_filetype = [".rpm"]
 
 spec_filetype = [".spec"]
@@ -20,8 +22,14 @@ spec_filetype = [".spec"]
 def _pkg_rpm_impl(ctx):
     """Implements to pkg_rpm rule."""
 
+    if ctx.attr._no_build_defs_pkg_flag[BuildSettingInfo].value:
+        fail("The built-in version of pkg_rpm has been removed. Please use" +
+             " https://github.com/bazelbuild/rules_pkg/blob/master/pkg.")
+
     files = []
     args = ["--name=" + ctx.label.name]
+    if ctx.attr.rpmbuild_path:
+        args += ["--rpmbuild=" + ctx.attr.rpmbuild_path]
 
     # Version can be specified by a file or inlined.
     if ctx.attr.version_file:
@@ -132,33 +140,33 @@ pkg_rpm = rule(
     attrs = {
         "spec_file": attr.label(
             mandatory = True,
-            allow_files = spec_filetype,
-            single_file = True,
+            allow_single_file = spec_filetype,
         ),
         "architecture": attr.string(default = "all"),
         "version_file": attr.label(
-            allow_files = True,
-            single_file = True,
+            allow_single_file = True,
         ),
         "version": attr.string(),
         "changelog": attr.label(
-            allow_files = True,
-            single_file = True,
+            allow_single_file = True,
         ),
         "data": attr.label_list(
             mandatory = True,
             allow_files = True,
         ),
-        "release_file": attr.label(allow_files = True, single_file = True),
+        "release_file": attr.label(allow_single_file = True),
         "release": attr.string(),
         "debug": attr.bool(default = False),
-
         # Implicit dependencies.
+        "rpmbuild_path": attr.string(),
         "_make_rpm": attr.label(
             default = Label("//tools/build_defs/pkg:make_rpm"),
             cfg = "host",
             executable = True,
             allow_files = True,
+        ),
+        "_no_build_defs_pkg_flag": attr.label(
+            default = "//tools/build_defs/pkg:incompatible_no_build_defs_pkg",
         ),
     },
     executable = False,

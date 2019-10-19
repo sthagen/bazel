@@ -96,7 +96,7 @@ public final class ActionInputMapTest {
       Collections.shuffle(data);
       for (int i = 0; i < data.size(); ++i) {
         TestEntry entry = data.get(i);
-        assertThat(map.put(entry.input, entry.metadata)).isTrue();
+        assertThat(map.putWithNoDepOwner(entry.input, entry.metadata)).isTrue();
       }
       assertThat(map.size()).isEqualTo(data.size());
       for (int i = 0; i < data.size(); ++i) {
@@ -107,7 +107,7 @@ public final class ActionInputMapTest {
   }
 
   private boolean put(String execPath, int value) {
-    return map.put(new TestInput(execPath), new TestMetadata(value));
+    return map.putWithNoDepOwner(new TestInput(execPath), new TestMetadata(value));
   }
 
   private void assertContains(String execPath, int value) {
@@ -131,6 +131,11 @@ public final class ActionInputMapTest {
 
     public TestInput(String fragment) {
       this.fragment = PathFragment.create(fragment);
+    }
+
+    @Override
+    public boolean isSymlink() {
+      return false;
     }
 
     @Override
@@ -189,6 +194,21 @@ public final class ActionInputMapTest {
 
     @Override
     public boolean wasModifiedSinceDigest(Path path) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isRemote() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isMarkerValue() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public FileContentsProxy getContentsProxy() {
       throw new UnsupportedOperationException();
     }
 

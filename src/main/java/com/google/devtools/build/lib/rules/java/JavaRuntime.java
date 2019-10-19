@@ -30,6 +30,8 @@ import com.google.devtools.build.lib.analysis.TemplateVariableInfo;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.util.OsUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -42,13 +44,14 @@ public class JavaRuntime implements RuleConfiguredTargetFactory {
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
-    NestedSet<Artifact> filesToBuild =
-        PrerequisiteArtifacts.nestedSet(ruleContext, "srcs", Mode.TARGET);
+    JavaCommon.checkRuleLoadedThroughMacro(ruleContext);
+    NestedSetBuilder<Artifact> filesBuilder = NestedSetBuilder.stableOrder();
+    filesBuilder.addTransitive(PrerequisiteArtifacts.nestedSet(ruleContext, "srcs", Mode.TARGET));
     PathFragment javaHome = defaultJavaHome(ruleContext.getLabel());
     if (ruleContext.attributes().isAttributeValueExplicitlySpecified("java_home")) {
       PathFragment javaHomeAttribute =
           PathFragment.create(ruleContext.getExpander().expand("java_home"));
-      if (!filesToBuild.isEmpty() && javaHomeAttribute.isAbsolute()) {
+      if (!filesBuilder.isEmpty() && javaHomeAttribute.isAbsolute()) {
         ruleContext.ruleError("'java_home' with an absolute path requires 'srcs' to be empty.");
       }
 
@@ -60,9 +63,29 @@ public class JavaRuntime implements RuleConfiguredTargetFactory {
     }
 
     PathFragment javaBinaryExecPath = javaHome.getRelative(BIN_JAVA);
-    PathFragment javaBinaryRunfilesPath = getRunfilesJavaExecutable(
-        javaHome, ruleContext.getLabel());
+    PathFragment javaBinaryRunfilesPath =
+        getRunfilesJavaExecutable(javaHome, ruleContext.getLabel());
 
+    Artifact java = ruleContext.getPrerequisiteArtifact("java", Mode.TARGET);
+    if (java != null) {
+      if (javaHome.isAbsolute()) {
+        ruleContext.ruleError("'java_home' with an absolute path requires 'java' to be empty.");
+      }
+      javaBinaryExecPath = java.getExecPath();
+      javaBinaryRunfilesPath = java.getRunfilesPath();
+      if (!isJavaBinary(javaBinaryExecPath)) {
+        ruleContext.ruleError("the path to 'java' must end in 'bin/java'.");
+      }
+      if (ruleContext.hasErrors()) {
+        return null;
+      }
+      javaHome = javaBinaryExecPath.getParentDirectory().getParentDirectory();
+      filesBuilder.add(java);
+    }
+    PathFragment javaHomeRunfilesPath =
+        javaBinaryRunfilesPath.getParentDirectory().getParentDirectory();
+
+    NestedSet<Artifact> filesToBuild = filesBuilder.build();
     NestedSet<Artifact> middleman =
         CompilationHelper.getAggregatingMiddleman(
             ruleContext, Actions.escapeLabel(ruleContext.getLabel()), filesToBuild);
@@ -74,21 +97,31 @@ public class JavaRuntime implements RuleConfiguredTargetFactory {
 
     JavaRuntimeInfo javaRuntime =
         JavaRuntimeInfo.create(
-            filesToBuild, middleman, javaHome, javaBinaryExecPath, javaBinaryRunfilesPath);
+            filesToBuild,
+            middleman,
+            javaHome,
+            javaBinaryExecPath,
+            javaHomeRunfilesPath,
+            javaBinaryRunfilesPath);
 
-    TemplateVariableInfo templateVariableInfo = new TemplateVariableInfo(
-        ImmutableMap.of(
-            "JAVA", javaBinaryExecPath.getPathString(),
-            "JAVABASE", javaHome.getPathString()),
-        ruleContext.getRule().getLocation());
+    TemplateVariableInfo templateVariableInfo =
+        new TemplateVariableInfo(
+            ImmutableMap.of(
+                "JAVA", javaBinaryExecPath.getPathString(),
+                "JAVABASE", javaHome.getPathString()),
+            ruleContext.getRule().getLocation());
 
     return new RuleConfiguredTargetBuilder(ruleContext)
         .addProvider(RunfilesProvider.class, RunfilesProvider.simple(runfiles))
         .setFilesToBuild(filesToBuild)
         .addNativeDeclaredProvider(javaRuntime)
-        .addNativeDeclaredProvider(new JavaRuntimeToolchainInfo(javaRuntime))
         .addNativeDeclaredProvider(templateVariableInfo)
         .build();
+  }
+
+  private static boolean isJavaBinary(PathFragment path) {
+    return path.endsWith(PathFragment.create("bin/java"))
+        || path.endsWith(PathFragment.create("bin/java.exe"));
   }
 
   static PathFragment defaultJavaHome(Label javabase) {
@@ -102,7 +135,10 @@ public class JavaRuntime implements RuleConfiguredTargetFactory {
     if (javaHome.isAbsolute() || javabase.getPackageIdentifier().getRepository().isMain()) {
       return javaHome.getRelative(BIN_JAVA);
     } else {
-      return javabase.getPackageIdentifier().getRepository().getRunfilesPath()
+      return javabase
+          .getPackageIdentifier()
+          .getRepository()
+          .getRunfilesPath()
           .getRelative(BIN_JAVA);
     }
   }

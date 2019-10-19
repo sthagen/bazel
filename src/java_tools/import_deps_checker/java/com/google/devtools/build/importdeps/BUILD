@@ -1,6 +1,8 @@
 # Description:
 #   A checker to check the completeness of the deps of java_import or aar_import targets.
 
+load("@rules_java//java:defs.bzl", "java_binary", "java_library")
+
 package(
     default_visibility = ["//src:__subpackages__"],
 )
@@ -14,7 +16,6 @@ filegroup(
     name = "embedded_tools",
     srcs = [
         "BUILD.tools",
-        ":ImportDepsChecker_deploy.jar",
     ],
 )
 
@@ -39,10 +40,18 @@ java_library(
 java_binary(
     name = "ImportDepsChecker",
     srcs = ["Main.java"],
+    jvm_flags = [
+        # quiet warnings from com.google.protobuf.UnsafeUtil,
+        # see: https://github.com/google/protobuf/issues/3781
+        "-XX:+IgnoreUnrecognizedVMOptions",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+    ],
     main_class = "com.google.devtools.build.importdeps.Main",
     visibility = [
         "//src/java_tools/import_deps_checker:__subpackages__",
         "//tools/android:__pkg__",
+        "//tools/android/runtime_deps:__pkg__",
     ],
     deps = [
         ":import_deps_checker",

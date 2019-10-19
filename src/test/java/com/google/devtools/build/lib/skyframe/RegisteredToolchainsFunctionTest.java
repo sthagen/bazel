@@ -20,6 +20,8 @@ import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.
 import com.google.common.collect.ImmutableList;
 import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.analysis.platform.DeclaredToolchainInfo;
+import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
+import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.rules.platform.ToolchainTestCase;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -45,36 +47,30 @@ public class RegisteredToolchainsFunctionTest extends ToolchainTestCase {
 
     // Check that the number of toolchains created for this test is correct.
     assertThat(
-            value
-                .registeredToolchains()
-                .stream()
+            value.registeredToolchains().stream()
                 .filter(toolchain -> toolchain.toolchainType().equals(testToolchainType))
                 .collect(Collectors.toList()))
         .hasSize(2);
 
     assertThat(
-            value
-                .registeredToolchains()
-                .stream()
+            value.registeredToolchains().stream()
                 .anyMatch(
                     toolchain ->
-                        (toolchain.toolchainType().equals(testToolchainType))
-                            && toolchain.execConstraints().contains(linuxConstraint)
-                            && toolchain.targetConstraints().contains(macConstraint)
+                        toolchain.toolchainType().equals(testToolchainType)
+                            && toolchain.execConstraints().get(setting).equals(linuxConstraint)
+                            && toolchain.targetConstraints().get(setting).equals(macConstraint)
                             && toolchain
                                 .toolchainLabel()
                                 .equals(makeLabel("//toolchain:toolchain_1_impl"))))
         .isTrue();
 
     assertThat(
-            value
-                .registeredToolchains()
-                .stream()
+            value.registeredToolchains().stream()
                 .anyMatch(
                     toolchain ->
-                        (toolchain.toolchainType().equals(testToolchainType))
-                            && toolchain.execConstraints().contains(macConstraint)
-                            && toolchain.targetConstraints().contains(linuxConstraint)
+                        toolchain.toolchainType().equals(testToolchainType)
+                            && toolchain.execConstraints().get(setting).equals(macConstraint)
+                            && toolchain.targetConstraints().get(setting).equals(linuxConstraint)
                             && toolchain
                                 .toolchainLabel()
                                 .equals(makeLabel("//toolchain:toolchain_2_impl"))))
@@ -108,8 +104,52 @@ public class RegisteredToolchainsFunctionTest extends ToolchainTestCase {
 
     // Verify that the target registered with the extra_toolchains flag is first in the list.
     assertToolchainLabels(result.get(toolchainsKey))
-        .containsAllOf(
+        .containsAtLeast(
             makeLabel("//extra:extra_toolchain_impl"), makeLabel("//toolchain:toolchain_1_impl"))
+        .inOrder();
+  }
+
+  @Test
+  public void testRegisteredToolchains_flagOverride_multiple() throws Exception {
+
+    // Add an extra toolchain.
+    scratch.file(
+        "extra/BUILD",
+        "load('//toolchain:toolchain_def.bzl', 'test_toolchain')",
+        "toolchain(",
+        "    name = 'extra_toolchain_1',",
+        "    toolchain_type = '//toolchain:test_toolchain',",
+        "    exec_compatible_with = ['//constraints:linux'],",
+        "    target_compatible_with = ['//constraints:linux'],",
+        "    toolchain = ':extra_toolchain_impl_1')",
+        "test_toolchain(",
+        "  name='extra_toolchain_impl_1',",
+        "  data = 'extra')",
+        "toolchain(",
+        "    name = 'extra_toolchain_2',",
+        "    toolchain_type = '//toolchain:test_toolchain',",
+        "    exec_compatible_with = ['//constraints:mac'],",
+        "    target_compatible_with = ['//constraints:linux'],",
+        "    toolchain = ':extra_toolchain_impl_2')",
+        "test_toolchain(",
+        "  name='extra_toolchain_impl_2',",
+        "  data = 'extra2')");
+
+    useConfiguration(
+        "--extra_toolchains=//extra:extra_toolchain_1",
+        "--extra_toolchains=//extra:extra_toolchain_2");
+
+    SkyKey toolchainsKey = RegisteredToolchainsValue.key(targetConfigKey);
+    EvaluationResult<RegisteredToolchainsValue> result =
+        requestToolchainsFromSkyframe(toolchainsKey);
+    assertThatEvaluationResult(result).hasNoError();
+
+    // Verify that the target registered with the extra_toolchains flag is first in the list.
+    assertToolchainLabels(result.get(toolchainsKey))
+        .containsAtLeast(
+            makeLabel("//extra:extra_toolchain_impl_1"),
+            makeLabel("//extra:extra_toolchain_impl_2"),
+            makeLabel("//toolchain:toolchain_1_impl"))
         .inOrder();
   }
 
@@ -175,8 +215,8 @@ public class RegisteredToolchainsFunctionTest extends ToolchainTestCase {
     EvaluationResult<RegisteredToolchainsValue> result =
         requestToolchainsFromSkyframe(toolchainsKey);
     assertThatEvaluationResult(result).hasNoError();
-    assertToolchainLabels(result.get(toolchainsKey))
-        .containsAllOf(
+    assertToolchainLabels(result.get(toolchainsKey), PackageIdentifier.createInMainRepo("extra"))
+        .containsExactly(
             makeLabel("//extra:extra_toolchain1_impl"),
             makeLabel("//extra:extra_toolchain2_impl"),
             makeLabel("//extra/more:more_toolchain_impl"));
@@ -210,7 +250,7 @@ public class RegisteredToolchainsFunctionTest extends ToolchainTestCase {
         requestToolchainsFromSkyframe(toolchainsKey);
     assertThatEvaluationResult(result).hasNoError();
     assertToolchainLabels(result.get(toolchainsKey))
-        .containsAllOf(
+        .containsAtLeast(
             makeLabel("//extra:extra_toolchain1_impl"),
             makeLabel("//extra:extra_toolchain2_impl"),
             makeLabel("//extra/more:more_toolchain_impl"));
@@ -238,19 +278,21 @@ public class RegisteredToolchainsFunctionTest extends ToolchainTestCase {
   }
 
   @Test
-  public void testRegisteredToolchainsValue_equalsAndHashCode() {
+  public void testRegisteredToolchainsValue_equalsAndHashCode() throws Exception {
     DeclaredToolchainInfo toolchain1 =
-        DeclaredToolchainInfo.create(
-            makeLabel("//test:toolchain"),
-            ImmutableList.of(),
-            ImmutableList.of(),
-            makeLabel("//test/toolchain_impl_1"));
+        DeclaredToolchainInfo.builder()
+            .toolchainType(ToolchainTypeInfo.create(makeLabel("//test:toolchain")))
+            .addExecConstraints(ImmutableList.of())
+            .addTargetConstraints(ImmutableList.of())
+            .toolchainLabel(makeLabel("//test/toolchain_impl_1"))
+            .build();
     DeclaredToolchainInfo toolchain2 =
-        DeclaredToolchainInfo.create(
-            makeLabel("//test:toolchain"),
-            ImmutableList.of(),
-            ImmutableList.of(),
-            makeLabel("//test/toolchain_impl_2"));
+        DeclaredToolchainInfo.builder()
+            .toolchainType(ToolchainTypeInfo.create(makeLabel("//test:toolchain")))
+            .addExecConstraints(ImmutableList.of())
+            .addTargetConstraints(ImmutableList.of())
+            .toolchainLabel(makeLabel("//test/toolchain_impl_2"))
+            .build();
 
     new EqualsTester()
         .addEqualityGroup(

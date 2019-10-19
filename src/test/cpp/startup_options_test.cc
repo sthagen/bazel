@@ -16,6 +16,8 @@
 
 #include <stdlib.h>
 
+#include <memory>
+
 #include "src/main/cpp/blaze_util_platform.h"
 #include "src/main/cpp/workspace_layout.h"
 #include "src/test/cpp/test_util.h"
@@ -35,6 +37,9 @@ class FakeStartupOptions : public StartupOptions {
     return blaze_exit_code::SUCCESS;
   }
   void MaybeLogStartupOptionWarnings() const override {}
+
+ protected:
+  std::string GetRcFileBaseName() const override { return ".bazelrc"; }
 };
 
 class StartupOptionsTest : public ::testing::Test {
@@ -47,7 +52,7 @@ class StartupOptionsTest : public ::testing::Test {
     // being unset because we expect our test runner to set them in all cases.
     // Otherwise, we'll crash here, but this keeps our code simpler.
     old_home_ = GetHomeDir();
-    old_test_tmpdir_ = GetEnv("TEST_TMPDIR");
+    old_test_tmpdir_ = GetPathEnv("TEST_TMPDIR");
 
     ReinitStartupOptions();
   }

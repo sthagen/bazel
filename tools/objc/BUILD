@@ -1,29 +1,9 @@
 package(default_visibility = ["//visibility:public"])
 
+load("@rules_cc//cc:defs.bzl", "objc_library")
+
 # Files which shouldn't be publicly visible and dependencies of all objc_* or ios_* rules shouldn't be in this package.
 exports_files(glob(["**"]))
-
-java_binary(
-    name = "bundlemerge",
-    main_class = "com.google.devtools.build.xcode.bundlemerge.BundleMerge",
-    runtime_deps = [":bundlemerge_import"],
-)
-
-java_import(
-    name = "bundlemerge_import",
-    jars = [":precomp_bundlemerge_deploy.jar"],
-)
-
-java_binary(
-    name = "plmerge",
-    main_class = "com.google.devtools.build.xcode.plmerge.PlMerge",
-    runtime_deps = [":plmerge_import"],
-)
-
-java_import(
-    name = "plmerge_import",
-    jars = [":precomp_plmerge_deploy.jar"],
-)
 
 filegroup(
     name = "srcs",
@@ -31,46 +11,10 @@ filegroup(
 )
 
 sh_binary(
-    name = "ibtoolwrapper",
-    srcs = [":ibtoolwrapper.sh"],
-    data = [
-        ":realpath",
-        ":xcrunwrapper",
-    ],
-)
-
-sh_binary(
     name = "libtool",
     srcs = [":libtool.sh"],
     data = [
         ":make_hashed_objlist.py",
-        ":xcrunwrapper",
-    ],
-)
-
-sh_binary(
-    name = "actoolwrapper",
-    srcs = [":actoolwrapper.sh"],
-    data = [
-        ":realpath",
-        ":xcrunwrapper",
-    ],
-)
-
-sh_binary(
-    name = "momcwrapper",
-    srcs = [":momcwrapper.sh"],
-    data = [
-        ":realpath",
-        ":xcrunwrapper",
-    ],
-)
-
-sh_binary(
-    name = "swiftstdlibtoolwrapper",
-    srcs = [":swiftstdlibtoolwrapper.sh"],
-    data = [
-        ":realpath",
         ":xcrunwrapper",
     ],
 )

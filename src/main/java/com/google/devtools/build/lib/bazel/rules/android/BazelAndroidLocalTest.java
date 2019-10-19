@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.bazel.rules.java.BazelJavaSemantics;
 import com.google.devtools.build.lib.rules.android.AndroidLocalTestBase;
-import com.google.devtools.build.lib.rules.android.AndroidMigrationSemantics;
 import com.google.devtools.build.lib.rules.android.AndroidSemantics;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArtifacts;
@@ -35,11 +34,8 @@ import com.google.devtools.build.lib.util.ShellEscaper;
 /** An implementation for the "android_local_test" rule. */
 public class BazelAndroidLocalTest extends AndroidLocalTestBase {
 
-  Artifact androidAllJarsPropFile;
-
-  @Override
-  protected AndroidMigrationSemantics createAndroidMigrationSemantics() {
-    return BazelAndroidMigrationSemantics.INSTANCE;
+  public BazelAndroidLocalTest() {
+    super(BazelAndroidSemantics.INSTANCE);
   }
 
   @Override
@@ -70,20 +66,19 @@ public class BazelAndroidLocalTest extends AndroidLocalTestBase {
   }
 
   @Override
-  protected String getMainClass(
+  protected String addCoverageSupport(
       RuleContext ruleContext,
       JavaSemantics javaSemantics,
       JavaCompilationHelper helper,
       Artifact executable,
       Artifact instrumentationMetadata,
       JavaCompilationArtifacts.Builder javaArtifactsBuilder,
-      JavaTargetAttributes.Builder attributesBuilder)
-      throws InterruptedException, RuleErrorException {
+      JavaTargetAttributes.Builder attributesBuilder,
+      String mainClass)
+      throws RuleErrorException {
     // coverage does not yet work with android_local_test
-    if (ruleContext.getConfiguration().isCodeCoverageEnabled()) {
-      ruleContext.throwWithRuleError("android_local_test does not yet support coverage");
-    }
-    return "com.google.testing.junit.runner.BazelTestRunner";
+    ruleContext.throwWithRuleError("android_local_test does not yet support coverage");
+    return "";
   }
 
   @Override
@@ -97,14 +92,6 @@ public class BazelAndroidLocalTest extends AndroidLocalTestBase {
   // run. If it does not find it in the deps of the android_local_test rule, it will
   // throw an error.
   protected Artifact getAndroidAllJarsPropertiesFile(RuleContext ruleContext)
-      throws RuleErrorException {
-    if (androidAllJarsPropFile == null) {
-      androidAllJarsPropFile = getAndroidAllJarsPropertiesFileHelper(ruleContext);
-    }
-    return androidAllJarsPropFile;
-  }
-
-  private Artifact getAndroidAllJarsPropertiesFileHelper(RuleContext ruleContext)
       throws RuleErrorException {
     Iterable<RunfilesProvider> runfilesProviders =
         ruleContext.getPrerequisites("deps", Mode.TARGET, RunfilesProvider.class);

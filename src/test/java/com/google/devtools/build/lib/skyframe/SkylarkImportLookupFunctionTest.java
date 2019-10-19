@@ -14,6 +14,8 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
@@ -22,13 +24,16 @@ import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
-import com.google.devtools.build.lib.packages.SkylarkSemanticsOptions;
+import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
 import com.google.devtools.build.lib.pkgcache.PackageCacheOptions;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
+import com.google.devtools.build.lib.skyframe.SkylarkImportLookupFunction.SkylarkImportFailedException;
 import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
+import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -39,16 +44,12 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for SkylarkImportLookupFunction.
- */
+/** Tests for SkylarkImportLookupFunction. */
 @RunWith(JUnit4.class)
 public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
 
-  String preludeLabelRelativePath;
-
   @Before
-  public final void preparePackageLoading() throws Exception  {
+  public final void preparePackageLoading() throws Exception {
     Path alternativeRoot = scratch.dir("/root_2");
     PackageCacheOptions packageCacheOptions = Options.getDefaults(PackageCacheOptions.class);
     packageCacheOptions.defaultVisibility = ConstantRuleVisibility.PUBLIC;
@@ -61,14 +62,11 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
                 ImmutableList.of(Root.fromPath(rootDirectory), Root.fromPath(alternativeRoot)),
                 BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY),
             packageCacheOptions,
-            Options.getDefaults(SkylarkSemanticsOptions.class),
-            "",
+            Options.getDefaults(StarlarkSemanticsOptions.class),
             UUID.randomUUID(),
             ImmutableMap.<String, String>of(),
             new TimestampGranularityMonitor(BlazeClock.instance()));
     skyframeExecutor.setActionEnv(ImmutableMap.<String, String>of());
-    this.preludeLabelRelativePath =
-        getRuleClassProvider().getPreludeLabel().toPathFragment().toString();
   }
 
   @Test
@@ -103,61 +101,59 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
 
   @Test
   public void testLoadFromSkylarkFileInRemoteRepo() throws Exception {
-    scratch.deleteFile(preludeLabelRelativePath);
-    scratch.overwriteFile("WORKSPACE",
+    scratch.overwriteFile(
+        "WORKSPACE",
         "local_repository(",
         "    name = 'a_remote_repo',",
         "    path = '/a_remote_repo'",
         ")");
     scratch.file("/a_remote_repo/WORKSPACE");
     scratch.file("/a_remote_repo/remote_pkg/BUILD");
-    scratch.file("/a_remote_repo/remote_pkg/ext1.bzl",
-        "load(':ext2.bzl', 'CONST')");
-    scratch.file("/a_remote_repo/remote_pkg/ext2.bzl",
-        "CONST = 17");
+    scratch.file("/a_remote_repo/remote_pkg/ext1.bzl", "load(':ext2.bzl', 'CONST')");
+    scratch.file("/a_remote_repo/remote_pkg/ext2.bzl", "CONST = 17");
     checkSuccessfulLookup("@a_remote_repo//remote_pkg:ext1.bzl");
   }
 
   @Test
-  public void testLoadRelativePath() throws Exception {
+  public void testLoadRelativeLabel() throws Exception {
     scratch.file("pkg/BUILD");
     scratch.file("pkg/ext1.bzl", "a = 1");
     scratch.file("pkg/ext2.bzl", "load(':ext1.bzl', 'a')");
-    get(key("//pkg:ext2.bzl"));
+    checkSuccessfulLookup("//pkg:ext2.bzl");
   }
 
   @Test
-  public void testLoadAbsolutePath() throws Exception {
+  public void testLoadAbsoluteLabel() throws Exception {
     scratch.file("pkg2/BUILD");
     scratch.file("pkg3/BUILD");
     scratch.file("pkg2/ext.bzl", "b = 1");
     scratch.file("pkg3/ext.bzl", "load('//pkg2:ext.bzl', 'b')");
-    get(key("//pkg3:ext.bzl"));
+    checkSuccessfulLookup("//pkg3:ext.bzl");
   }
 
   @Test
-  public void testLoadFromSameAbsolutePathTwice() throws Exception {
+  public void testLoadFromSameAbsoluteLabelTwice() throws Exception {
     scratch.file("pkg1/BUILD");
     scratch.file("pkg2/BUILD");
     scratch.file("pkg1/ext.bzl", "a = 1", "b = 2");
     scratch.file("pkg2/ext.bzl", "load('//pkg1:ext.bzl', 'a')", "load('//pkg1:ext.bzl', 'b')");
-    get(key("//pkg2:ext.bzl"));
+    checkSuccessfulLookup("//pkg2:ext.bzl");
   }
 
   @Test
-  public void testLoadFromSameRelativePathTwice() throws Exception {
+  public void testLoadFromSameRelativeLabelTwice() throws Exception {
     scratch.file("pkg/BUILD");
     scratch.file("pkg/ext1.bzl", "a = 1", "b = 2");
     scratch.file("pkg/ext2.bzl", "load(':ext1.bzl', 'a')", "load(':ext1.bzl', 'b')");
-    get(key("//pkg:ext2.bzl"));
+    checkSuccessfulLookup("//pkg:ext2.bzl");
   }
 
   @Test
-  public void testLoadFromRelativePathInSubdir() throws Exception {
+  public void testLoadFromRelativeLabelInSubdir() throws Exception {
     scratch.file("pkg/BUILD");
     scratch.file("pkg/subdir/ext1.bzl", "a = 1");
     scratch.file("pkg/subdir/ext2.bzl", "load(':subdir/ext1.bzl', 'a')");
-    get(key("//pkg:subdir/ext2.bzl"));
+    checkSuccessfulLookup("//pkg:subdir/ext2.bzl");
   }
 
   private EvaluationResult<SkylarkImportLookupValue> get(SkyKey skylarkImportLookupKey)
@@ -171,8 +167,8 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
     return result;
   }
 
-  private SkyKey key(String label) throws Exception {
-    return SkylarkImportLookupValue.key(Label.parseAbsoluteUnchecked(label), false);
+  private SkyKey key(String label) {
+    return SkylarkImportLookupValue.key(Label.parseAbsoluteUnchecked(label));
   }
 
   // Ensures that a Skylark file has been successfully processed by checking that the
@@ -187,8 +183,7 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
   @Test
   public void testSkylarkImportLookupNoBuildFile() throws Exception {
     scratch.file("pkg/ext.bzl", "");
-    SkyKey skylarkImportLookupKey =
-        SkylarkImportLookupValue.key(Label.parseAbsoluteUnchecked("//pkg:ext.bzl"), false);
+    SkyKey skylarkImportLookupKey = key("//pkg:ext.bzl");
     EvaluationResult<SkylarkImportLookupValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
@@ -196,9 +191,8 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
     ErrorInfo errorInfo = result.getError(skylarkImportLookupKey);
     String errorMessage = errorInfo.getException().getMessage();
     assertThat(errorMessage)
-        .isEqualTo(
-            "Extension file not found. Unable to load package for '//pkg:ext.bzl': "
-                + "BUILD file not found on package path");
+        .contains(
+            "Every .bzl file must have a corresponding package, but '//pkg:ext.bzl' does not");
   }
 
   @Test
@@ -206,60 +200,203 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
     scratch.file("pkg2/BUILD");
     scratch.file("pkg1/ext.bzl", "a = 1");
     scratch.file("pkg2/ext.bzl", "load('//pkg1:ext.bzl', 'a')");
-    SkyKey skylarkImportLookupKey =
-        SkylarkImportLookupValue.key(Label.parseAbsoluteUnchecked("//pkg:ext.bzl"), false);
+    SkyKey skylarkImportLookupKey = key("//pkg:ext.bzl");
     EvaluationResult<SkylarkImportLookupValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
     assertThat(result.hasError()).isTrue();
     ErrorInfo errorInfo = result.getError(skylarkImportLookupKey);
     String errorMessage = errorInfo.getException().getMessage();
-    assertThat(errorMessage)
-        .isEqualTo(
-            "Extension file not found. Unable to load package for '//pkg:ext.bzl': "
-                + "BUILD file not found on package path");
+    assertThat(errorMessage).contains("Every .bzl file must have a corresponding package");
   }
 
   @Test
   public void testSkylarkImportFilenameWithControlChars() throws Exception {
     scratch.file("pkg/BUILD", "");
     scratch.file("pkg/ext.bzl", "load('//pkg:oops\u0000.bzl', 'a')");
-    try {
-      SkyKey skylarkImportLookupKey =
-          SkylarkImportLookupValue.key(Label.parseAbsoluteUnchecked("//pkg:ext.bzl"), false);
-      EvaluationResult<SkylarkImportLookupValue> result =
-          SkyframeExecutorTestUtils.evaluate(
-              getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
-      fail("Expected exception");
-    } catch (AssertionError e) {
-      String errorMessage = e.getMessage();
-      assertThat(errorMessage)
-          .contains(
-              "invalid target name 'oops<?>.bzl': "
-              + "target names may not contain non-printable characters: '\\x00'");
-    }
+    SkyKey skylarkImportLookupKey = key("//pkg:ext.bzl");
+    AssertionError e =
+        assertThrows(
+            AssertionError.class,
+            () ->
+                SkyframeExecutorTestUtils.evaluate(
+                    getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter));
+    String errorMessage = e.getMessage();
+    assertThat(errorMessage)
+        .contains(
+            "invalid target name 'oops<?>.bzl': "
+                + "target names may not contain non-printable characters: '\\x00'");
   }
 
   @Test
   public void testLoadFromExternalRepoInWorkspaceFileAllowed() throws Exception {
-    scratch.deleteFile(preludeLabelRelativePath);
-    scratch.overwriteFile("WORKSPACE",
-        "local_repository(",
-        "    name = 'a_remote_repo',",
-        "    path = '/a_remote_repo'",
-        ")");
+    Path p =
+        scratch.overwriteFile(
+            "WORKSPACE",
+            "local_repository(",
+            "    name = 'a_remote_repo',",
+            "    path = '/a_remote_repo'",
+            ")");
     scratch.file("/a_remote_repo/WORKSPACE");
     scratch.file("/a_remote_repo/remote_pkg/BUILD");
-    scratch.file("/a_remote_repo/remote_pkg/ext.bzl",
-        "CONST = 17");
+    scratch.file("/a_remote_repo/remote_pkg/ext.bzl", "CONST = 17");
+
+    RootedPath rootedPath =
+        RootedPath.toRootedPath(
+            Root.fromPath(p.getParentDirectory()), PathFragment.create("WORKSPACE"));
 
     SkyKey skylarkImportLookupKey =
-        SkylarkImportLookupValue.key(Label.parseAbsoluteUnchecked(
-            "@a_remote_repo//remote_pkg:ext.bzl"), /*inWorkspace=*/ true);
+        SkylarkImportLookupValue.keyInWorkspace(
+            Label.parseAbsoluteUnchecked("@a_remote_repo//remote_pkg:ext.bzl"),
+            /* inWorkspace= */
+            /* workspaceChunk= */ 0,
+            rootedPath);
     EvaluationResult<SkylarkImportLookupValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
 
     assertThat(result.hasError()).isFalse();
+  }
+
+  @Test
+  public void testLoadUsingLabelThatDoesntCrossBoundaryOfPackage() throws Exception {
+    scratch.file("a/BUILD");
+    scratch.file("a/a.bzl", "load('//a:b/b.bzl', 'b')");
+    scratch.file("a/b/b.bzl", "b = 42");
+
+    checkSuccessfulLookup("//a:a.bzl");
+  }
+
+  @Test
+  public void testLoadUsingLabelThatCrossesBoundaryOfPackage_Disallow_OfSamePkg() throws Exception {
+    scratch.file("a/BUILD");
+    scratch.file("a/a.bzl", "load('//a:b/b.bzl', 'b')");
+    scratch.file("a/b/BUILD", "");
+    scratch.file("a/b/b.bzl", "b = 42");
+    checkStrayLabel(
+        "//a:a.bzl",
+        "Label '//a:b/b.bzl' is invalid because 'a/b' is a subpackage; perhaps you meant to"
+            + " put the colon here: '//a/b:b.bzl'?");
+  }
+
+  @Test
+  public void testLoadUsingLabelThatCrossesBoundaryOfPackage_Disallow_OfSamePkg_Relative()
+      throws Exception {
+    scratch.file("a/BUILD");
+    scratch.file("a/a.bzl", "load('b/b.bzl', 'b')");
+    scratch.file("a/b/BUILD", "");
+    scratch.file("a/b/b.bzl", "b = 42");
+    checkStrayLabel(
+        "//a:a.bzl",
+        "Label '//a:b/b.bzl' is invalid because 'a/b' is a subpackage; perhaps you meant to"
+            + " put the colon here: '//a/b:b.bzl'?");
+  }
+
+  @Test
+  public void testLoadUsingLabelThatCrossesBoundaryOfPackage_Disallow_OfDifferentPkgUnder()
+      throws Exception {
+    scratch.file("a/BUILD");
+    scratch.file("a/a.bzl", "load('//a/b:c/c.bzl', 'c')");
+    scratch.file("a/b/BUILD", "");
+    scratch.file("a/b/c/BUILD", "");
+    scratch.file("a/b/c/c.bzl", "c = 42");
+    checkStrayLabel(
+        "//a:a.bzl",
+        "Label '//a/b:c/c.bzl' is invalid because 'a/b/c' is a subpackage; perhaps you meant"
+            + " to put the colon here: '//a/b/c:c.bzl'?");
+  }
+
+  @Test
+  public void testLoadUsingLabelThatCrossesBoundaryOfPackage_Disallow_OfDifferentPkgAbove()
+      throws Exception {
+    scratch.file("a/b/BUILD");
+    scratch.file("a/b/b.bzl", "load('//a/c:c/c.bzl', 'c')");
+    scratch.file("a/BUILD");
+    scratch.file("a/c/c/c.bzl", "c = 42");
+    checkStrayLabel(
+        "//a/b:b.bzl",
+        "Label '//a/c:c/c.bzl' is invalid because 'a/c' is not a package; perhaps you meant to "
+            + "put the colon here: '//a:c/c/c.bzl'?");
+  }
+
+  // checkStrayLabel checks that execution of target fails because
+  // the label of its load statement strays into a subpackage.
+  private void checkStrayLabel(String target, String expectedMessage) throws InterruptedException {
+    SkyKey skylarkImportLookupKey = key(target);
+    EvaluationResult<SkylarkImportLookupValue> result =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
+    assertThat(result.hasError()).isTrue();
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(skylarkImportLookupKey)
+        .hasExceptionThat()
+        .isInstanceOf(SkylarkImportFailedException.class);
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(skylarkImportLookupKey)
+        .hasExceptionThat()
+        .hasMessageThat()
+        .contains(expectedMessage);
+  }
+
+  @Test
+  public void testWithNonExistentRepository_And_DisallowLoadUsingLabelThatCrossesBoundaryOfPackage()
+      throws Exception {
+    scratch.file("BUILD", "load(\"@repository//dir:file.bzl\", \"foo\")");
+
+    SkyKey skylarkImportLookupKey = key("@repository//dir:file.bzl");
+    EvaluationResult<com.google.devtools.build.lib.skyframe.SkylarkImportLookupValue> result =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
+    assertThat(result.hasError()).isTrue();
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(skylarkImportLookupKey)
+        .hasExceptionThat()
+        .isInstanceOf(SkylarkImportFailedException.class);
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(skylarkImportLookupKey)
+        .hasExceptionThat()
+        .hasMessageThat()
+        .contains(
+            "Unable to find package for @repository//dir:file.bzl: The repository '@repository' "
+                + "could not be resolved.");
+  }
+
+  @Test
+  public void testLoadBzlFileFromWorkspaceWithRemapping() throws Exception {
+    Path p =
+        scratch.overwriteFile(
+            "WORKSPACE",
+            "local_repository(",
+            "    name = 'y',",
+            "    path = '/y'",
+            ")",
+            "local_repository(",
+            "    name = 'a',",
+            "    path = '/a',",
+            "    repo_mapping = {'@x' : '@y'}",
+            ")",
+            "load('@a//:a.bzl', 'a_symbol')");
+
+    scratch.file("/y/WORKSPACE");
+    scratch.file("/y/BUILD");
+    scratch.file("/y/y.bzl", "y_symbol = 5");
+
+    scratch.file("/a/WORKSPACE");
+    scratch.file("/a/BUILD");
+    scratch.file("/a/a.bzl", "load('@x//:y.bzl', 'y_symbol')", "a_symbol = y_symbol");
+
+    Root root = Root.fromPath(p.getParentDirectory());
+    RootedPath rootedPath = RootedPath.toRootedPath(root, PathFragment.create("WORKSPACE"));
+
+    SkyKey skylarkImportLookupKey =
+        SkylarkImportLookupValue.keyInWorkspace(
+            Label.parseAbsoluteUnchecked("@a//:a.bzl"), 1, rootedPath);
+
+    EvaluationResult<SkylarkImportLookupValue> result =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), skylarkImportLookupKey, /*keepGoing=*/ false, reporter);
+
+    assertThat(result.get(skylarkImportLookupKey).getEnvironmentExtension().getBindings())
+        .containsEntry("a_symbol", 5);
   }
 }

@@ -40,6 +40,8 @@ import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.Root;
+import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -59,19 +61,20 @@ public abstract class PackageFactoryTestBase {
   protected Scratch scratch;
   protected EventCollectionApparatus events = new EventCollectionApparatus();
   protected PackageFactoryApparatus packages = createPackageFactoryApparatus();
+  protected Root root;
 
   protected com.google.devtools.build.lib.packages.Package expectEvalSuccess(String... content)
       throws InterruptedException, IOException, NoSuchPackageException {
-    Path file = scratch.file("/pkg/BUILD", content);
-    Package pkg = packages.eval("pkg", file);
+    Path file = scratch.file("pkg/BUILD", content);
+    Package pkg = packages.eval("pkg", RootedPath.toRootedPath(root, file));
     assertThat(pkg.containsErrors()).isFalse();
     return pkg;
   }
 
   protected void expectEvalError(String expectedError, String... content) throws Exception {
     events.setFailFast(false);
-    Path file = scratch.file("/pkg/BUILD", content);
-    Package pkg = packages.eval("pkg", file);
+    Path file = scratch.file("pkg/BUILD", content);
+    Package pkg = packages.eval("pkg", RootedPath.toRootedPath(root, file));
     assertWithMessage("Expected evaluation error, but none was not reported")
         .that(pkg.containsErrors())
         .isTrue();
@@ -91,7 +94,7 @@ public abstract class PackageFactoryTestBase {
     for (String outName : outNames) {
       OutputFile out = (OutputFile) pkg.getTarget(outName);
       assertThat(rule.getOutputFiles()).contains(out);
-      assertThat(out.getGeneratingRule()).isSameAs(rule);
+      assertThat(out.getGeneratingRule()).isSameInstanceAs(rule);
       assertThat(out.getName()).isEqualTo(outName);
       assertThat(out.getTargetKind()).isEqualTo("generated file");
     }
@@ -108,13 +111,14 @@ public abstract class PackageFactoryTestBase {
       throws Exception {
     GlobCache globCache =
         new GlobCache(
-            pkg.getFilename().getParentDirectory(),
+            pkg.getFilename().asPath().getParentDirectory(),
             pkg.getPackageIdentifier(),
             PackageFactoryApparatus.createEmptyLocator(),
             null,
             TestUtils.getPool(),
             -1);
-    assertThat(globCache.globUnsorted(include, exclude, false)).containsExactlyElementsIn(expected);
+    assertThat(globCache.globUnsorted(include, exclude, false, true))
+        .containsExactlyElementsIn(expected);
   }
 
   @Before
@@ -129,8 +133,9 @@ public abstract class PackageFactoryTestBase {
             return super.readdir(path, followSymlinks);
           }
         };
-    Path tmpPath = fs.getPath("/tmp");
+    Path tmpPath = fs.getPath("/");
     scratch = new Scratch(tmpPath);
+    root = Root.fromPath(scratch.dir("/"));
   }
 
   protected Path emptyBuildFile(String packageName) {
@@ -149,7 +154,7 @@ public abstract class PackageFactoryTestBase {
     // Write a license decl just in case it's a third_party package:
     Path buildFile = scratch.file(
         getPathPrefix() + "/" + packageName + "/BUILD", "licenses(['notice'])");
-    Package pkg = packages.createPackage(packageName, buildFile);
+    Package pkg = packages.createPackage(packageName, RootedPath.toRootedPath(root, buildFile));
     return !pkg.containsErrors();
   }
 
@@ -168,7 +173,7 @@ public abstract class PackageFactoryTestBase {
   private Package buildPackageWithGlob(String globCallExpression) throws Exception {
     scratch.deleteFile("/dummypackage/BUILD");
     Path file = scratch.file("/dummypackage/BUILD", "x = " + globCallExpression);
-    return packages.eval("dummypackage", file);
+    return packages.eval("dummypackage", RootedPath.toRootedPath(root, file));
   }
 
   private List<Pair<String, Boolean>> createGlobCacheKeys(
@@ -194,24 +199,18 @@ public abstract class PackageFactoryTestBase {
       List<String> result, List<String> includes, List<String> excludes, boolean excludeDirs)
       throws Exception {
 
-    // The BUILD language, unlike Skylark, doesn't have fail(), so instead,
-    // we rely on boolean short circuit logic to only try to evaluate
-    // the undefined identifier this_will_fail if the result isn't as expected,
-    // in which case an error occurs (which we test in testGlobNegativeTest).
     Pair<Package, GlobCache> evaluated =
         evaluateGlob(
             includes,
             excludes,
             excludeDirs,
-            Printer.format("(result == sorted(%r)) or this_will_fail()", result));
+            Printer.format("(result == sorted(%r)) or fail('incorrect glob result')", result));
 
     Package pkg = evaluated.first;
     GlobCache globCache = evaluated.second;
 
     // Ensure all of the patterns are recorded against this package:
     assertThat(globCache.getKeySet().containsAll(createGlobCacheKeys(includes, excludeDirs)))
-        .isTrue();
-    assertThat(globCache.getKeySet().containsAll(createGlobCacheKeys(excludes, excludeDirs)))
         .isTrue();
     assertThat(pkg.containsErrors()).isFalse();
   }
@@ -242,7 +241,8 @@ public abstract class PackageFactoryTestBase {
                 includes, excludes, excludeDirs ? 1 : 0),
             resultAssertion);
 
-    return packages.evalAndReturnGlobCache("globs", file, packages.ast(file));
+    return packages.evalAndReturnGlobCache(
+        "globs", RootedPath.toRootedPath(root, file), packages.ast(file));
   }
 
   protected void assertGlobProducesError(String pattern, boolean errorExpected) throws Exception {
@@ -293,10 +293,12 @@ public abstract class PackageFactoryTestBase {
                 "java_library(name = 'mylib',",
                 "  srcs = 'java/A.java')");
         packages.createPackage(
-            PackageIdentifier.createInMainRepo("isolated"), buildFile, eventHandler);
+            PackageIdentifier.createInMainRepo("isolated"),
+            RootedPath.toRootedPath(root, buildFile),
+            eventHandler);
         parsedOK = true;
       } catch (Exception e) {
-        e.printStackTrace();
+        throw new IllegalStateException(e);
       }
     }
 

@@ -61,16 +61,29 @@ public class AuthAndTLSOptions extends OptionsBase {
   )
   public String googleCredentials;
 
+  @Deprecated
   @Option(
-    name = "tls_enabled",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "Specifies whether to use TLS for remote execution/caching and the build event service"
-            + " (BES)."
-  )
+      name = "tls_enabled",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      deprecationWarning = "No-op. See #8061 for details.",
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "No-op. See #8061 for details.")
   public boolean tlsEnabled;
+
+  @Deprecated
+  @Option(
+      name = "incompatible_tls_enabled_removed",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      deprecationWarning = "No-op. See #8061 for details.",
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "No-op. See #8061 for details.")
+  public boolean incompatibleTlsEnabledRemoved;
 
   @Option(
     name = "tls_certificate",

@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_binary", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 licenses(["notice"])
@@ -5,19 +7,6 @@ licenses(["notice"])
 filegroup(
     name = "srcs",
     srcs = glob(["**"]),
-)
-
-filegroup(
-    name = "embedded_tools",
-    srcs = [
-        "JacocoCoverage_jarjar_deploy.jar",
-    ],
-    tags = ["manual"],
-)
-
-filegroup(
-    name = "jacoco_coverage_runtime",
-    srcs = ["JacocoCoverage_deploy.jar"],
 )
 
 # Bazel custom Jacoco runner used to provide proper initialization and lcov
@@ -42,9 +31,9 @@ java_binary(
     deps = [
         ":bitfield",
         "//third_party:guava",
-        "//third_party/java/jacoco:blaze-agent",
-        "//third_party/java/jacoco:core",
-        "//third_party/java/jacoco:report",
+        "//third_party/java/jacoco:blaze-agent-0.8.3",
+        "//third_party/java/jacoco:core-0.8.3",
+        "//third_party/java/jacoco:report-0.8.3",
     ],
 )
 
@@ -65,7 +54,7 @@ genrule(
     outs = ["JacocoCoverage_jarjar_deploy.jar"],
     cmd = "\n".join([
         "JARJAR=\"$$(mktemp -t bazel.XXXXXXXX)\"",
-        "\"$(JAVA)\" -jar \"$(location //third_party/jarjar:jarjar_bin_deploy.jar)\" process \"$(location :JacocoCoverage.jarjar)\" \"$(location :JacocoCoverage_deploy.jar)\" \"$${JARJAR}\"",
+        "\"$(JAVA)\" -jar \"$(location //third_party/jarjar:jarjar_command_deploy.jar)\" process \"$(location :JacocoCoverage.jarjar)\" \"$(location :JacocoCoverage_deploy.jar)\" \"$${JARJAR}\"",
         "\"$(JAVA)\" -jar \"$(location //src/java_tools/singlejar:SingleJar_deploy.jar)\" --normalize --sources \"$${JARJAR}\" --output \"$@\"",
         "rm -fr \"$${JARJAR}\"",
     ]),
@@ -73,7 +62,7 @@ genrule(
     toolchains = ["@bazel_tools//tools/jdk:current_host_java_runtime"],
     tools = [
         "//src/java_tools/singlejar:SingleJar_deploy.jar",
-        "//third_party/jarjar:jarjar_bin_deploy.jar",
+        "//third_party/jarjar:jarjar_command_deploy.jar",
         "@bazel_tools//tools/jdk:current_host_java_runtime",
     ],
 )

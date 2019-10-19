@@ -9,7 +9,7 @@
   <i>Tags</i> on non-test rules are used to control sandboxed execution of
   <code>genrule</code>s and
 
-<a href="/versions/{{ site.version }}/skylark/index.html">Skylark</a>
+<a href="/versions/{{ site.version }}/skylark/index.html">Starlark</a>
   actions, and for parsing by humans and/or external tools.
 </p>
 
@@ -17,7 +17,7 @@
   Bazel modifies the behavior of its sandboxing code if it finds the following
   keywords in the <code>tags</code> attribute of any test rule or
   <code>genrule</code>, or the keys of <code>execution_requirements</code> for
-  any Skylark action.
+  any Starlark action.
 </p>
 
 <ul>
@@ -28,17 +28,29 @@
   </li>
 
   <li><code>no-cache</code> keyword results in the action or test never being
-    cached.
+    cached (remotely or locally)
   </li>
 
-  <li><code>no-remote</code> keyword results in the action or test never being
+  <li><code>no-remote-cache</code> keyword results in the action or test never being
+    cached remotely (but it may be cached locally; it may also be executed remotely).
+    Note: for the purposes of this tag, the disk-cache is considered a local cache, whereas
+    the http and gRPC caches are considered remote.
+    If a combined cache is specified (i.e. a cache with local and remote components),
+    it's treated as a remote cache and disabled entirely.
+  </li>
+
+  <li><code>no-remote-exec</code> keyword results in the action or test never being
     executed remotely (but it may be cached remotely).
   </li>
 
-  <li><code>local</code> keyword results in the action or test never being
-    run remotely or inside the
+  <li><code>no-remote</code> keyword prevents the action or test from being executed remotely
+    or cached remotely. This is equivalent to using both no-remote-cache and no-remote-exec.
+  </li>
+
+  <li><code>local</code> keyword precludes the action or test from being remotely cached,
+    remotely executed, or run inside the
     <a href="../user-manual.html#sandboxing">sandbox</a>.
-    For genrules and tests, marking the rule with the <code>local = 1</code>
+    For genrules and tests, marking the rule with the <code>local = True</code>
     attribute has the same effect.
   </li>
 

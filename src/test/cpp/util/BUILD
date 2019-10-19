@@ -2,6 +2,8 @@
 #   C++ utility tests for Bazel
 package(default_visibility = ["//visibility:public"])
 
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
 filegroup(
     name = "srcs",
     srcs = glob(["**"]),
@@ -90,7 +92,10 @@ cc_test(
 
 cc_test(
     name = "strings_test",
-    srcs = ["strings_test.cc"],
+    srcs = ["strings_test.cc"] + select({
+        "//src/conditions:windows": ["strings_windows_test.cc"],
+        "//conditions:default": [],
+    }),
     shard_count = 2,
     deps = [
         "//src/main/cpp/util:strings",
@@ -112,6 +117,7 @@ cc_library(
     visibility = [
         "//src/test/cpp:__subpackages__",
         "//src/test/native:__subpackages__",
+        "//tools/test:__pkg__",
     ],
 )
 

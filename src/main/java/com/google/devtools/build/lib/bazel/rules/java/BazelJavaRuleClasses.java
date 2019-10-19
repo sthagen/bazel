@@ -17,13 +17,12 @@ package com.google.devtools.build.lib.bazel.rules.java;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
-import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromFunctions;
+import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
+import static com.google.devtools.build.lib.packages.Type.STRING;
+import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
 import static com.google.devtools.build.lib.rules.java.JavaRuleClasses.CONTAINS_JAVA_PROVIDER;
-import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
-import static com.google.devtools.build.lib.syntax.Type.STRING;
-import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -31,8 +30,7 @@ import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
-import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses.CcToolchainRequiringRule;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
@@ -43,12 +41,13 @@ import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.RuleClass.PackageNameConstraint;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.TriState;
-import com.google.devtools.build.lib.rules.cpp.CcLinkingInfo;
+import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.rules.cpp.CcBinary.CcLauncherInfo;
+import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaRuleClasses.IjarBaseRule;
-import com.google.devtools.build.lib.rules.java.JavaRuntimeInfo;
+import com.google.devtools.build.lib.rules.java.JavaRuleClasses.JavaRuntimeBaseRule;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
-import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
 
 /**
@@ -59,9 +58,8 @@ public class BazelJavaRuleClasses {
   public static final PredicateWithMessage<Rule> JAVA_PACKAGE_NAMES = new PackageNameConstraint(
       PackageNameConstraint.ANY_SEGMENT, "java", "javatests");
 
-  protected static final String JUNIT_TESTRUNNER = "//tools/jdk:TestRunner_deploy.jar";
-  protected static final String EXPERIMENTAL_TESTRUNNER =
-      "//tools/jdk:ExperimentalTestRunner_deploy.jar";
+  protected static final String JUNIT_TESTRUNNER = "//tools/jdk:TestRunner";
+  protected static final String EXPERIMENTAL_TESTRUNNER = "//tools/jdk:ExperimentalTestRunner";
 
   public static final ImplicitOutputsFunction JAVA_BINARY_IMPLICIT_OUTPUTS =
       fromFunctions(
@@ -76,7 +74,7 @@ public class BazelJavaRuleClasses {
           JavaSemantics.JAVA_LIBRARY_SOURCE_JAR);
 
   public static final ImmutableList<SkylarkProviderIdentifier> CONTAINS_CC_LINK_PARAMS =
-      ImmutableList.of(SkylarkProviderIdentifier.forKey(CcLinkingInfo.PROVIDER.getKey()));
+      ImmutableList.of(SkylarkProviderIdentifier.forKey(CcInfo.PROVIDER.getKey()));
 
   /**
    * Meant to be the value of {@code mandatoryProvidersLists} in order for the rule to provide only
@@ -91,17 +89,7 @@ public class BazelJavaRuleClasses {
   public static final class JavaBaseRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
-      return builder
-          .add(attr(":jvm", LABEL)
-              .value(JavaSemantics.jvmAttribute(env))
-              .mandatoryProviders(JavaRuntimeInfo.PROVIDER.id())
-              .useOutputLicenses())
-          .add(attr(":host_jdk", LABEL)
-              .cfg(HostTransition.INSTANCE)
-              .value(JavaSemantics.hostJdkAttribute(env))
-              .mandatoryProviders(JavaRuntimeInfo.PROVIDER.id()))
-          .add(attr("$jacoco_instrumentation", LABEL).cfg(HostTransition.INSTANCE))
-          .build();
+      return builder.build();
     }
 
     @Override
@@ -109,7 +97,7 @@ public class BazelJavaRuleClasses {
       return RuleDefinition.Metadata.builder()
           .name("$java_base_rule")
           .type(RuleClassType.ABSTRACT)
-          .ancestors(IjarBaseRule.class)
+          .ancestors(IjarBaseRule.class, JavaRuntimeBaseRule.class)
           .build();
     }
   }
@@ -251,12 +239,12 @@ public class BazelJavaRuleClasses {
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(
               attr("plugins", LABEL_LIST)
-                  .cfg(HostTransition.INSTANCE)
+                  .cfg(HostTransition.createFactory())
                   .allowedRuleClasses("java_plugin")
                   .legacyAllowAnyFileType())
           .add(
               attr(":java_plugins", LABEL_LIST)
-                  .cfg(HostTransition.INSTANCE)
+                  .cfg(HostTransition.createFactory())
                   .allowedRuleClasses("java_plugin")
                   .silentRuleClassFilter()
                   .value(JavaSemantics.JAVA_PLUGINS))
@@ -287,10 +275,6 @@ public class BazelJavaRuleClasses {
 
     @Override
     public RuleClass build(RuleClass.Builder builder, final RuleDefinitionEnvironment env) {
-      Label launcher = env.getLauncherLabel();
-      if (launcher != null) {
-        builder.add(attr("$launcher", LABEL).cfg(HostTransition.INSTANCE).value(launcher));
-      }
       return builder
           /* <!-- #BLAZE_RULE($base_java_binary).ATTRIBUTE(classpath_resources) -->
           <em class="harmful">DO NOT USE THIS OPTION UNLESS THERE IS NO OTHER WAY)</em>
@@ -415,9 +399,7 @@ public class BazelJavaRuleClasses {
           <a href="http://docs.oracle.com/javase/7/docs/technotes/guides/jni/spec/invocation.html">
           Java Invocation API</a> can be specified as a value for this attribute.
 
-          <p>The special value <code>//tools/jdk:no_launcher</code>
-          indicates that you want to use the normal JDK launcher (bin/java or java.exe)
-          as the value for this attribute. This is the default.</p>
+          <p>By default, Bazel will use the normal JDK launcher (bin/java or java.exe).</p>
 
           <p>The related <a href="../user-manual.html#flag--java_launcher"><code>
           --java_launcher</code></a> Bazel flag affects only those
@@ -448,15 +430,13 @@ public class BazelJavaRuleClasses {
           .add(
               attr("launcher", LABEL)
                   .allowedFileTypes(FileTypeSet.NO_FILE)
-                  .allowedRuleClasses("cc_binary"))
+                  .mandatoryProviders(
+                      SkylarkProviderIdentifier.forKey(CcLauncherInfo.PROVIDER.getKey())))
           .add(attr(":java_launcher", LABEL).value(JavaSemantics.JAVA_LAUNCHER)) // blaze flag
           .add(
-              attr("$no_launcher", NODEP_LABEL_LIST)
-                  .value(
-                      ImmutableList.of(
-                          // TODO(b/30038239): migrate to //tools/jdk:no_launcher and delete
-                          env.getToolsLabel("//third_party/java/jdk:jdk_launcher"),
-                          env.getToolsLabel("//tools/jdk:no_launcher"))))
+              attr("$launcher", LABEL)
+                  .cfg(HostTransition.createFactory())
+                  .value(env.getToolsLabel("//tools/launcher:launcher")))
           .build();
     }
     @Override
@@ -464,11 +444,12 @@ public class BazelJavaRuleClasses {
       return RuleDefinition.Metadata.builder()
           .name("$base_java_binary")
           .type(RuleClassType.ABSTRACT)
-          .ancestors(JavaRule.class,
+          .ancestors(
+              JavaRule.class,
               // java_binary and java_test require the crosstool C++ runtime
               // libraries (libstdc++.so, libgcc_s.so).
               // TODO(bazel-team): Add tests for Java+dynamic runtime.
-              BazelCppRuleClasses.CcLinkingRule.class)
+              CcToolchainRequiringRule.class)
           .build();
     }
   }

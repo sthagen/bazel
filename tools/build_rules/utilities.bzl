@@ -19,15 +19,15 @@ def _java_library_srcs_impl(ctx):
     if len(ctx.attr.deps) != 1:
         fail("Only one deps value supported", "deps")
     dep = ctx.attr.deps[0]
-    return [DefaultInfo(files = depset(dep.java.source_jars))]
+    return [DefaultInfo(files = depset(dep[JavaInfo].source_jars))]
 
 _java_library_srcs = rule(
     implementation = _java_library_srcs_impl,
     attrs = {
         "deps": attr.label_list(
             mandatory = True,
-            non_empty = True,
-            providers = ["java"],
+            allow_empty = False,
+            providers = [JavaInfo],
         ),
     },
 )

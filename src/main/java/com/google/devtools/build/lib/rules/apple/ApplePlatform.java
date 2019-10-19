@@ -43,17 +43,20 @@ public enum ApplePlatform implements ApplePlatformApi {
   private static final ImmutableSet<String> IOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("ios_x86_64", "ios_i386");
   private static final ImmutableSet<String> IOS_DEVICE_TARGET_CPUS =
-      ImmutableSet.of("ios_armv6", "ios_arm64", "ios_armv7", "ios_armv7s");
+      ImmutableSet.of("ios_armv6", "ios_arm64", "ios_armv7", "ios_armv7s", "ios_arm64e");
   private static final ImmutableSet<String> WATCHOS_SIMULATOR_TARGET_CPUS =
-      ImmutableSet.of("watchos_i386");
+      ImmutableSet.of("watchos_i386", "watchos_x86_64");
   private static final ImmutableSet<String> WATCHOS_DEVICE_TARGET_CPUS =
-      ImmutableSet.of("watchos_armv7k");
+      ImmutableSet.of("watchos_armv7k", "watchos_arm64_32");
   private static final ImmutableSet<String> TVOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("tvos_x86_64");
   private static final ImmutableSet<String> TVOS_DEVICE_TARGET_CPUS =
       ImmutableSet.of("tvos_arm64");
+  // "darwin" is included because that's currently the default when on macOS, and
+  // migrating it would be a breaking change more details:
+  // https://github.com/bazelbuild/bazel/pull/7062
   private static final ImmutableSet<String> MACOS_TARGET_CPUS =
-      ImmutableSet.of("darwin_x86_64");
+      ImmutableSet.of("darwin_x86_64", "darwin");
 
   private static final ImmutableSet<String> BIT_32_TARGET_CPUS =
       ImmutableSet.of("ios_i386", "ios_armv7", "ios_armv7s", "watchos_i386", "watchos_armv7k");
@@ -189,6 +192,13 @@ public enum ApplePlatform implements ApplePlatformApi {
     printer.append(toString());
   }
 
+  /** Exception indicating an unknown or unsupported Apple platform type. */
+  public static class UnsupportedPlatformTypeException extends Exception {
+    public UnsupportedPlatformTypeException(String msg) {
+      super(msg);
+    }
+  }
+
   /**
    * Value used to describe Apple platform "type". A {@link ApplePlatform} is implied from a
    * platform type (for example, watchOS) together with a cpu value (for example, armv7).
@@ -219,15 +229,16 @@ public enum ApplePlatform implements ApplePlatformApi {
     /**
      * Returns the {@link PlatformType} with given name (case insensitive).
      *
-     * @throws IllegalArgumentException if the name does not match a valid platform type.
+     * @throws UnsupportedPlatformTypeException if the name does not match a valid platform type.
      */
-    public static PlatformType fromString(String name) {
+    public static PlatformType fromString(String name) throws UnsupportedPlatformTypeException {
       for (PlatformType platformType : PlatformType.values()) {
         if (name.equalsIgnoreCase(platformType.toString())) {
           return platformType;
         }
       }
-      throw new IllegalArgumentException(String.format("Unsupported platform type \"%s\"", name));
+      throw new UnsupportedPlatformTypeException(
+          String.format("Unsupported platform type \"%s\"", name));
     }
 
     /** Returns a Skylark struct that contains the instances of this enum. */

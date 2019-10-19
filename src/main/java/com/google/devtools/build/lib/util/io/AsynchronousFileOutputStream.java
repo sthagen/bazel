@@ -22,13 +22,12 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.Message;
 import com.google.protobuf.MessageLite;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.concurrent.BlockingQueue;
@@ -50,38 +49,38 @@ public class AsynchronousFileOutputStream extends OutputStream implements Messag
   // To store any exception raised from the writes.
   private final AtomicReference<Throwable> exception = new AtomicReference<>();
 
-  public AsynchronousFileOutputStream(String filename) throws IOException {
+  public AsynchronousFileOutputStream(Path path) throws IOException {
     this(
-        filename,
+        path.toString(),
         new BufferedOutputStream( // Use a buffer of 100 kByte, scientifically chosen at random.
-            new FileOutputStream(new File(filename), /*append=*/ false), 100000));
+            path.getOutputStream(), 100000));
   }
 
   @VisibleForTesting
   AsynchronousFileOutputStream(String name, OutputStream out) {
-    writerThread = new Thread(new Runnable() {
-      @Override
-      public void run() {
-        try {
-          byte[] data;
-          while ((data = queue.take()) != POISON_PILL) {
-            out.write(data);
-          }
-        } catch (InterruptedException e) {
-          // Exit quietly.
-        } catch (Exception e) {
-          exception.set(e);
-          closeFuture.setException(e);
-        } finally {
-          try {
-            out.close();
-            closeFuture.set(null);
-          } catch (Exception e) {
-            closeFuture.setException(e);
-          }
-        }
-      }
-    }, "async-file-writer:" + name);
+    writerThread =
+        new Thread(
+            () -> {
+              try {
+                byte[] data;
+                while ((data = queue.take()) != POISON_PILL) {
+                  out.write(data);
+                }
+              } catch (InterruptedException e) {
+                // Exit quietly.
+              } catch (Exception e) {
+                exception.set(e);
+                closeFuture.setException(e);
+              } finally {
+                try {
+                  out.close();
+                  closeFuture.set(null);
+                } catch (Exception e) {
+                  closeFuture.setException(e);
+                }
+              }
+            },
+            "async-file-writer:" + name);
     writerThread.start();
   }
 
@@ -147,7 +146,7 @@ public class AsynchronousFileOutputStream extends OutputStream implements Messag
   }
 
   /**
-   * Closes the stream without waiting until pending writes are committed, and supressing errors.
+   * Closes the stream without waiting until pending writes are committed, and suppressing errors.
    *
    * <p>Pending writes will still continue asynchronously, but any errors will be ignored.
    */

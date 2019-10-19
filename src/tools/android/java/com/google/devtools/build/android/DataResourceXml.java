@@ -100,6 +100,8 @@ public class DataResourceXml implements DataResource {
           String attributeName =
               attribute.getName().getNamespaceURI().isEmpty()
                   ? attribute.getName().getLocalPart()
+                  // This is intentionally putting the "package" in the wrong place!
+                  // TODO: FullyQualifiedName.Factory#create has a overload which accepts "package".
                   : attribute.getName().getPrefix() + ":" + attribute.getName().getLocalPart();
           FullyQualifiedName fqn =
               fqnFactory.create(VirtualType.RESOURCES_ATTRIBUTE, attribute.getName().toString());
@@ -238,12 +240,14 @@ public class DataResourceXml implements DataResource {
       case INTERPOLATOR:
       case MENU:
       case MIPMAP:
+      case NAVIGATION:
       case RAW:
       case TRANSITION:
+      case FONT:
       case XML:
         return SimpleXmlResourceValue.from(proto, resourceType);
       default:
-        throw new IllegalArgumentException();
+        throw new IllegalArgumentException("Unhandled type " + resourceType + " from " + proto);
     }
   }
 
@@ -341,7 +345,7 @@ public class DataResourceXml implements DataResource {
 
   public static DataResourceXml createWithNamespaces(
       Path sourcePath, XmlResourceValue xml, Namespaces namespaces) {
-    return createWithNamespaces(DataSource.of(sourcePath), xml, namespaces);
+    return createWithNamespaces(DataSource.of(DependencyInfo.UNKNOWN, sourcePath), xml, namespaces);
   }
 
   @Override
@@ -382,7 +386,7 @@ public class DataResourceXml implements DataResource {
 
   @Override
   public void writeResourceToClass(FullyQualifiedName key, AndroidResourceSymbolSink sink) {
-    xml.writeResourceToClass(key, sink);
+    xml.writeResourceToClass(source().getDependencyInfo(), key, sink);
   }
 
   @Override
@@ -419,7 +423,7 @@ public class DataResourceXml implements DataResource {
 
   @Override
   public String asConflictString() {
-    return source.asConflictString();
+    return xml.asConflictStringWith(source);
   }
 
   @Override
@@ -429,5 +433,16 @@ public class DataResourceXml implements DataResource {
     }
     DataResourceXml other = (DataResourceXml) value;
     return Objects.equals(xml, other.xml);
+  }
+
+  @Override
+  public int compareMergePriorityTo(DataValue value) {
+    Preconditions.checkNotNull(value);
+    if (!(value instanceof DataResourceXml)) {
+      // This is an ambiguous conflict; return 0 meaning neither has priority.
+      return 0;
+    }
+    DataResourceXml other = (DataResourceXml) value;
+    return xml.compareMergePriorityTo(other.xml);
   }
 }

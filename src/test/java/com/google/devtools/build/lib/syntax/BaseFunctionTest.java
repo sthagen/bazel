@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.syntax;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
 import java.util.Arrays;
@@ -27,7 +27,7 @@ import org.junit.runners.JUnit4;
 
 /**
  * Tests for {@link BaseFunction}. This tests the argument processing by BaseFunction between the
- * outer call(posargs, kwargs, ast, env) and the inner call(args, ast, env).
+ * outer call(posargs, kwargs, ast, thread) and the inner call(args, ast, thread).
  */
 @RunWith(JUnit4.class)
 public class BaseFunctionTest extends EvaluationTestCase {
@@ -42,7 +42,7 @@ public class BaseFunctionTest extends EvaluationTestCase {
     }
 
     @Override
-    public Object call(Object[] arguments, FuncallExpression ast, Environment env) {
+    public Object call(Object[] arguments, FuncallExpression ast, StarlarkThread thread) {
       return Arrays.asList(arguments);
     }
   }
@@ -58,14 +58,10 @@ public class BaseFunctionTest extends EvaluationTestCase {
           .isEqualTo(expectedOutput);
 
     } else { // expected to fail with an exception
-      try {
-        eval(callExpression);
-        fail();
-      } catch (EvalException e) {
-        assertWithMessage("Wrong exception for " + callExpression)
-            .that(e.getMessage())
-            .isEqualTo(expectedOutput);
-      }
+      EvalException e = assertThrows(EvalException.class, () -> eval(callExpression));
+      assertWithMessage("Wrong exception for " + callExpression)
+          .that(e.getMessage())
+          .isEqualTo(expectedOutput);
     }
   }
 
@@ -134,15 +130,16 @@ public class BaseFunctionTest extends EvaluationTestCase {
   @SuppressWarnings("unchecked")
   @Test
   public void testKwParam() throws Exception {
-    eval("def foo(a, b, c=3, d=4, g=7, h=8, *args, **kwargs):\n"
-        + "  return (a, b, c, d, g, h, args, kwargs)\n"
-        + "v1 = foo(1, 2)\n"
-        + "v2 = foo(1, *['x', 'y', 'z', 't'], h=9, i=0)\n"
-        + "v3 = foo(1, *[2, 3, 4, 5, 6, 7, 8], i=0)\n"
-        + "def bar(**kwargs):\n"
-        + "  return kwargs\n"
-        + "b1 = bar(name='foo', type='jpg', version=42)\n"
-        + "b2 = bar()\n");
+    exec(
+        "def foo(a, b, c=3, d=4, g=7, h=8, *args, **kwargs):\n"
+            + "  return (a, b, c, d, g, h, args, kwargs)\n"
+            + "v1 = foo(1, 2)\n"
+            + "v2 = foo(1, h=9, i=0, *['x', 'y', 'z', 't'])\n"
+            + "v3 = foo(1, i=0, *[2, 3, 4, 5, 6, 7, 8])\n"
+            + "def bar(**kwargs):\n"
+            + "  return kwargs\n"
+            + "b1 = bar(name='foo', type='jpg', version=42)\n"
+            + "b2 = bar()\n");
 
     assertThat(Printer.repr(lookup("v1")))
         .isEqualTo("(1, 2, 3, 4, 7, 8, (), {})");
@@ -159,12 +156,19 @@ public class BaseFunctionTest extends EvaluationTestCase {
   }
 
   @Test
-  public void testCommaAfterArgsAndKwargs() throws Exception {
-    // Test that commas are not allowed in function definitions and calls
-    // after last *args or **kwargs expressions.
-    checkEvalErrorContains("syntax error at ')': expected identifier", "def foo(*args,): pass");
-    checkEvalErrorContains("unexpected tokens after kwarg", "def foo(**kwargs,): pass");
-    checkEvalErrorContains("syntax error at ')': expected expression", "foo(*args,)");
-    checkEvalErrorContains("unexpected tokens after kwarg", "foo(**kwargs,)");
+  public void testTrailingCommas() throws Exception {
+    // Test that trailing commas are allowed in function definitions and calls
+    // even after last *args or **kwargs expressions, like python3
+    exec(
+        "def f(*args, **kwargs): pass\n"
+            + "v1 = f(1,)\n"
+            + "v2 = f(*(1,2),)\n"
+            + "v3 = f(a=1,)\n"
+            + "v4 = f(**{\"a\": 1},)\n");
+
+    assertThat(Printer.repr(lookup("v1"))).isEqualTo("None");
+    assertThat(Printer.repr(lookup("v2"))).isEqualTo("None");
+    assertThat(Printer.repr(lookup("v3"))).isEqualTo("None");
+    assertThat(Printer.repr(lookup("v4"))).isEqualTo("None");
   }
 }

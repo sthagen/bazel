@@ -5,7 +5,7 @@ title: Migrating from Maven to Bazel
 
 # Migrating from Maven to Bazel
 
-When migrating from any build tool to Bazel, it’s best to have both build
+When migrating from any build tool to Bazel, it's best to have both build
 tools running in parallel until you have fully migrated your development team,
 CI system, and any other relevant systems. You can run Maven and Bazel in the
 same repository.
@@ -25,10 +25,10 @@ same repository.
 
 ## Before you begin
 
-*  [Install Bazel](install.md) if it’s not yet installed.
-*  If you’re new to Bazel, go through the tutorial
+*  [Install Bazel](install.md) if it's not yet installed.
+*  If you're new to Bazel, go through the tutorial
    [Introduction to Bazel: Build Java](tutorial/java.md) before you start
-   migrating. The tutorial explains Bazel’s concepts, structure, and label
+   migrating. The tutorial explains Bazel's concepts, structure, and label
    syntax.
 
 ## Differences between Maven and Bazel
@@ -63,90 +63,50 @@ Create a file named `WORKSPACE` at the root of your project. If your project
 has no external dependencies, the workspace file can be empty.
 
 If your project depends on files or packages that are not in one of the
-project’s directories, specify these external dependencies in the workspace
+project's directories, specify these external dependencies in the workspace
 file. To automate the listing of external dependencies for the workspace file,
-use the tool `generate_workspace`. For instructions about using this tool, see
-[Generate a WORKSPACE file for a Java project](generate-workspace.md).
+use `rules_jvm_external`. For instructions about using this ruleset, see
+[the README](https://github.com/bazelbuild/rules_jvm_external/#rules_jvm_external).
+
+> NOTE: The previously recommend tool, `generate_workspace`, is no longer
+maintained by the Bazel team.
 
 #### <a name="guava-1"></a>Guava project example: external dependencies
 
-Below are the results of using the tool `generate_workspace` to list the
-[Guava project's](https://github.com/google/guava) external dependencies.
+Using the
+[`rules_jvm_external`](https://github.com/bazelbuild/rules_jvm_external)
+ruleset, we can list the external dependencies of the
+[Guava project](https://github.com/google/guava).
 
-1.  The new `WORKSPACE` file contains:
+Add the following snippet to the `WORKSPACE` file:
 
-    ```bash
-    load("//:generate_workspace.bzl", "generated_maven_jars")
-    generated_maven_jars()
-    ```
+```python
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-2.  The new `BUILD` file in the directory `third_party` enables access
-    to external libraries. This BUILD file contains:
+RULES_JVM_EXTERNAL_TAG = "2.8"
+RULES_JVM_EXTERNAL_SHA = "79c9850690d7614ecdb72d68394f994fef7534b292c4867ce5e7dec0aa7bdfad"
 
-    ```bash
-    load("//:generate_workspace.bzl", "generated_java_libraries")
-    generated_java_libraries()
-    ```
+http_archive(
+    name = "rules_jvm_external",
+    strip_prefix = "rules_jvm_external-%s" % RULES_JVM_EXTERNAL_TAG,
+    sha256 = RULES_JVM_EXTERNAL_SHA,
+    url = "https://github.com/bazelbuild/rules_jvm_external/archive/%s.zip" % RULES_JVM_EXTERNAL_TAG,
+)
 
-3.  The generated `generate_workspace.bzl` file contains:
+load("@rules_jvm_external//:defs.bzl", "maven_install")
 
-    ```bash
-    # The following dependencies were calculated from:
-    #
-    # generate_workspace --maven_project=/usr/local/.../guava
-
-
-    def generated_maven_jars():
-      # pom.xml got requested version
-      # com.google.guava:guava-parent:pom:23.0-SNAPSHOT
-      native.maven_jar(
-          name = "com_google_code_findbugs_jsr305",
-          artifact = "com.google.code.findbugs:jsr305:1.3.9",
-          sha1 = "40719ea6961c0cb6afaeb6a921eaa1f6afd4cfdf",
-      )
-
-
-      # pom.xml got requested version
-      # com.google.guava:guava-parent:pom:23.0-SNAPSHOT
-      native.maven_jar(
-          name = "com_google_errorprone_error_prone_annotations",
-          artifact = "com.google.errorprone:error_prone_annotations:2.0.18",
-          sha1 = "5f65affce1684999e2f4024983835efc3504012e",
-      )
-
-
-      # pom.xml got requested version
-      # com.google.guava:guava-parent:pom:23.0-SNAPSHOT
-      native.maven_jar(
-          name = "com_google_j2objc_j2objc_annotations",
-          artifact = "com.google.j2objc:j2objc-annotations:1.1",
-          sha1 = "ed28ded51a8b1c6b112568def5f4b455e6809019",
-      )
-
-
-
-
-    def generated_java_libraries():
-      native.java_library(
-          name = "com_google_code_findbugs_jsr305",
-          visibility = ["//visibility:public"],
-          exports = ["@com_google_code_findbugs_jsr305//jar"],
-      )
-
-
-      native.java_library(
-          name = "com_google_errorprone_error_prone_annotations",
-          visibility = ["//visibility:public"],
-          exports = ["@com_google_errorprone_error_prone_annotations//jar"],
-      )
-
-
-      native.java_library(
-          name = "com_google_j2objc_j2objc_annotations",
-          visibility = ["//visibility:public"],
-          exports = ["@com_google_j2objc_j2objc_annotations//jar"],
-      )
-  ```
+maven_install(
+    artifacts = [
+        "com.google.code.findbugs:jsr305:1.3.9",
+        "com.google.errorprone:error_prone_annotations:2.0.18",
+        "com.google.j2objc:j2objc-annotations:1.1",
+    ],
+    repositories = [
+        "https://jcenter.bintray.com/",
+        "https://repo1.maven.org/maven2",
+    ],
+)
+```
 
 ### <a name="2-build"></a>2. Create one BUILD file
 
@@ -170,7 +130,7 @@ targets.
        *  To build projects with a single Maven module, use the
           `java_library` rule as follows:
 
-          ```bash
+          ```python
           java_library(
               name = "everything",
               srcs = glob(["src/main/java/**/*.java"]),
@@ -181,7 +141,7 @@ targets.
        *  To build projects with multiple Maven modules, use the
           `java_library` rule as follows:
 
-          ```bash
+          ```python
           java_library(
               name = "everything",
               srcs = glob([
@@ -199,7 +159,7 @@ targets.
           ```
        *  To build binaries, use the `java_binary` rule:
 
-          ```bash
+          ```python
           java_binary(
               name = "everything",
               srcs = glob(["src/main/java/**/*.java"]),
@@ -210,7 +170,7 @@ targets.
           ```
     *  Specify the attributes:
        *  `name`: Give the target a meaningful name. In the examples above
-          we call the target “everything.”
+          we call the target "everything."
        *  `srcs`: Use globbing to list all .java files in your project.
        *  `resources`: Use globbing to list all resources in your project.
        *  `deps`: You need to determine which external dependencies your
@@ -233,17 +193,17 @@ targets.
 #### <a name="guava-2"></a>Guava project example: start with one BUILD file
 
 When migrating the Guava project to Bazel, initially one BUILD file is used
-to build the enitre project. Here are the contents of this initial `BUILD`
+to build the entire project. Here are the contents of this initial `BUILD`
 file in the workspace directory:
 
-```bash
+```python
 java_library(
     name = "everything",
     srcs = glob(["guava/src/**/*.java"]),
     deps = [
-      "//third_party:com_google_code_findbugs_jsr305",
-      "//third_party:com_google_errorprone_error_prone_annotations",
-      "//third_party:com_google_j2objc_j2objc_annotations"
+      "@maven//:com_google_code_findbugs_jsr305",
+      "@maven//:com_google_errorprone_error_prone_annotations",
+      "@maven//:com_google_j2objc_j2objc_annotations"
     ],
 )
 ```
@@ -282,7 +242,7 @@ Tips for adding more BUILD files:
 
 ### <a name="4-build"></a>4. Build using Bazel
 
-You’ve been building using Bazel as you add BUILD files to validate the setup
+You've been building using Bazel as you add BUILD files to validate the setup
 of the build.
 
 When you have BUILD files at the desired granularity, you can use Bazel

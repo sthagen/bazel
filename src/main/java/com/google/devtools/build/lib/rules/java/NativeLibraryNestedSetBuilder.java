@@ -19,42 +19,29 @@ import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.rules.cpp.ArtifactCategory;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingOutputs;
 import com.google.devtools.build.lib.rules.cpp.CcNativeLibraryProvider;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
-import com.google.devtools.build.lib.rules.cpp.LinkerInput;
-import com.google.devtools.build.lib.rules.cpp.LinkerInputs;
+import com.google.devtools.build.lib.rules.cpp.LibraryToLink;
 import com.google.devtools.build.lib.util.FileType;
 
-/**
- * A builder that helps construct nested sets of native libraries.
- */
+/** A builder that helps construct nested sets of native libraries. */
 public final class NativeLibraryNestedSetBuilder {
 
-  private final NestedSetBuilder<LinkerInput> builder = NestedSetBuilder.linkOrder();
+  private final NestedSetBuilder<LibraryToLink> builder = NestedSetBuilder.linkOrder();
 
-  /**
-   * Build a nested set of native libraries.
-   */
-  public NestedSet<LinkerInput> build() {
+  /** Build a nested set of native libraries. */
+  public NestedSet<LibraryToLink> build() {
     return builder.build();
   }
 
-  /**
-   * Include specified artifacts as native libraries in the nested set.
-   */
-  public NativeLibraryNestedSetBuilder addAll(Iterable<Artifact> deps) {
-    for (Artifact dep : deps) {
-      builder.add(
-          new LinkerInputs.SimpleLinkerInput(
-              dep, ArtifactCategory.DYNAMIC_LIBRARY, /* disableWholeArchive= */ false));
-    }
+  /** Include specified artifacts as native libraries in the nested set. */
+  public NativeLibraryNestedSetBuilder addAll(Iterable<LibraryToLink> deps) {
+    builder.addAll(deps);
     return this;
   }
 
-  /**
-   * Include native libraries of specified dependencies into the nested set.
-   */
+  /** Include native libraries of specified dependencies into the nested set. */
   public NativeLibraryNestedSetBuilder addJavaTargets(
       Iterable<? extends TransitiveInfoCollection> deps) {
     for (TransitiveInfoCollection dep : deps) {
@@ -63,9 +50,7 @@ public final class NativeLibraryNestedSetBuilder {
     return this;
   }
 
-  /**
-   * Include native Java libraries of a specified target into the nested set.
-   */
+  /** Include native Java libraries of a specified target into the nested set. */
   public NativeLibraryNestedSetBuilder addJavaTarget(TransitiveInfoCollection dep) {
     JavaNativeLibraryProvider javaProvider = dep.getProvider(JavaNativeLibraryProvider.class);
     if (javaProvider != null) {
@@ -82,11 +67,9 @@ public final class NativeLibraryNestedSetBuilder {
     addTarget(dep);
 
     return this;
- }
+  }
 
-  /**
-   * Include native C/C++ libraries of specified dependencies into the nested set.
-   */
+  /** Include native C/C++ libraries of specified dependencies into the nested set. */
   public NativeLibraryNestedSetBuilder addCcTargets(
       Iterable<? extends TransitiveInfoCollection> deps) {
     for (TransitiveInfoCollection dep : deps) {
@@ -95,9 +78,7 @@ public final class NativeLibraryNestedSetBuilder {
     return this;
   }
 
-  /**
-   * Include native Java libraries of a specified target into the nested set.
-   */
+  /** Include native Java libraries of a specified target into the nested set. */
   private void addCcTarget(TransitiveInfoCollection dep) {
     CcNativeLibraryProvider provider = dep.getProvider(CcNativeLibraryProvider.class);
     if (provider != null) {
@@ -107,16 +88,16 @@ public final class NativeLibraryNestedSetBuilder {
     }
   }
 
-  /**
-   * Include files and genrule artifacts.
-   */
+  /** Include files and genrule artifacts. */
   private void addTarget(TransitiveInfoCollection dep) {
-    for (Artifact artifact : FileType.filterList(
-        dep.getProvider(FileProvider.class).getFilesToBuild(),
-        CppFileTypes.SHARED_LIBRARY)) {
+    for (Artifact artifact :
+        FileType.filterList(
+            dep.getProvider(FileProvider.class).getFilesToBuild(), CppFileTypes.SHARED_LIBRARY)) {
       builder.add(
-          new LinkerInputs.SimpleLinkerInput(
-              artifact, ArtifactCategory.DYNAMIC_LIBRARY, /* disableWholeArchive= */ false));
+          LibraryToLink.builder()
+              .setLibraryIdentifier(CcLinkingOutputs.libraryIdentifierOf(artifact))
+              .setDynamicLibrary(artifact)
+              .build());
     }
   }
 }

@@ -21,12 +21,13 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.lib.syntax.UserDefinedFunction;
+import com.google.devtools.build.lib.syntax.StarlarkFunction;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /**
  * The "attr" module of the Build API.
@@ -37,7 +38,7 @@ import com.google.devtools.build.lib.syntax.UserDefinedFunction;
 @SkylarkModule(
     name = "attr",
     namespace = true,
-    category = SkylarkModuleCategory.BUILTIN,
+    category = SkylarkModuleCategory.TOP_LEVEL_TYPE,
     doc =
         "This is a top-level module for defining the attribute schemas of a rule or aspect. Each "
             + "function returns an object representing the schema of a single attribute. These "
@@ -125,10 +126,14 @@ public interface SkylarkAttrApi extends SkylarkValue {
 
   static final String PROVIDERS_ARG = "providers";
   static final String PROVIDERS_DOC =
-      "Mandatory providers list. It should be either a list of providers, or a "
-          + "list of lists of providers. Every dependency should provide ALL providers "
-          + "from at least ONE of these lists. A single list of providers will be "
-          + "automatically converted to a list containing one list of providers.";
+      "The providers that must be given by any dependency appearing in this attribute."
+          + ""
+          + "<p>The format of this argument is a list of lists of providers -- <code>*Info</code> "
+          + "objects returned by <a href='globals.html#provider'><code>provider()</code></a> (or "
+          + "in the case of a legacy provider, its string name). The dependency must return ALL "
+          + "providers mentioned in at least ONE of the inner lists. As a convenience, this "
+          + "argument may also be a single-level list of providers, in which case it is wrapped in "
+          + "an outer list with one element.";
 
   static final String SINGLE_FILE_ARG = "single_file";
   static final String ALLOW_SINGLE_FILE_ARG = "allow_single_file";
@@ -146,7 +151,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = Integer.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             defaultValue = "0",
             doc = DEFAULT_DOC,
@@ -176,14 +181,14 @@ public interface SkylarkAttrApi extends SkylarkValue {
             positional = false)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   Descriptor intAttribute(
       Integer defaultInt,
       String doc,
       Boolean mandatory,
       SkylarkList<?> values,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -223,19 +228,20 @@ public interface SkylarkAttrApi extends SkylarkValue {
             positional = false)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor stringAttribute(
       String defaultString,
       String doc,
       Boolean mandatory,
       SkylarkList<?> values,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
       name = "label",
-      doc = "Creates a schema for a label attribute. This is a dependency attribute."
+      doc =
+          "Creates a schema for a label attribute. This is a dependency attribute."
               + DEPENDENCY_ATTR_TEXT
               + "<p>In addition to ordinary source files, this kind of attribute is often used to "
               + "refer to a tool -- for example, a compiler. Such tools are considered to be "
@@ -253,7 +259,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
               @ParamType(type = Label.class),
               @ParamType(type = String.class),
               @ParamType(type = LateBoundDefaultApi.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             callbackEnabled = true,
             noneable = true,
@@ -339,7 +345,11 @@ public interface SkylarkAttrApi extends SkylarkValue {
             positional = false,
             doc =
                 CONFIGURATION_DOC
-                    + " This parameter is required if <code>executable</code> is True."),
+                    + " This parameter is required if <code>executable</code> is True "
+                    + "to guard against accidentally building host tools in the "
+                    + "target configuration. <code>\"target\"</code> has no semantic "
+                    + "effect, so don't set it when <code>executable</code> is False "
+                    + "unless it really helps clarify your intentions."),
         @Param(
             name = ASPECTS_ARG,
             type = SkylarkList.class,
@@ -350,7 +360,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = ASPECTS_ARG_DOC),
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor labelAttribute(
       Object defaultO,
       String doc,
@@ -364,7 +374,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -393,7 +403,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkList.class, generic1 = String.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             defaultValue = "[]",
             doc = DEFAULT_DOC,
@@ -408,7 +418,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             positional = false)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor stringListAttribute(
       Boolean mandatory,
       Boolean nonEmpty,
@@ -416,7 +426,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       SkylarkList<?> defaultList,
       String doc,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -445,7 +455,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkList.class, generic1 = Integer.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             defaultValue = "[]",
             doc = DEFAULT_DOC,
@@ -460,7 +470,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             positional = false)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor intListAttribute(
       Boolean mandatory,
       Boolean nonEmpty,
@@ -468,7 +478,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       SkylarkList<?> defaultList,
       String doc,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -487,7 +497,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkList.class, generic1 = Label.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             callbackEnabled = true,
             defaultValue = "[]",
@@ -568,7 +578,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = ASPECTS_ARG_DOC),
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor labelListAttribute(
       Boolean allowEmpty,
       Object defaultList,
@@ -582,7 +592,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -602,7 +612,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkDict.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             callbackEnabled = true,
             defaultValue = "{}",
@@ -684,7 +694,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = ASPECTS_ARG_DOC)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor labelKeyedStringDictAttribute(
       Boolean allowEmpty,
       Object defaultList,
@@ -698,7 +708,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       Object cfg,
       SkylarkList<?> aspects,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -709,7 +719,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = Boolean.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             defaultValue = "False",
             named = true,
@@ -731,27 +741,27 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = MANDATORY_DOC)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor boolAttribute(
-      Boolean defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
+      Boolean defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
       name = "output",
-      doc =
-          "Creates a schema for an output (label) attribute."
-              + OUTPUT_ATTR_TEXT,
+      doc = "Creates a schema for an output (label) attribute." + OUTPUT_ATTR_TEXT,
       parameters = {
         @Param(
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = Label.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             noneable = true,
             defaultValue = "None",
             named = true,
             positional = false,
+            disableWithFlag = FlagIdentifier.INCOMPATIBLE_NO_OUTPUT_ATTR_DEFAULT,
+            valueWhenDisabled = "None",
             doc = DEFAULT_DOC),
         @Param(
             name = DOC_ARG,
@@ -769,16 +779,14 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = MANDATORY_DOC)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor outputAttribute(
-      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
+      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
       name = "output_list",
-      doc =
-          "Creates a schema for a list-of-outputs attribute."
-              + OUTPUT_ATTR_TEXT,
+      doc = "Creates a schema for a list-of-outputs attribute." + OUTPUT_ATTR_TEXT,
       parameters = {
         @Param(
             name = ALLOW_EMPTY_ARG,
@@ -790,11 +798,14 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkList.class, generic1 = Label.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
-            defaultValue = "[]",
+            noneable = true,
+            defaultValue = "None",
             named = true,
             positional = false,
+            disableWithFlag = FlagIdentifier.INCOMPATIBLE_NO_OUTPUT_ATTR_DEFAULT,
+            valueWhenDisabled = "None",
             doc = DEFAULT_DOC),
         @Param(
             name = DOC_ARG,
@@ -819,15 +830,15 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = NON_EMPTY_DOC)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor outputListAttribute(
       Boolean allowEmpty,
-      SkylarkList<?> defaultList,
+      Object defaultList,
       String doc,
       Boolean mandatory,
       Boolean nonEmpty,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -846,7 +857,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkDict.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             named = true,
             positional = false,
@@ -875,7 +886,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = NON_EMPTY_DOC)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor stringDictAttribute(
       Boolean allowEmpty,
       SkylarkDict<?, ?> defaultO,
@@ -883,7 +894,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       Boolean mandatory,
       Boolean nonEmpty,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -902,7 +913,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             name = DEFAULT_ARG,
             allowedTypes = {
               @ParamType(type = SkylarkDict.class),
-              @ParamType(type = UserDefinedFunction.class)
+              @ParamType(type = StarlarkFunction.class)
             },
             defaultValue = "{}",
             named = true,
@@ -931,7 +942,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
             doc = NON_EMPTY_DOC)
       },
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor stringListDictAttribute(
       Boolean allowEmpty,
       SkylarkDict<?, ?> defaultO,
@@ -939,7 +950,7 @@ public interface SkylarkAttrApi extends SkylarkValue {
       Boolean mandatory,
       Boolean nonEmpty,
       FuncallExpression ast,
-      Environment env)
+      StarlarkThread thread)
       throws EvalException;
 
   @SkylarkCallable(
@@ -970,16 +981,17 @@ public interface SkylarkAttrApi extends SkylarkValue {
             positional = false,
             doc = MANDATORY_DOC)
       },
+      disableWithFlag = FlagIdentifier.INCOMPATIBLE_NO_ATTR_LICENSE,
       useAst = true,
-      useEnvironment = true)
+      useStarlarkThread = true)
   public Descriptor licenseAttribute(
-      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, Environment env)
+      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
       throws EvalException;
 
   /** An attribute descriptor. */
   @SkylarkModule(
       name = "Attribute",
-      category = SkylarkModuleCategory.NONE,
+      category = SkylarkModuleCategory.BUILTIN,
       doc =
           "Representation of a definition of an attribute. Use the <a href=\"attr.html\">attr</a> "
               + "module to create an Attribute. They are only for use with a "

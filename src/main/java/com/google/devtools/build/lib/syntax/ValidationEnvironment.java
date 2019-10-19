@@ -16,29 +16,36 @@ package com.google.devtools.build.lib.syntax;
 
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.util.SpellChecker;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
  * A class for doing static checks on files, before evaluating them.
  *
- * <p>The behavior is affected by semantics.incompatibleStaticNameResolution(). When it is set to
- * true, we implement the semantics discussed in
+ * <p>We implement the semantics discussed in
  * https://github.com/bazelbuild/proposals/blob/master/docs/2018-06-18-name-resolution.md
  *
  * <p>When a variable is defined, it is visible in the entire block. For example, a global variable
  * is visible in the entire file; a variable in a function is visible in the entire function block
  * (even on the lines before its first assignment).
  *
- * <p>The legacy behavior is kept during the transition and will be removed in the future. In the
- * legacy behavior, there is no clear separation between the first pass (collect all definitions)
- * and the second pass (ensure the symbols can be resolved).
+ * <p>Validation is a mutation of the syntax tree, as it attaches scope information to Identifier
+ * nodes. (In the future, it will attach additional information to functions to support lexical
+ * scope, and even compilation of the trees to bytecode.) Validation errors are reported in the
+ * analogous manner to scan/parse errors: for a StarlarkFile, they are appended to {@code
+ * StarlarkFile.errors}; for an expression they will be [TODO(adonovan): implement] reported by an
+ * SyntaxError exception. It is legal to validate a file that already contains scan/parse errors,
+ * though it may lead to secondary validation errors.
  */
-public final class ValidationEnvironment extends SyntaxTreeVisitor {
+// TODO(adonovan): make this class private. Call it through the EvalUtils facade.
+public final class ValidationEnvironment extends NodeVisitor {
 
   enum Scope {
     /** Symbols defined inside a function or a comprehension. */
@@ -54,14 +61,32 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
       this.qualifier = qualifier;
     }
 
-    public String getQualifier() {
+    String getQualifier() {
       return qualifier;
     }
   }
 
+  /**
+   * Module is a static abstraction of a Starlark module. It describes the set of variable names for
+   * use during name resolution.
+   */
+  public interface Module {
+    /** Returns the set of names defined by this module. The caller must not modify the set. */
+    Set<String> getNames();
+
+    /**
+     * Returns (optionally) a more specific error for an undeclared name than the generic message.
+     * This hook allows the module to implement "semantics-restricted" names without any knowledge
+     * in this file.
+     */
+    @Nullable
+    String getUndeclaredNameError(StarlarkSemantics semantics, String name);
+  }
+
+  private static final Identifier PREDECLARED = new Identifier("");
+
   private static class Block {
-    private final Set<String> variables = new HashSet<>();
-    private final Set<String> readOnlyVariables = new HashSet<>();
+    private final Map<String, Identifier> variables = new HashMap<>();
     private final Scope scope;
     @Nullable private final Block parent;
 
@@ -71,49 +96,40 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
     }
   }
 
-  /**
-   * We use an unchecked exception around EvalException because the SyntaxTreeVisitor doesn't let
-   * visit methods throw checked exceptions. We might change that later.
-   */
-  private static class ValidationException extends RuntimeException {
-    EvalException exception;
-
-    ValidationException(EvalException e) {
-      exception = e;
-    }
-
-    ValidationException(Location location, String message, String url) {
-      exception = new EvalException(location, message, url);
-    }
-
-    ValidationException(Location location, String message) {
-      exception = new EvalException(location, message);
-    }
-  }
-
-  private final SkylarkSemantics semantics;
+  private final List<Event> errors;
+  private final StarlarkSemantics semantics;
+  private final Module module;
   private Block block;
   private int loopCount;
 
-  /** Create a ValidationEnvironment for a given global Environment (containing builtins). */
-  ValidationEnvironment(Environment env) {
-    Preconditions.checkArgument(env.isGlobal());
-    semantics = env.getSemantics();
+  // In BUILD files, we have a slightly different behavior for legacy reasons.
+  // TODO(adonovan): eliminate isBuildFile. It is necessary because the prelude is implemented
+  // by inserting shared Statements, which must not be mutated, into each StarlarkFile.
+  // Instead, we should implement the prelude by executing it like a .bzl module
+  // and putting its members in the initial environment of the StarlarkFile.
+  // In the meantime, let's move this flag into Module (GlobalFrame).
+  private final boolean isBuildFile;
+
+  private ValidationEnvironment(
+      List<Event> errors, Module module, StarlarkSemantics semantics, boolean isBuildFile) {
+    this.errors = errors;
+    this.module = module;
+    this.semantics = semantics;
+    this.isBuildFile = isBuildFile;
     block = new Block(Scope.Universe, null);
-    Set<String> builtinVariables = env.getVariableNames();
-    block.variables.addAll(builtinVariables);
-    if (!semantics.incompatibleStaticNameResolution()) {
-      block.readOnlyVariables.addAll(builtinVariables);
+    for (String name : module.getNames()) {
+      block.variables.put(name, PREDECLARED);
     }
+  }
+
+  void addError(Location loc, String message) {
+    errors.add(Event.error(loc, message));
   }
 
   /**
    * First pass: add all definitions to the current block. This is done because symbols are
    * sometimes used before their definition point (e.g. a functions are not necessarily declared in
    * order).
-   *
-   * <p>The old behavior (when incompatibleStaticNameResolution is false) doesn't have this first
-   * pass.
    */
   private void collectDefinitions(Iterable<Statement> stmts) {
     for (Statement stmt : stmts) {
@@ -124,113 +140,166 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
   private void collectDefinitions(Statement stmt) {
     switch (stmt.kind()) {
       case ASSIGNMENT:
-        collectDefinitions(((AssignmentStatement) stmt).getLValue());
+        collectDefinitions(((AssignmentStatement) stmt).getLHS());
         break;
       case AUGMENTED_ASSIGNMENT:
-        collectDefinitions(((AugmentedAssignmentStatement) stmt).getLValue());
+        collectDefinitions(((AugmentedAssignmentStatement) stmt).getLHS());
         break;
       case IF:
         IfStatement ifStmt = (IfStatement) stmt;
-        for (IfStatement.ConditionalStatements cond : ifStmt.getThenBlocks()) {
-          collectDefinitions(cond.getStatements());
+        collectDefinitions(ifStmt.getThenBlock());
+        if (ifStmt.getElseBlock() != null) {
+          collectDefinitions(ifStmt.getElseBlock());
         }
-        collectDefinitions(ifStmt.getElseBlock());
         break;
       case FOR:
         ForStatement forStmt = (ForStatement) stmt;
-        collectDefinitions(forStmt.getVariable());
+        collectDefinitions(forStmt.getLHS());
         collectDefinitions(forStmt.getBlock());
         break;
       case FUNCTION_DEF:
-        Identifier fctName = ((FunctionDefStatement) stmt).getIdentifier();
-        declare(fctName.getName(), fctName.getLocation());
+        DefStatement def = (DefStatement) stmt;
+        declare(def.getIdentifier());
         break;
       case LOAD:
-        for (Identifier id : ((LoadStatement) stmt).getSymbols()) {
-          declare(id.getName(), id.getLocation());
+        LoadStatement load = (LoadStatement) stmt;
+
+        // The global reassignment check is not yet enabled for BUILD files,
+        // but we apply it to load statements as a special case.
+        // Because (for now) its error message is better than the general
+        // message emitted by 'declare', we'll apply it to non-BUILD files too.
+        Set<String> names = new HashSet<>();
+        for (LoadStatement.Binding b : load.getBindings()) {
+          if (!names.add(b.getLocalName().getName())) {
+            addError(
+                b.getLocalName().getLocation(),
+                String.format(
+                    "load statement defines '%s' more than once", b.getLocalName().getName()));
+          }
+        }
+
+        for (LoadStatement.Binding b : load.getBindings()) {
+          declare(b.getLocalName());
         }
         break;
-      case CONDITIONAL:
       case EXPRESSION:
       case FLOW:
-      case PASS:
       case RETURN:
         // nothing to declare
     }
   }
 
-  private void collectDefinitions(LValue left) {
-    for (Identifier id : left.boundIdentifiers()) {
-      declare(id.getName(), id.getLocation());
+  private void collectDefinitions(Expression lhs) {
+    for (Identifier id : Identifier.boundIdentifiers(lhs)) {
+      declare(id);
     }
   }
 
-  @Override
-  public void visit(LoadStatement node) {
-    if (semantics.incompatibleStaticNameResolution()) {
-      return;
-    }
-
-    for (Identifier symbol : node.getSymbols()) {
-      declare(symbol.getName(), node.getLocation());
+  private void assign(Expression lhs) {
+    if (lhs instanceof Identifier) {
+      if (!isBuildFile) {
+        ((Identifier) lhs).setScope(block.scope);
+      }
+      // no-op
+    } else if (lhs instanceof IndexExpression) {
+      visit(lhs);
+    } else if (lhs instanceof ListExpression) {
+      for (Expression elem : ((ListExpression) lhs).getElements()) {
+        assign(elem);
+      }
+    } else {
+      addError(lhs.getLocation(), "cannot assign to '" + lhs + "'");
     }
   }
 
   @Override
   public void visit(Identifier node) {
-    @Nullable Block b = blockThatDefines(node.getName());
+    String name = node.getName();
+    @Nullable Block b = blockThatDefines(name);
     if (b == null) {
-      throw new ValidationException(node.createInvalidIdentifierException(getAllSymbols()));
+      // The identifier might not exist because it was restricted (hidden) by the current semantics.
+      // If this is the case, output a more helpful error message than 'not found'.
+      String error = module.getUndeclaredNameError(semantics, name);
+      if (error == null) {
+        // generic error
+        error = createInvalidIdentifierException(node.getName(), getAllSymbols());
+      }
+      addError(node.getLocation(), error);
+      return;
     }
-    if (semantics.incompatibleStaticNameResolution()) {
-      // The scoping information is reliable only with the new behavior.
+    // TODO(laurentlb): In BUILD files, calling setScope will throw an exception. This happens
+    // because some AST nodes are shared across multipe ASTs (due to the prelude file).
+    if (!isBuildFile) {
       node.setScope(b.scope);
     }
   }
 
-  private void validateLValue(Location loc, Expression expr) {
-    if (expr instanceof Identifier) {
-      if (!semantics.incompatibleStaticNameResolution()) {
-        declare(((Identifier) expr).getName(), loc);
-      }
-    } else if (expr instanceof IndexExpression) {
-      visit(expr);
-    } else if (expr instanceof ListLiteral) {
-      for (Expression e : ((ListLiteral) expr).getElements()) {
-        validateLValue(loc, e);
-      }
-    } else {
-      throw new ValidationException(loc, "cannot assign to '" + expr + "'");
+  // This is exposed to Eval until validation becomes a precondition for evaluation.
+  static String createInvalidIdentifierException(String name, Set<String> candidates) {
+    if (name.equals("$error$")) {
+      return "contains syntax error(s)";
     }
+
+    String error = getErrorForObsoleteThreadLocalVars(name);
+    if (error != null) {
+      return error;
+    }
+
+    String suggestion = SpellChecker.didYouMean(name, candidates);
+    return "name '" + name + "' is not defined" + suggestion;
   }
 
-  @Override
-  public void visit(LValue node) {
-    validateLValue(node.getLocation(), node.getExpression());
+  static String getErrorForObsoleteThreadLocalVars(String name) {
+    if (name.equals("PACKAGE_NAME")) {
+      return "The value 'PACKAGE_NAME' has been removed in favor of 'package_name()', "
+          + "please use the latter ("
+          + "https://docs.bazel.build/versions/master/skylark/lib/native.html#package_name). ";
+    }
+    if (name.equals("REPOSITORY_NAME")) {
+      return "The value 'REPOSITORY_NAME' has been removed in favor of 'repository_name()', please"
+          + " use the latter ("
+          + "https://docs.bazel.build/versions/master/skylark/lib/native.html#repository_name).";
+    }
+    return null;
   }
 
   @Override
   public void visit(ReturnStatement node) {
     if (block.scope != Scope.Local) {
-      throw new ValidationException(
-          node.getLocation(), "return statements must be inside a function");
+      addError(node.getLocation(), "return statements must be inside a function");
     }
     super.visit(node);
   }
 
   @Override
   public void visit(ForStatement node) {
+    if (block.scope != Scope.Local) {
+      addError(
+          node.getLocation(),
+          "for loops are not allowed at the top level. You may move it inside a function "
+              + "or use a comprehension, [f(x) for x in sequence]");
+    }
     loopCount++;
-    super.visit(node);
+    visit(node.getCollection());
+    assign(node.getLHS());
+    visitBlock(node.getBlock());
     Preconditions.checkState(loopCount > 0);
     loopCount--;
   }
 
   @Override
+  public void visit(LoadStatement node) {
+    if (block.scope == Scope.Local) {
+      addError(node.getLocation(), "load statement not at top level");
+    }
+    super.visit(node);
+  }
+
+  @Override
   public void visit(FlowStatement node) {
-    if (loopCount <= 0) {
-      throw new ValidationException(
-          node.getLocation(), node.getKind().getName() + " statement must be inside a for loop");
+    if (node.getKind() != TokenKind.PASS && loopCount <= 0) {
+      addError(
+          node.getLocation(), node.getKind().toString() + " statement must be inside a for loop");
     }
     super.visit(node);
   }
@@ -242,35 +311,48 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
   }
 
   @Override
-  public void visit(AbstractComprehension node) {
+  public void visit(Comprehension node) {
     openBlock(Scope.Local);
-    if (semantics.incompatibleStaticNameResolution()) {
-      for (AbstractComprehension.Clause clause : node.getClauses()) {
-        if (clause.getLValue() != null) {
-          collectDefinitions(clause.getLValue());
-        }
+    for (Comprehension.Clause clause : node.getClauses()) {
+      if (clause instanceof Comprehension.For) {
+        Comprehension.For forClause = (Comprehension.For) clause;
+        collectDefinitions(forClause.getVars());
       }
     }
-    super.visit(node);
+    // TODO(adonovan): opt: combine loops
+    for (Comprehension.Clause clause : node.getClauses()) {
+      if (clause instanceof Comprehension.For) {
+        Comprehension.For forClause = (Comprehension.For) clause;
+        visit(forClause.getIterable());
+        assign(forClause.getVars());
+      } else {
+        Comprehension.If ifClause = (Comprehension.If) clause;
+        visit(ifClause.getCondition());
+      }
+    }
+    visit(node.getBody());
     closeBlock();
   }
 
   @Override
-  public void visit(FunctionDefStatement node) {
-    for (Parameter<Expression, Expression> param : node.getParameters()) {
-      if (param.isOptional()) {
+  public void visit(DefStatement node) {
+    if (block.scope == Scope.Local) {
+      addError(
+          node.getLocation(),
+          "nested functions are not allowed. Move the function to the top level.");
+    }
+    for (Parameter param : node.getParameters()) {
+      if (param instanceof Parameter.Optional) {
         visit(param.getDefaultValue());
       }
     }
     openBlock(Scope.Local);
-    for (Parameter<Expression, Expression> param : node.getParameters()) {
-      if (param.hasName()) {
-        declare(param.getName(), param.getLocation());
+    for (Parameter param : node.getParameters()) {
+      if (param.getIdentifier() != null) {
+        declare(param.getIdentifier());
       }
     }
-    if (semantics.incompatibleStaticNameResolution()) {
-      collectDefinitions(node.getStatements());
-    }
+    collectDefinitions(node.getStatements());
     visitAll(node.getStatements());
     closeBlock();
   }
@@ -278,7 +360,7 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
   @Override
   public void visit(IfStatement node) {
     if (block.scope != Scope.Local) {
-      throw new ValidationException(
+      addError(
           node.getLocation(),
           "if statements are not allowed at the top level. You may move it inside a function "
               + "or use an if expression (x if condition else y).");
@@ -287,43 +369,45 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
   }
 
   @Override
+  public void visit(AssignmentStatement node) {
+    visit(node.getRHS());
+    assign(node.getLHS());
+  }
+
+  @Override
   public void visit(AugmentedAssignmentStatement node) {
-    if (node.getLValue().getExpression() instanceof ListLiteral) {
-      throw new ValidationException(
+    if (node.getLHS() instanceof ListExpression) {
+      addError(
           node.getLocation(), "cannot perform augmented assignment on a list or tuple expression");
     }
-    // Other bad cases are handled when visiting the LValue node.
-    super.visit(node);
+    // Other bad cases are handled in assign.
+    visit(node.getRHS());
+    assign(node.getLHS());
   }
 
   /** Declare a variable and add it to the environment. */
-  private void declare(String varname, Location location) {
-    boolean readOnlyViolation = false;
-    if (block.readOnlyVariables.contains(varname)) {
-      readOnlyViolation = true;
+  private void declare(Identifier id) {
+    Identifier prev = block.variables.putIfAbsent(id.getName(), id);
+
+    // Symbols defined in the module scope cannot be reassigned.
+    // TODO(laurentlb): Forbid reassignment in BUILD files too.
+    if (prev != null && block.scope == Scope.Module && !isBuildFile) {
+      addError(
+          id.getLocation(),
+          String.format(
+              "cannot reassign global '%s' (read more at"
+                  + " https://bazel.build/versions/master/docs/skylark/errors/read-only-variable.html)",
+              id.getName()));
+      if (prev != PREDECLARED) {
+        addError(prev.getLocation(), String.format("'%s' previously declared here", id.getName()));
+      }
     }
-    if (block.scope == Scope.Module && block.parent.readOnlyVariables.contains(varname)) {
-      // TODO(laurentlb): This behavior is buggy. Symbols in the module scope should shadow symbols
-      // from the universe. https://github.com/bazelbuild/bazel/issues/5637
-      readOnlyViolation = true;
-    }
-    if (readOnlyViolation) {
-      throw new ValidationException(
-          location,
-          String.format("Variable %s is read only", varname),
-          "https://bazel.build/versions/master/docs/skylark/errors/read-only-variable.html");
-    }
-    if (block.scope == Scope.Module) {
-      // Symbols defined in the module scope cannot be reassigned.
-      block.readOnlyVariables.add(varname);
-    }
-    block.variables.add(varname);
   }
 
   /** Returns the nearest Block that defines a symbol. */
   private Block blockThatDefines(String varname) {
     for (Block b = block; b != null; b = b.parent) {
-      if (b.variables.contains(varname)) {
+      if (b.variables.containsKey(varname)) {
         return b;
       }
     }
@@ -334,13 +418,13 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
   private Set<String> getAllSymbols() {
     Set<String> all = new HashSet<>();
     for (Block b = block; b != null; b = b.parent) {
-      all.addAll(b.variables);
+      all.addAll(b.variables.keySet());
     }
     return all;
   }
 
-  /** Throws ValidationException if a load() appears after another kind of statement. */
-  private static void checkLoadAfterStatement(List<Statement> statements) {
+  // Report an error if a load statement appears after another kind of statement.
+  private void checkLoadAfterStatement(List<Statement> statements) {
     Location firstStatement = null;
 
     for (Statement statement : statements) {
@@ -354,7 +438,7 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
         if (firstStatement == null) {
           continue;
         }
-        throw new ValidationException(
+        addError(
             statement.getLocation(),
             "load() statements must be called before any other statement. "
                 + "First non-load() statement appears at "
@@ -369,56 +453,57 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
     }
   }
 
-  /** Validates the AST and runs static checks. */
-  private void validateAst(List<Statement> statements) {
+  private void validateToplevelStatements(List<Statement> statements) {
     // Check that load() statements are on top.
-    if (semantics.incompatibleBzlDisallowLoadAfterStatement()) {
+    if (!isBuildFile && semantics.incompatibleBzlDisallowLoadAfterStatement()) {
       checkLoadAfterStatement(statements);
     }
 
     openBlock(Scope.Module);
 
-    if (semantics.incompatibleStaticNameResolution()) {
-      // Add each variable defined by statements, not including definitions that appear in
-      // sub-scopes of the given statements (function bodies and comprehensions).
-      collectDefinitions(statements);
-    } else {
-      // Legacy behavior, to be removed. Add only the functions in the environment before
-      // validating.
-      for (Statement statement : statements) {
-        if (statement instanceof FunctionDefStatement) {
-          FunctionDefStatement fct = (FunctionDefStatement) statement;
-          declare(fct.getIdentifier().getName(), fct.getLocation());
-        }
-      }
-    }
+    // Add each variable defined by statements, not including definitions that appear in
+    // sub-scopes of the given statements (function bodies and comprehensions).
+    collectDefinitions(statements);
 
     // Second pass: ensure that all symbols have been defined.
     visitAll(statements);
     closeBlock();
   }
 
-  public static void validateAst(Environment env, List<Statement> statements) throws EvalException {
-    try {
-      ValidationEnvironment venv = new ValidationEnvironment(env);
-      venv.validateAst(statements);
-      // Check that no closeBlock was forgotten.
-      Preconditions.checkState(venv.block.parent == null);
-    } catch (ValidationException e) {
-      throw e.exception;
+  /**
+   * Performs static checks, including resolution of identifiers in {@code file} in the environment
+   * defined by {@code module}. The StarlarkFile is mutated. Errors are appended to {@link
+   * StarlarkFile#errors}. {@code isBuildFile} enables Bazel's legacy mode for BUILD files in which
+   * reassignment at top-level is permitted.
+   */
+  public static void validateFile(
+      StarlarkFile file, Module module, StarlarkSemantics semantics, boolean isBuildFile) {
+    ValidationEnvironment venv =
+        new ValidationEnvironment(file.errors, module, semantics, isBuildFile);
+    if (semantics.incompatibleRestrictStringEscapes()) {
+      file.addStringEscapeEvents();
     }
+    venv.validateToplevelStatements(file.getStatements());
+    // Check that no closeBlock was forgotten.
+    Preconditions.checkState(venv.block.parent == null);
   }
 
-  public static boolean validateAst(
-      Environment env, List<Statement> statements, EventHandler eventHandler) {
-    try {
-      validateAst(env, statements);
-      return true;
-    } catch (EvalException e) {
-      if (!e.isDueToIncompleteAST()) {
-        eventHandler.handle(Event.error(e.getLocation(), e.getMessage()));
-      }
-      return false;
+  /**
+   * Performs static checks, including resolution of identifiers in {@code expr} in the environment
+   * defined by {@code module}. This operation mutates the Expression.
+   */
+  public static void validateExpr(Expression expr, Module module, StarlarkSemantics semantics)
+      throws SyntaxError {
+    List<Event> errors = new ArrayList<>();
+    ValidationEnvironment venv =
+        new ValidationEnvironment(errors, module, semantics, /*isBuildFile=*/ false);
+
+    venv.openBlock(Scope.Local); // needed?
+    venv.visit(expr);
+    venv.closeBlock();
+
+    if (!errors.isEmpty()) {
+      throw new SyntaxError(errors);
     }
   }
 
@@ -432,69 +517,4 @@ public final class ValidationEnvironment extends SyntaxTreeVisitor {
     block = Preconditions.checkNotNull(block.parent);
   }
 
-  /**
-   * Checks that the AST is using the restricted syntax.
-   *
-   * <p>Restricted syntax is used by Bazel BUILD files. It forbids function definitions, *args, and
-   * **kwargs. This creates a better separation between code and data.
-   */
-  public static boolean checkBuildSyntax(
-      List<Statement> statements, final EventHandler eventHandler) {
-    // Wrap the boolean inside an array so that the inner class can modify it.
-    final boolean[] success = new boolean[] {true};
-    // TODO(laurentlb): Merge with the visitor above when possible (i.e. when BUILD files use it).
-    SyntaxTreeVisitor checker =
-        new SyntaxTreeVisitor() {
-
-          private void error(ASTNode node, String message) {
-            eventHandler.handle(Event.error(node.getLocation(), message));
-            success[0] = false;
-          }
-
-          @Override
-          public void visit(FunctionDefStatement node) {
-            error(
-                node,
-                "function definitions are not allowed in BUILD files. You may move the function to "
-                    + "a .bzl file and load it.");
-          }
-
-          @Override
-          public void visit(ForStatement node) {
-            error(
-                node,
-                "for statements are not allowed in BUILD files. You may inline the loop, move it "
-                    + "to a function definition (in a .bzl file), or as a last resort use a list "
-                    + "comprehension.");
-          }
-
-          @Override
-          public void visit(IfStatement node) {
-            error(
-                node,
-                "if statements are not allowed in BUILD files. You may move conditional logic to a "
-                    + "function definition (in a .bzl file), or for simple cases use an if "
-                    + "expression.");
-          }
-
-          @Override
-          public void visit(FuncallExpression node) {
-            for (Argument.Passed arg : node.getArguments()) {
-              if (arg.isStarStar()) {
-                error(
-                    node,
-                    "**kwargs arguments are not allowed in BUILD files. Pass the arguments in "
-                        + "explicitly.");
-              } else if (arg.isStar()) {
-                error(
-                    node,
-                    "*args arguments are not allowed in BUILD files. Pass the arguments in "
-                        + "explicitly.");
-              }
-            }
-          }
-        };
-    checker.visitAll(statements);
-    return success[0];
-  }
 }

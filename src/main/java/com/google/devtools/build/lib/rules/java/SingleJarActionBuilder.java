@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.rules.java;
 import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.ActionRegistry;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -31,6 +30,8 @@ import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorArg;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import java.util.function.Consumer;
@@ -43,11 +44,9 @@ import java.util.function.Consumer;
 @Immutable
 public final class SingleJarActionBuilder {
 
-  private static final ImmutableList<String> SOURCE_JAR_COMMAND_LINE_ARGS = ImmutableList.of(
-      "--compression",
-      "--normalize",
-      "--exclude_build_data",
-      "--warn_duplicate_resources");
+  private static final ImmutableList<String> SOURCE_JAR_COMMAND_LINE_ARGS =
+      ImmutableList.of(
+          "--compression", "--normalize", "--exclude_build_data", "--warn_duplicate_resources");
 
   /** Constructs the base spawn for a singlejar action. */
   private static SpawnAction.Builder singleJarActionBuilder(
@@ -60,10 +59,7 @@ public final class SingleJarActionBuilder {
     if (singleJar.getFilename().endsWith(".jar")) {
       builder
           .addTransitiveInputs(hostJavabase.javaBaseInputsMiddleman())
-          .setJarExecutable(
-              hostJavabase.javaBinaryExecPath(),
-              singleJar,
-              provider.getJvmOptions())
+          .setJarExecutable(hostJavabase.javaBinaryExecPath(), singleJar, provider.getJvmOptions())
           .setExecutionInfo(ExecutionRequirements.WORKER_MODE_ENABLED);
     } else {
       builder.setExecutable(singleJar);
@@ -81,7 +77,7 @@ public final class SingleJarActionBuilder {
   public static void createSourceJarAction(
       RuleContext ruleContext,
       JavaSemantics semantics,
-      ImmutableCollection<Artifact> resources,
+      NestedSet<Artifact> resources,
       NestedSet<Artifact> resourceJars,
       Artifact outputJar) {
     createSourceJarAction(
@@ -110,7 +106,7 @@ public final class SingleJarActionBuilder {
       ActionRegistry actionRegistry,
       ActionConstructionContext actionConstructionContext,
       JavaSemantics semantics,
-      ImmutableCollection<Artifact> resources,
+      NestedSet<Artifact> resources,
       NestedSet<Artifact> resourceJars,
       Artifact outputJar,
       JavaToolchainProvider toolchainProvider,
@@ -120,8 +116,8 @@ public final class SingleJarActionBuilder {
     if (!resources.isEmpty()) {
       requireNonNull(semantics);
     }
-    SpawnAction.Builder builder = singleJarActionBuilder(
-        toolchainProvider, hostJavabase)
+    SpawnAction.Builder builder =
+        singleJarActionBuilder(toolchainProvider, hostJavabase)
             .addOutput(outputJar)
             .addInputs(resources)
             .addTransitiveInputs(resourceJars)
@@ -152,7 +148,10 @@ public final class SingleJarActionBuilder {
             .addInputs(jars)
             .addCommandLine(
                 sourceJarCommandLine(
-                    output, /* semantics= */ null, /* resources= */ ImmutableList.of(), jars),
+                    output,
+                    /* semantics= */ null,
+                    /* resources= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
+                    jars),
                 ParamFileInfo.builder(ParameterFileType.SHELL_QUOTED).setUseAlways(true).build())
             .setProgressMessage("Building singlejar jar %s", output.prettyPrint())
             .setMnemonic("JavaSingleJar");
@@ -162,7 +161,7 @@ public final class SingleJarActionBuilder {
   private static CommandLine sourceJarCommandLine(
       Artifact outputJar,
       JavaSemantics semantics,
-      ImmutableCollection<Artifact> resources,
+      NestedSet<Artifact> resources,
       NestedSet<Artifact> resourceJars) {
     CustomCommandLine.Builder args = CustomCommandLine.builder();
     args.addExecPath("--output", outputJar);
@@ -205,7 +204,7 @@ public final class SingleJarActionBuilder {
       if (this == o) {
         return true;
       }
-      if (o == null || getClass() != o.getClass()) {
+      if (!(o instanceof ResourceArgMapFn)) {
         return false;
       }
       ResourceArgMapFn that = (ResourceArgMapFn) o;
@@ -218,4 +217,3 @@ public final class SingleJarActionBuilder {
     }
   }
 }
-

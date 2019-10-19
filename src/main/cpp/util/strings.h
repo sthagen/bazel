@@ -107,15 +107,25 @@ void ToLower(std::string *str);
 
 std::string AsLower(const std::string &str);
 
-// Convert a wchar_t string to a char string. Useful when consuming results of
-// widechar Windows API functions.
-std::unique_ptr<char[]> WstringToCstring(const wchar_t *input);
-std::string WstringToString(const std::wstring &input);
+#if defined(_WIN32) || defined(__CYGWIN__)
+// Convert UTF-16 string to ASCII (using the Active Code Page).
+bool WcsToAcp(const std::wstring &input, std::string *output,
+              uint32_t *error = nullptr);
 
-// Convert a char string to a wchar_t string. Useful when passing arguments to
-// widechar Windows API functions.
-std::unique_ptr<wchar_t[]> CstringToWstring(const char *input);
+// Convert UTF-16 string to UTF-8.
+bool WcsToUtf8(const std::wstring &input, std::string *output,
+               uint32_t *error = nullptr);
+
+// Convert UTF-8 string to UTF-16.
+bool Utf8ToWcs(const std::string &input, std::wstring *output,
+               uint32_t *error = nullptr);
+
+// Deprecated. Use WcsToAcp or WcsToUtf8.
+std::string WstringToCstring(const std::wstring &input);
+
+// Deprecated. Use AcpToWcs or Utf8ToWcs.
 std::wstring CstringToWstring(const std::string &input);
+#endif  // defined(_WIN32) || defined(__CYGWIN__)
 
 }  // namespace blaze_util
 

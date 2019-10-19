@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.remote.logging;
 
 import build.bazel.remote.execution.v2.ActionCacheGrpc;
+import build.bazel.remote.execution.v2.CapabilitiesGrpc;
 import build.bazel.remote.execution.v2.ContentAddressableStorageGrpc;
 import build.bazel.remote.execution.v2.ExecutionGrpc;
 import build.bazel.remote.execution.v2.RequestMetadata;
@@ -62,12 +63,16 @@ public class LoggingInterceptor implements ClientInterceptor {
       return new WaitExecutionHandler();
     } else if (method == ActionCacheGrpc.getGetActionResultMethod()) {
       return new GetActionResultHandler();
+    } else if (method == ActionCacheGrpc.getUpdateActionResultMethod()) {
+      return new UpdateActionResultHandler();
     } else if (method == ContentAddressableStorageGrpc.getFindMissingBlobsMethod()) {
       return new FindMissingBlobsHandler();
     } else if (method == ByteStreamGrpc.getReadMethod()) {
       return new ReadHandler();
     } else if (method == ByteStreamGrpc.getWriteMethod()) {
       return new WriteHandler();
+    } else if (method == CapabilitiesGrpc.getGetCapabilitiesMethod()) {
+      return new GetCapabilitiesHandler();
     }
     return null;
   }

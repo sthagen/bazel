@@ -21,12 +21,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.CompletionContext;
+import com.google.devtools.build.lib.actions.CompletionContext.ArtifactReceiver;
 import com.google.devtools.build.lib.actions.EventReportingArtifacts;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactHelper.ArtifactsInOutputGroup;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
-import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
 import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
@@ -37,6 +38,7 @@ import com.google.devtools.build.lib.buildeventstream.BuildEventId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.File;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.OutputGroup;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.TargetComplete;
 import com.google.devtools.build.lib.buildeventstream.BuildEventWithConfiguration;
 import com.google.devtools.build.lib.buildeventstream.BuildEventWithOrderConstraint;
 import com.google.devtools.build.lib.buildeventstream.GenericBuildEvent;
@@ -50,11 +52,12 @@ import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.TestTimeout;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
-import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyValue;
 import java.util.Collection;
 import java.util.function.Function;
@@ -103,7 +106,7 @@ public final class TargetCompleteEvent
   private final ConfiguredTargetKey configuredTargetKey;
   private final NestedSet<Cause> rootCauses;
   private final ImmutableList<BuildEventId> postedAfter;
-  private final ArtifactPathResolver pathResolver;
+  private final CompletionContext completionContext;
   private final NestedSet<ArtifactsInOutputGroup> outputs;
   private final NestedSet<Artifact> baselineCoverageArtifacts;
   private final Label aliasLabel;
@@ -118,7 +121,7 @@ public final class TargetCompleteEvent
   private TargetCompleteEvent(
       ConfiguredTargetAndData targetAndData,
       NestedSet<Cause> rootCauses,
-      ArtifactPathResolver pathResolver,
+      CompletionContext completionContext,
       NestedSet<ArtifactsInOutputGroup> outputs,
       boolean isTest) {
     this.rootCauses =
@@ -140,7 +143,7 @@ public final class TargetCompleteEvent
       postedAfterBuilder.add(BuildEventId.fromCause(cause));
     }
     this.postedAfter = postedAfterBuilder.build();
-    this.pathResolver = pathResolver;
+    this.completionContext = completionContext;
     this.outputs = outputs;
     this.isTest = isTest;
     this.testTimeoutSeconds = isTest ? getTestTimeoutSeconds(targetAndData) : null;
@@ -152,8 +155,8 @@ public final class TargetCompleteEvent
         isTest
             ? targetAndData.getConfiguredTarget().getProvider(TestProvider.class).getTestParams()
             : null;
-    InstrumentedFilesProvider instrumentedFilesProvider =
-        targetAndData.getConfiguredTarget().getProvider(InstrumentedFilesProvider.class);
+    InstrumentedFilesInfo instrumentedFilesProvider =
+        targetAndData.getConfiguredTarget().get(InstrumentedFilesInfo.SKYLARK_CONSTRUCTOR);
     if (instrumentedFilesProvider == null) {
       this.baselineCoverageArtifacts = null;
     } else {
@@ -173,25 +176,32 @@ public final class TargetCompleteEvent
           ConfiguredAttributeMapper.of(
               (Rule) targetAndData.getTarget(),
               ((RuleConfiguredTarget) targetAndData.getConfiguredTarget()).getConfigConditions());
-      // Every rule (implicitly) has a "tags" attribute.
-      this.tags = attributes.get("tags", Type.STRING_LIST);
+      // Every build rule (implicitly) has a "tags" attribute. However other rule configured targets
+      // are repository rules (which don't have a tags attribute); morevoer, thanks to the virtual
+      // "external" package, they are user visible as targets and can create a completed event as
+      // well.
+      if (attributes.has("tags", Type.STRING_LIST)) {
+        this.tags = attributes.get("tags", Type.STRING_LIST);
+      } else {
+        this.tags = ImmutableList.of();
+      }
     }
   }
 
   /** Construct a successful target completion event. */
   public static TargetCompleteEvent successfulBuild(
       ConfiguredTargetAndData ct,
-      ArtifactPathResolver pathResolver,
+      CompletionContext completionContext,
       NestedSet<ArtifactsInOutputGroup> outputs) {
-    return new TargetCompleteEvent(ct, null, pathResolver, outputs, false);
+    return new TargetCompleteEvent(ct, null, completionContext, outputs, false);
   }
 
   /** Construct a successful target completion event for a target that will be tested. */
   public static TargetCompleteEvent successfulBuildSchedulingTest(
       ConfiguredTargetAndData ct,
-      ArtifactPathResolver pathResolver,
+      CompletionContext completionContext,
       NestedSet<ArtifactsInOutputGroup> outputs) {
-    return new TargetCompleteEvent(ct, null, pathResolver, outputs, true);
+    return new TargetCompleteEvent(ct, null, completionContext, outputs, true);
   }
 
   /**
@@ -203,7 +213,7 @@ public final class TargetCompleteEvent
     return new TargetCompleteEvent(
         ct,
         rootCauses,
-        ArtifactPathResolver.IDENTITY,
+        CompletionContext.FAILED_COMPLETION_CTX,
         NestedSetBuilder.emptySet(Order.STABLE_ORDER),
         false);
   }
@@ -273,27 +283,72 @@ public final class TargetCompleteEvent
   // TODO(aehlig): remove as soon as we managed to get rid of the deprecated "important_output"
   // field.
   private static void addImportantOutputs(
-      ArtifactPathResolver pathResolver,
-      BuildEventStreamProtos.TargetComplete.Builder builder,
+      CompletionContext completionContext,
+      TargetComplete.Builder builder,
       BuildEventContext converters,
       Iterable<Artifact> artifacts) {
     addImportantOutputs(
-        pathResolver, builder, Artifact::getRootRelativePathString, converters, artifacts);
+        completionContext, builder, Artifact::getRootRelativePathString, converters, artifacts);
   }
 
   private static void addImportantOutputs(
-      ArtifactPathResolver pathResolver,
+      CompletionContext completionContext,
       BuildEventStreamProtos.TargetComplete.Builder builder,
       Function<Artifact, String> artifactNameFunction,
       BuildEventContext converters,
       Iterable<Artifact> artifacts) {
-    for (Artifact artifact : artifacts) {
-      String name = artifactNameFunction.apply(artifact);
-      String uri = converters.pathConverter().apply(pathResolver.toPath(artifact));
-      if (uri != null) {
-        builder.addImportantOutput(File.newBuilder().setName(name).setUri(uri).build());
-      }
+    completionContext.visitArtifacts(
+        artifacts,
+        new ArtifactReceiver() {
+          @Override
+          public void accept(Artifact artifact) {
+            String name = artifactNameFunction.apply(artifact);
+            String uri =
+                converters.pathConverter().apply(completionContext.pathResolver().toPath(artifact));
+            if (uri != null) {
+              builder.addImportantOutput(newFileFromArtifact(name, artifact).setUri(uri).build());
+            }
+          }
+
+          @Override
+          public void acceptFilesetMapping(
+              Artifact fileset, PathFragment relativePath, Path targetFile) {
+            String name = artifactNameFunction.apply(fileset);
+            name = PathFragment.create(name).getRelative(relativePath).getPathString();
+            String uri =
+                converters
+                    .pathConverter()
+                    .apply(completionContext.pathResolver().convertPath(targetFile));
+            if (uri != null) {
+              builder.addImportantOutput(
+                  newFileFromArtifact(name, fileset, relativePath).setUri(uri).build());
+            }
+          }
+        });
+  }
+
+  public static BuildEventStreamProtos.File.Builder newFileFromArtifact(
+      String name, Artifact artifact) {
+    return newFileFromArtifact(name, artifact, PathFragment.EMPTY_FRAGMENT);
+  }
+
+  public static BuildEventStreamProtos.File.Builder newFileFromArtifact(
+      String name, Artifact artifact, PathFragment relPath) {
+    File.Builder builder =
+        File.newBuilder()
+            .setName(
+                name == null
+                    ? artifact.getRootRelativePath().getRelative(relPath).getPathString()
+                    : name);
+    if (artifact.getRoot().getComponents() != null) {
+      builder.addAllPathPrefix(
+          Iterables.transform(artifact.getRoot().getComponents(), PathFragment::getPathString));
     }
+    return builder;
+  }
+
+  public static BuildEventStreamProtos.File.Builder newFileFromArtifact(Artifact artifact) {
+    return newFileFromArtifact(/* name= */ null, artifact);
   }
 
   @Override
@@ -301,20 +356,32 @@ public final class TargetCompleteEvent
     ImmutableList.Builder<LocalFile> builder = ImmutableList.builder();
     for (ArtifactsInOutputGroup group : outputs) {
       if (group.areImportant()) {
-        for (Artifact artifact : group.getArtifacts()) {
-          builder.add(
-              new LocalFile(
-                  pathResolver.toPath(artifact),
-                  artifact.isSourceArtifact() ? LocalFileType.SOURCE : LocalFileType.OUTPUT));
-        }
+        completionContext.visitArtifacts(
+            group.getArtifacts(),
+            new ArtifactReceiver() {
+              @Override
+              public void accept(Artifact artifact) {
+                builder.add(
+                    new LocalFile(
+                        completionContext.pathResolver().toPath(artifact), LocalFileType.OUTPUT));
+              }
+
+              @Override
+              public void acceptFilesetMapping(
+                  Artifact fileset, PathFragment name, Path targetFile) {
+                builder.add(
+                    new LocalFile(
+                        completionContext.pathResolver().convertPath(targetFile),
+                        LocalFileType.OUTPUT));
+              }
+            });
       }
     }
     if (baselineCoverageArtifacts != null) {
       for (Artifact artifact : baselineCoverageArtifacts) {
         builder.add(
             new LocalFile(
-                pathResolver.toPath(artifact),
-                artifact.isSourceArtifact() ? LocalFileType.SOURCE : LocalFileType.OUTPUT));
+                completionContext.pathResolver().toPath(artifact), LocalFileType.COVERAGE_OUTPUT));
       }
     }
     return builder.build();
@@ -336,10 +403,11 @@ public final class TargetCompleteEvent
     // TODO(aehlig): remove direct reporting of artifacts as soon as clients no longer
     // need it.
     if (converters.getOptions().legacyImportantOutputs) {
-      addImportantOutputs(pathResolver, builder, converters, getLegacyFilteredImportantArtifacts());
+      addImportantOutputs(
+          completionContext, builder, converters, getLegacyFilteredImportantArtifacts());
       if (baselineCoverageArtifacts != null) {
         addImportantOutputs(
-            pathResolver,
+            completionContext,
             builder,
             (artifact -> BASELINE_COVERAGE),
             converters,
@@ -360,12 +428,14 @@ public final class TargetCompleteEvent
   public ReportedArtifacts reportedArtifacts() {
     ImmutableSet.Builder<NestedSet<Artifact>> builder = ImmutableSet.builder();
     for (ArtifactsInOutputGroup artifactsInGroup : outputs) {
-      builder.add(artifactsInGroup.getArtifacts());
+      if (artifactsInGroup.areImportant()) {
+        builder.add(artifactsInGroup.getArtifacts());
+      }
     }
     if (baselineCoverageArtifacts != null) {
       builder.add(baselineCoverageArtifacts);
     }
-    return new ReportedArtifacts(builder.build(), pathResolver);
+    return new ReportedArtifacts(builder.build(), completionContext);
   }
 
   @Override
@@ -380,6 +450,9 @@ public final class TargetCompleteEvent
   private Iterable<OutputGroup> getOutputFilesByGroup(ArtifactGroupNamer namer) {
     ImmutableList.Builder<OutputGroup> groups = ImmutableList.builder();
     for (ArtifactsInOutputGroup artifactsInOutputGroup : outputs) {
+      if (!artifactsInOutputGroup.areImportant()) {
+        continue;
+      }
       OutputGroup.Builder groupBuilder = OutputGroup.newBuilder();
       groupBuilder.setName(artifactsInOutputGroup.getOutputGroup());
       groupBuilder.addFileSets(

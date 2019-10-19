@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_import", "java_library")
+
 # Description:
 #   Test data for testing dependency checking.
 package(
@@ -50,6 +52,11 @@ java_library(
 java_library(
     name = "testdata_lib_LibraryInterface",
     srcs = ["LibraryInterface.java"],
+)
+
+java_import(
+    name = "testdata_lib_LibraryModuleInfo",
+    jars = ["LibraryModuleInfo.jar"],
 )
 
 java_library(

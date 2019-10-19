@@ -18,6 +18,10 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.packages.util.MockProtoSupport;
+import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -32,8 +36,72 @@ public class CcSkylarkApiProviderTest extends BuildViewTestCase {
     return (CcSkylarkApiProvider) rule.get(CcSkylarkApiProvider.NAME);
   }
 
+  @Before
+  public void setUp() throws Exception {
+    MockProtoSupport.setupWorkspace(scratch);
+    invalidatePackages();
+  }
+
+  @Test
+  public void testDisableInCcLibrary() throws Exception {
+    useConfiguration("--incompatible_disable_legacy_cc_provider");
+    scratch.file("a/BUILD", "cc_library(name='a', srcs=['a.cc'])");
+    assertThat(getApi("//a:a")).isNull();
+  }
+
+  @Test
+  public void testDisableInCcBinary() throws Exception {
+    useConfiguration("--incompatible_disable_legacy_cc_provider");
+    scratch.file("a/BUILD", "cc_binary(name='a', srcs=['a.cc'])");
+    assertThat(getApi("//a:a")).isNull();
+  }
+
+  @Test
+  public void testDisableInCcImport() throws Exception {
+    useConfiguration("--incompatible_disable_legacy_cc_provider");
+    scratch.file("a/BUILD", "cc_import(name='a', static_library='a.a')");
+    assertThat(getApi("//a:a")).isNull();
+  }
+
+  @Test
+  public void testDisableInCcProtoLibrary() throws Exception {
+    if (!analysisMock.isThisBazel()) {
+      // Our internal version does not have this rule
+      return;
+    }
+
+    mockToolsConfig.create("/protobuf/WORKSPACE");
+    mockToolsConfig.overwrite(
+        "/protobuf/BUILD",
+        TestConstants.LOAD_PROTO_LANG_TOOLCHAIN,
+        "package(default_visibility=['//visibility:public'])",
+        "exports_files(['protoc'])",
+        "proto_lang_toolchain(",
+        "    name = 'cc_toolchain',",
+        "    command_line = '--cpp_out=$(OUT)',",
+        "    blacklisted_protos = [],",
+        ")");
+
+    String existingWorkspace =
+        new String(FileSystemUtils.readContentAsLatin1(rootDirectory.getRelative("WORKSPACE")));
+    mockToolsConfig.overwrite(
+        "WORKSPACE",
+        "local_repository(name = 'com_google_protobuf', path = '/protobuf/')",
+        existingWorkspace);
+    invalidatePackages(); // A dash of magic to re-evaluate the WORKSPACE file.
+
+    useConfiguration("--incompatible_disable_legacy_cc_provider");
+    scratch.file(
+        "a/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
+        "cc_proto_library(name='a', deps=[':p'])",
+        "proto_library(name='p', srcs=['p.proto'])");
+    assertThat(getApi("//a:a")).isNull();
+  }
+
   @Test
   public void testTransitiveHeaders() throws Exception {
+    useConfiguration("--noincompatible_disable_legacy_cc_provider");
     scratch.file(
         "pkg/BUILD",
         "cc_binary(",
@@ -46,13 +114,14 @@ public class CcSkylarkApiProviderTest extends BuildViewTestCase {
         "    srcs = ['lib.cc', 'lib.h'],",
         ")");
     assertThat(ActionsTestUtil.baseArtifactNames(getApi("//pkg:check").getTransitiveHeaders()))
-        .containsAllOf("lib.h", "bin.h");
+        .containsAtLeast("lib.h", "bin.h");
     assertThat(ActionsTestUtil.baseArtifactNames(getApi("//pkg:check_lib").getTransitiveHeaders()))
         .contains("lib.h");
   }
 
   @Test
   public void testLinkFlags() throws Exception {
+    useConfiguration("--noincompatible_disable_legacy_cc_provider");
     scratch.file(
         "pkg/BUILD",
         "cc_binary(",
@@ -79,7 +148,7 @@ public class CcSkylarkApiProviderTest extends BuildViewTestCase {
     assertThat(getApi("//pkg:check_lib").getLinkopts())
         .contains("-Wl,-M");
     assertThat(getApi("//pkg:dependent_lib").getLinkopts())
-        .containsAllOf("-lz", "-Wl,-M")
+        .containsAtLeast("-lz", "-Wl,-M")
         .inOrder();
     assertThat(getApi("//pkg:check").getLinkopts())
         .isEmpty();
@@ -89,6 +158,7 @@ public class CcSkylarkApiProviderTest extends BuildViewTestCase {
 
   @Test
   public void testLibraries() throws Exception {
+    useConfiguration("--noincompatible_disable_legacy_cc_provider");
     scratch.file(
         "pkg/BUILD",
         "cc_binary(",
@@ -114,6 +184,7 @@ public class CcSkylarkApiProviderTest extends BuildViewTestCase {
 
   @Test
   public void testCcFlags() throws Exception {
+    useConfiguration("--noincompatible_disable_legacy_cc_provider");
     scratch.file(
         "pkg/BUILD",
         "cc_binary(",

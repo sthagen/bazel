@@ -32,7 +32,6 @@ import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.test.ExecutionInfo;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.packages.InputFile;
-import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -58,7 +57,7 @@ public class AndroidDeviceTest extends BuildViewTestCase {
   private static final String REQUIRES_KVM = "requires-kvm";
 
   @Before
-  public void setup() throws IOException {
+  public void setup() throws Exception {
     scratch.file(
         "sdk/system_images/BUILD",
         "filegroup(",
@@ -71,6 +70,7 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "        'android_21/x86/userdata.img.tar.gz'",
         "    ],",
         ")");
+    setSkylarkSemanticsOptions("--experimental_google_legacy_api");
   }
 
   private FilesToRunProvider getToolDependency(String label) throws Exception {
@@ -88,7 +88,8 @@ public class AndroidDeviceTest extends BuildViewTestCase {
 
   @Test
   public void testWellFormedDevice() throws Exception {
-    ConfiguredTarget target = scratchConfiguredTarget(
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
             "tools/android/emulated_device",
             "nexus_6",
             "android_device(",
@@ -107,17 +108,22 @@ public class AndroidDeviceTest extends BuildViewTestCase {
       outputBasenames.add(outArtifact.getPath().getBaseName());
     }
 
-    assertWithMessage("Not generating expected outputs.").that(outputBasenames)
+    assertWithMessage("Not generating expected outputs.")
+        .that(outputBasenames)
         .containsExactly("nexus_6", "userdata_images.dat", "emulator-meta-data.pb");
 
     Runfiles runfiles = getDefaultRunfiles(target);
-    assertThat(ActionsTestUtil.execPaths(runfiles.getUnconditionalArtifacts())).containsAllOf(
-        getToolDependencyExecPathString("//tools/android/emulator:support_file1"),
-        getToolDependencyExecPathString("//tools/android/emulator:support_file2"));
+    assertThat(ActionsTestUtil.execPaths(runfiles.getUnconditionalArtifacts()))
+        .containsAtLeast(
+            getToolDependencyExecPathString("//tools/android/emulator:support_file1"),
+            getToolDependencyExecPathString("//tools/android/emulator:support_file2"));
 
-    SpawnAction action = (SpawnAction) actionsTestUtil().getActionForArtifactEndingWith(
-        actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
-        "nexus_6_images/userdata_images.dat");
+    SpawnAction action =
+        (SpawnAction)
+            actionsTestUtil()
+                .getActionForArtifactEndingWith(
+                    actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
+                    "nexus_6_images/userdata_images.dat");
 
     String systemImageString = Joiner.on(" ").join(SYSTEM_IMAGE_FILES);
 
@@ -165,16 +171,15 @@ public class AndroidDeviceTest extends BuildViewTestCase {
 
     assertThat(action.getExecutionInfo()).doesNotContainKey(REQUIRES_KVM);
     assertThat(ActionsTestUtil.execPaths(action.getInputs()))
-        .containsAllOf(
+        .containsAtLeast(
             getToolDependencyExecPathString("//tools/android/emulator:support_file1"),
             getToolDependencyExecPathString("//tools/android/emulator:support_file2"));
 
     assertThat(target.get(ExecutionInfo.PROVIDER.getKey())).isNotNull();
-    ExecutionInfo executionInfo =
-        target.get(ExecutionInfo.PROVIDER);
+    ExecutionInfo executionInfo = target.get(ExecutionInfo.PROVIDER);
     assertThat(executionInfo.getExecutionInfo()).doesNotContainKey(REQUIRES_KVM);
-    TemplateExpansionAction stubAction = (TemplateExpansionAction) getGeneratingAction(
-        getExecutable(target));
+    TemplateExpansionAction stubAction =
+        (TemplateExpansionAction) getGeneratingAction(getExecutable(target));
     String stubContents = stubAction.getFileContents();
     assertThat(stubContents)
         .contains(
@@ -201,14 +206,15 @@ public class AndroidDeviceTest extends BuildViewTestCase {
             String.format(
                 "emulator_x86=\"${WORKSPACE_DIR}/%s\"",
                 getToolDependencyRunfilesPathString("//tools/android/emulator:emulator_x86")));
-    assertThat(stubContents).contains("source_properties_file=\"${WORKSPACE_DIR}/"
-        + SOURCE_PROPERTIES + "\"");
+    assertThat(stubContents)
+        .contains("source_properties_file=\"${WORKSPACE_DIR}/" + SOURCE_PROPERTIES + "\"");
     assertThat(stubContents).contains("emulator_system_images=\"" + systemImageString + "\"");
   }
 
   @Test
   public void testWellFormedDevice_withKvm() throws Exception {
-    ConfiguredTarget target = scratchConfiguredTarget(
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
             "tools/android/emulated_device",
             "nexus_6",
             "android_device(",
@@ -223,15 +229,16 @@ public class AndroidDeviceTest extends BuildViewTestCase {
             "   tags = ['requires-kvm']",
             ")");
 
-    SpawnAction action = (SpawnAction) actionsTestUtil().getActionForArtifactEndingWith(
-        actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
-        "nexus_6_images/userdata_images.dat");
+    SpawnAction action =
+        (SpawnAction)
+            actionsTestUtil()
+                .getActionForArtifactEndingWith(
+                    actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
+                    "nexus_6_images/userdata_images.dat");
 
-    assertThat(action.getExecutionInfo())
-        .containsEntry(REQUIRES_KVM, "");
+    assertThat(action.getExecutionInfo()).containsEntry(REQUIRES_KVM, "");
     assertThat(target.get(ExecutionInfo.PROVIDER.getKey())).isNotNull();
-    assertThat(target.get(ExecutionInfo.PROVIDER).getExecutionInfo())
-        .containsKey(REQUIRES_KVM);
+    assertThat(target.get(ExecutionInfo.PROVIDER).getExecutionInfo()).containsKey(REQUIRES_KVM);
   }
 
   @Test
@@ -239,11 +246,11 @@ public class AndroidDeviceTest extends BuildViewTestCase {
     String dummyPropPackage = "tools/android/emulated_device/data";
     String dummyPropFile = "default.properties";
     String dummyPropLabel = String.format("//%s:%s", dummyPropPackage, dummyPropFile);
-    scratch.file(String.format("%s/%s", dummyPropPackage, dummyPropFile),
-        "ro.build.id=HiThere");
-    scratch.file(String.format("%s/BUILD", dummyPropPackage),
-        "exports_files(['default.properties'])");
-    ConfiguredTarget target = scratchConfiguredTarget(
+    scratch.file(String.format("%s/%s", dummyPropPackage, dummyPropFile), "ro.build.id=HiThere");
+    scratch.file(
+        String.format("%s/BUILD", dummyPropPackage), "exports_files(['default.properties'])");
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
             "tools/android/emulated_device",
             "nexus_6",
             "android_device(",
@@ -258,19 +265,21 @@ public class AndroidDeviceTest extends BuildViewTestCase {
             "    default_properties = '" + dummyPropLabel + "'",
             ")");
 
-
     Set<String> outputBasenames = new HashSet<>();
     for (Artifact outArtifact : getFilesToBuild(target)) {
       outputBasenames.add(outArtifact.getPath().getBaseName());
     }
 
-    assertWithMessage("Not generating expected outputs.").that(outputBasenames)
+    assertWithMessage("Not generating expected outputs.")
+        .that(outputBasenames)
         .containsExactly("nexus_6", "userdata_images.dat", "emulator-meta-data.pb");
 
-    SpawnAction action = (SpawnAction) actionsTestUtil().getActionForArtifactEndingWith(
-        actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
-        "nexus_6_images/userdata_images.dat");
-
+    SpawnAction action =
+        (SpawnAction)
+            actionsTestUtil()
+                .getActionForArtifactEndingWith(
+                    actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
+                    "nexus_6_images/userdata_images.dat");
 
     String systemImageString = Joiner.on(" ").join(SYSTEM_IMAGE_FILES);
     Iterable<String> biosFilesExecPathStrings =
@@ -311,8 +320,8 @@ public class AndroidDeviceTest extends BuildViewTestCase {
             "--platform_apks=",
             "--default_properties_file=" + String.format("%s/%s", dummyPropPackage, dummyPropFile));
 
-    TemplateExpansionAction stubAction = (TemplateExpansionAction) getGeneratingAction(
-        getExecutable(target));
+    TemplateExpansionAction stubAction =
+        (TemplateExpansionAction) getGeneratingAction(getExecutable(target));
     String stubContents = stubAction.getFileContents();
     assertThat(stubContents)
         .contains(
@@ -339,8 +348,8 @@ public class AndroidDeviceTest extends BuildViewTestCase {
             String.format(
                 "emulator_x86=\"${WORKSPACE_DIR}/%s\"",
                 getToolDependencyRunfilesPathString("//tools/android/emulator:emulator_x86")));
-    assertThat(stubContents).contains(
-        "source_properties_file=\"${WORKSPACE_DIR}/" + SOURCE_PROPERTIES + "\"");
+    assertThat(stubContents)
+        .contains("source_properties_file=\"${WORKSPACE_DIR}/" + SOURCE_PROPERTIES + "\"");
     assertThat(stubContents).contains("emulator_system_images=\"" + systemImageString + "\"");
     assertThat(stubContents)
         .contains(
@@ -355,45 +364,49 @@ public class AndroidDeviceTest extends BuildViewTestCase {
   @Test
   public void testPlatformApksFlag_multipleApks() throws Exception {
     String dummyPlatformApkPackage = "tools/android/emulated_device/data";
-    List<String> dummyPlatformApkFiles = Lists.newArrayList(
-        "dummy1.apk",
-        "dummy2.apk",
-        "dummy3.apk",
-        "dummy4.apk");
+    List<String> dummyPlatformApkFiles =
+        Lists.newArrayList("dummy1.apk", "dummy2.apk", "dummy3.apk", "dummy4.apk");
     List<String> platformApkFullPaths = Lists.newArrayList();
     List<String> dummyPlatformApkLabels = Lists.newArrayList();
     for (String dummyPlatformApkFile : dummyPlatformApkFiles) {
-      String platformApkFullPath = String.format("%s/%s",
-          dummyPlatformApkPackage, dummyPlatformApkFile);
+      String platformApkFullPath =
+          String.format("%s/%s", dummyPlatformApkPackage, dummyPlatformApkFile);
       platformApkFullPaths.add(platformApkFullPath);
-      String dummyPlatformApkLabel = String.format("'//%s:%s'",
-          dummyPlatformApkPackage, dummyPlatformApkFile);
+      String dummyPlatformApkLabel =
+          String.format("'//%s:%s'", dummyPlatformApkPackage, dummyPlatformApkFile);
       dummyPlatformApkLabels.add(dummyPlatformApkLabel);
-      scratch.file(String.format("%s/%s", dummyPlatformApkPackage, dummyPlatformApkFile),
+      scratch.file(
+          String.format("%s/%s", dummyPlatformApkPackage, dummyPlatformApkFile),
           dummyPlatformApkFile);
     }
-    scratch.file(String.format("%s/BUILD", dummyPlatformApkPackage),
+    scratch.file(
+        String.format("%s/BUILD", dummyPlatformApkPackage),
         "exports_files(['dummy1.apk', 'dummy2.apk', 'dummy3.apk', 'dummy4.apk'])");
-    ConfiguredTarget target = scratchConfiguredTarget(
-        "tools/android/emulated_device",
-        "nexus_6",
-        "android_device(",
-        "    name = 'nexus_6', ",
-        "    ram = 2048, ",
-        "    horizontal_resolution = 720, ",
-        "    vertical_resolution = 1280, ",
-        "    cache = 32, ",
-        "    system_image = '" + SYSTEM_IMAGE_LABEL + "',",
-        "    screen_density = 280, ",
-        "    vm_heap = 256,",
-        "    platform_apks = [" + Joiner.on(", ").join(dummyPlatformApkLabels) + "]",
-        ")");
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
+            "tools/android/emulated_device",
+            "nexus_6",
+            "android_device(",
+            "    name = 'nexus_6', ",
+            "    ram = 2048, ",
+            "    horizontal_resolution = 720, ",
+            "    vertical_resolution = 1280, ",
+            "    cache = 32, ",
+            "    system_image = '" + SYSTEM_IMAGE_LABEL + "',",
+            "    screen_density = 280, ",
+            "    vm_heap = 256,",
+            "    platform_apks = [" + Joiner.on(", ").join(dummyPlatformApkLabels) + "]",
+            ")");
 
-    SpawnAction action = (SpawnAction) actionsTestUtil().getActionForArtifactEndingWith(
-        actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
-        "nexus_6_images/userdata_images.dat");
+    SpawnAction action =
+        (SpawnAction)
+            actionsTestUtil()
+                .getActionForArtifactEndingWith(
+                    actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
+                    "nexus_6_images/userdata_images.dat");
 
-    assertWithMessage("Missing platform_apks flag").that(action.getArguments())
+    assertWithMessage("Missing platform_apks flag")
+        .that(action.getArguments())
         .contains("--platform_apks=" + Joiner.on(",").join(platformApkFullPaths));
   }
 
@@ -401,39 +414,47 @@ public class AndroidDeviceTest extends BuildViewTestCase {
   public void testPlatformApksFlag() throws Exception {
     String dummyPlatformApkPackage = "tools/android/emulated_device/data";
     String dummyPlatformApkFile = "dummy.apk";
-    String dummyPlatformApkLabel = String.format("//%s:%s",
-        dummyPlatformApkPackage, dummyPlatformApkFile);
-    scratch.file(String.format("%s/%s", dummyPlatformApkPackage, dummyPlatformApkFile),
-        "dummyApk");
-    scratch.file(String.format("%s/BUILD", dummyPlatformApkPackage),
-        "exports_files(['dummy.apk'])");
-    ConfiguredTarget target = scratchConfiguredTarget(
-        "tools/android/emulated_device",
-        "nexus_6",
-        "android_device(",
-        "    name = 'nexus_6', ",
-        "    ram = 2048, ",
-        "    horizontal_resolution = 720, ",
-        "    vertical_resolution = 1280, ",
-        "    cache = 32, ",
-        "    system_image = '" + SYSTEM_IMAGE_LABEL + "',",
-        "    screen_density = 280, ",
-        "    vm_heap = 256,",
-        "    platform_apks = ['" + dummyPlatformApkLabel + "']",
-        ")");
+    String dummyPlatformApkLabel =
+        String.format("//%s:%s", dummyPlatformApkPackage, dummyPlatformApkFile);
+    scratch.file(String.format("%s/%s", dummyPlatformApkPackage, dummyPlatformApkFile), "dummyApk");
+    scratch.file(
+        String.format("%s/BUILD", dummyPlatformApkPackage), "exports_files(['dummy.apk'])");
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
+            "tools/android/emulated_device",
+            "nexus_6",
+            "android_device(",
+            "    name = 'nexus_6', ",
+            "    ram = 2048, ",
+            "    horizontal_resolution = 720, ",
+            "    vertical_resolution = 1280, ",
+            "    cache = 32, ",
+            "    system_image = '" + SYSTEM_IMAGE_LABEL + "',",
+            "    screen_density = 280, ",
+            "    vm_heap = 256,",
+            "    platform_apks = ['" + dummyPlatformApkLabel + "']",
+            ")");
 
-    SpawnAction action = (SpawnAction) actionsTestUtil().getActionForArtifactEndingWith(
-        actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
-        "nexus_6_images/userdata_images.dat");
+    SpawnAction action =
+        (SpawnAction)
+            actionsTestUtil()
+                .getActionForArtifactEndingWith(
+                    actionsTestUtil().artifactClosureOf(getFilesToBuild(target)),
+                    "nexus_6_images/userdata_images.dat");
 
-    assertWithMessage("Missing platform_apks flag").that(action.getArguments())
-        .contains("--platform_apks=" + String.format("%s/%s",
-            dummyPlatformApkPackage, dummyPlatformApkFile));
+    assertWithMessage("Missing platform_apks flag")
+        .that(action.getArguments())
+        .contains(
+            "--platform_apks="
+                + String.format("%s/%s", dummyPlatformApkPackage, dummyPlatformApkFile));
   }
 
   @Test
   public void testBadAttributes() throws Exception {
-    checkError("bad/ram", "bad_ram", "ram must be",
+    checkError(
+        "bad/ram",
+        "bad_ram",
+        "ram must be",
         "android_device(name = 'bad_ram', ",
         "               ram = -1, ",
         "               vm_heap = 24, ",
@@ -442,7 +463,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               screen_density = 456, ",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 800) ");
-    checkError("bad/vm", "bad_vm", "heap must be",
+    checkError(
+        "bad/vm",
+        "bad_vm",
+        "heap must be",
         "android_device(name = 'bad_vm', ",
         "               ram = 512, ",
         "               vm_heap = -24, ",
@@ -451,7 +475,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               screen_density = 456, ",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 800) ");
-    checkError("bad/cache", "bad_cache", "cache must be",
+    checkError(
+        "bad/cache",
+        "bad_cache",
+        "cache must be",
         "android_device(name = 'bad_cache', ",
         "               ram = 512, ",
         "               vm_heap = 24, ",
@@ -460,7 +487,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               screen_density = 456, ",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 800) ");
-    checkError("bad/density", "bad_density", "density must be",
+    checkError(
+        "bad/density",
+        "bad_density",
+        "density must be",
         "android_device(name = 'bad_density', ",
         "               ram = 512, ",
         "               vm_heap = 24, ",
@@ -469,7 +499,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               screen_density = -456, ",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 800) ");
-    checkError("bad/horizontal", "bad_horizontal", "horizontal must be",
+    checkError(
+        "bad/horizontal",
+        "bad_horizontal",
+        "horizontal must be",
         "android_device(name = 'bad_horizontal', ",
         "               ram = 512, ",
         "               vm_heap = 24, ",
@@ -478,7 +511,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               screen_density = -456, ",
         "               horizontal_resolution = 100, ",
         "               vertical_resolution = 800) ");
-    checkError("bad/vertical", "bad_vertical", "vertical must be",
+    checkError(
+        "bad/vertical",
+        "bad_vertical",
+        "vertical must be",
         "android_device(name = 'bad_vertical', ",
         "               ram = 512, ",
         "               vm_heap = 24, ",
@@ -487,7 +523,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               system_image = '" + SYSTEM_IMAGE_LABEL + "',",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 100) ");
-    checkError("bad/bogus_default_prop", "bogus_default_prop", "no such package",
+    checkError(
+        "bad/bogus_default_prop",
+        "bogus_default_prop",
+        "no such package",
         "android_device(name = 'bogus_default_prop', ",
         "               ram = 512, ",
         "               vm_heap = 24, ",
@@ -497,7 +536,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               default_properties = '//something/somewhere',",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 100) ");
-    checkError("bad/multi_default_prop", "multi_default_prop", "expected a single artifact",
+    checkError(
+        "bad/multi_default_prop",
+        "multi_default_prop",
+        "expected a single artifact",
         "android_device(name = 'multi_default_prop', ",
         "               ram = 512, ",
         "               vm_heap = 24, ",
@@ -507,7 +549,10 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               default_properties = '" + SYSTEM_IMAGE_LABEL + "',",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 100) ");
-   checkError("bad/filegroup", "bad_filegroup", "No source.properties",
+    checkError(
+        "bad/filegroup",
+        "bad_filegroup",
+        "No source.properties",
         "filegroup(name = 'empty',",
         "          srcs = [])",
         "android_device(name = 'bad_filegroup', ",
@@ -518,18 +563,20 @@ public class AndroidDeviceTest extends BuildViewTestCase {
         "               system_image = ':empty',",
         "               horizontal_resolution = 640, ",
         "               vertical_resolution = 100) ");
-   checkError("bad/filegroup_2", "bad_filegroup2", "Multiple source.properties",
-              "filegroup(name = 'empty',",
-              "          srcs = ['source.properties', 'foo/source.properties'])",
-              "android_device(name = 'bad_filegroup2', ",
-              "               ram = 512, ",
-              "               vm_heap = 24, ",
-              "               cache = 23, ",
-              "               screen_density = -456, ",
-              "               system_image = ':empty',",
-              "               horizontal_resolution = 640, ",
-              "               vertical_resolution = 100) ");
-
+    checkError(
+        "bad/filegroup_2",
+        "bad_filegroup2",
+        "Multiple source.properties",
+        "filegroup(name = 'empty',",
+        "          srcs = ['source.properties', 'foo/source.properties'])",
+        "android_device(name = 'bad_filegroup2', ",
+        "               ram = 512, ",
+        "               vm_heap = 24, ",
+        "               cache = 23, ",
+        "               screen_density = -456, ",
+        "               system_image = ':empty',",
+        "               horizontal_resolution = 640, ",
+        "               vertical_resolution = 100) ");
   }
 
   @Test
@@ -554,7 +601,8 @@ public class AndroidDeviceTest extends BuildViewTestCase {
     String mockedAndroidToolsBuildFileLocation =
         mockedAndroidToolsBuildFile.getPath().getPathString();
     String mockedAndroidToolsContent =
-        scratch.readFile(mockedAndroidToolsBuildFileLocation)
+        scratch
+            .readFile(mockedAndroidToolsBuildFileLocation)
             .replaceAll(Pattern.quote("packages = ['//...']"), "packages = ['//bar/...']");
     scratch.overwriteFile(mockedAndroidToolsBuildFileLocation, mockedAndroidToolsContent);
     invalidatePackages();

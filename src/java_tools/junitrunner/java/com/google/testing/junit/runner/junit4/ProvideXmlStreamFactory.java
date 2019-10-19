@@ -15,8 +15,9 @@
 package com.google.testing.junit.runner.junit4;
 
 import com.google.testing.junit.runner.util.Factory;
-import com.google.testing.junit.runner.util.Supplier;
+import java.io.IOException;
 import java.io.OutputStream;
+import java.util.function.Supplier;
 
 /**
  * A factory that supplies {@link OutputStream}.
@@ -25,18 +26,73 @@ public final class ProvideXmlStreamFactory implements Factory<OutputStream> {
   private final Supplier<JUnit4Config> configSupplier;
 
   public ProvideXmlStreamFactory(Supplier<JUnit4Config> configSupplier) {
-    assert configSupplier != null;
+    if (configSupplier == null) {
+      throw new IllegalStateException();
+    }
+
     this.configSupplier = configSupplier;
   }
 
   @Override
   public OutputStream get() {
-    OutputStream outputStream = JUnit4RunnerModule.provideXmlStream(configSupplier.get());
-    assert outputStream != null;
-    return outputStream;
+    return new LazyOutputStream(() -> JUnit4RunnerModule.provideXmlStream(configSupplier.get()));
   }
 
   public static Factory<OutputStream> create(Supplier<JUnit4Config> configSupplier) {
     return new ProvideXmlStreamFactory(configSupplier);
+  }
+
+  private static class LazyOutputStream extends OutputStream {
+    private Supplier<OutputStream> supplier;
+    private volatile OutputStream delegate;
+
+    public LazyOutputStream(Supplier<OutputStream> supplier) {
+      this.supplier = supplier;
+    }
+
+    private OutputStream ensureDelegate() {
+      OutputStream delegate0 = delegate;
+      if (delegate0 != null) {
+        return delegate0;
+      }
+
+      synchronized (this) {
+        if (delegate == null) {
+          delegate = supplier.get();
+          supplier = null;
+        }
+      }
+
+      return delegate;
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+      ensureDelegate().write(b);
+    }
+
+    @Override
+    public void write(byte[] b, int off, int len) throws IOException {
+      ensureDelegate().write(b, off, len);
+    }
+
+    @Override
+    public void write(byte[] b) throws IOException {
+      ensureDelegate().write(b);
+    }
+
+    @Override
+    public void close() throws IOException {
+      if (delegate != null) {
+        delegate.close();
+      }
+    }
+
+    @Override
+    public void flush() throws IOException {
+      if (delegate != null) {
+        delegate.flush();
+      }
+    }
   }
 }

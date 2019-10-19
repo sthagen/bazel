@@ -202,6 +202,16 @@ public class BlazeServerStartupOptions extends OptionsBase {
   public int maxIdleSeconds;
 
   @Option(
+      name = "shutdown_on_low_sys_mem",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
+      effectTags = {OptionEffectTag.EAGERNESS_TO_EXIT, OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help =
+          "If max_idle_secs is set and the build server has been idle for a while, shut down the "
+              + "server when the system is low on free RAM. Linux only.")
+  public boolean shutdownOnLowSysMem;
+
+  @Option(
       name = "batch",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
@@ -454,4 +464,30 @@ public class BlazeServerStartupOptions extends OptionsBase {
           + " flag in your bazelrc once and forget about it so that you get coredumps when you"
           + " actually encounter a condition that triggers them.")
   public boolean unlimitCoredumps;
+
+  @Option(
+      name = "macos_qos_class",
+      defaultValue = "default", // Only for documentation; value is set and used by the client.
+      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
+      effectTags = {
+        OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS,
+      },
+      help =
+          "Sets the QoS service class of the %{product} server when running on macOS. This "
+              + "flag has no effect on all other platforms but is supported to ensure rc files "
+              + "can be shared among them without changes. Possible values are: user-interactive, "
+              + "user-initiated, default, utility, and background.")
+  public String macosQosClass;
+
+  @Option(
+      name = "incompatible_enable_execution_transition",
+      defaultValue = "false", // Only for documentation; value is set by the client.
+      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If false, the execution transition behaves like the host transition.")
+  public boolean enableExecutionTransition;
 }

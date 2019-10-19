@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.buildtool;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
@@ -29,6 +28,7 @@ import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.MetadataProvider;
 import com.google.devtools.build.lib.actions.MissingInputFileException;
+import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
@@ -46,6 +46,7 @@ import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
 import com.google.devtools.build.lib.skyframe.Builder;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
+import com.google.devtools.build.lib.skyframe.TopDownActionCache;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
@@ -72,21 +73,27 @@ import javax.annotation.Nullable;
 @VisibleForTesting
 public class SkyframeBuilder implements Builder {
 
+  private final ResourceManager resourceManager;
   private final SkyframeExecutor skyframeExecutor;
   private final ModifiedFileSet modifiedOutputFiles;
   private final MetadataProvider fileCache;
   private final ActionInputPrefetcher actionInputPrefetcher;
   private final ActionCacheChecker actionCacheChecker;
+  private final TopDownActionCache topDownActionCache;
 
   @VisibleForTesting
   public SkyframeBuilder(
       SkyframeExecutor skyframeExecutor,
+      ResourceManager resourceManager,
       ActionCacheChecker actionCacheChecker,
+      TopDownActionCache topDownActionCache,
       ModifiedFileSet modifiedOutputFiles,
       MetadataProvider fileCache,
       ActionInputPrefetcher actionInputPrefetcher) {
+    this.resourceManager = resourceManager;
     this.skyframeExecutor = skyframeExecutor;
     this.actionCacheChecker = actionCacheChecker;
+    this.topDownActionCache = topDownActionCache;
     this.modifiedOutputFiles = modifiedOutputFiles;
     this.fileCache = fileCache;
     this.actionInputPrefetcher = actionInputPrefetcher;
@@ -108,9 +115,7 @@ public class SkyframeBuilder implements Builder {
       @Nullable Range<Long> lastExecutionTimeRange,
       TopLevelArtifactContext topLevelArtifactContext)
       throws BuildFailedException, AbruptExitException, TestExecException, InterruptedException {
-    try (SilentCloseable c = Profiler.instance().profile("detectModifiedOutputFiles")) {
-      skyframeExecutor.detectModifiedOutputFiles(modifiedOutputFiles, lastExecutionTimeRange);
-    }
+    skyframeExecutor.detectModifiedOutputFiles(modifiedOutputFiles, lastExecutionTimeRange);
     try (SilentCloseable c = Profiler.instance().profile("configureActionExecutor")) {
       skyframeExecutor.configureActionExecutor(fileCache, actionInputPrefetcher);
     }
@@ -129,7 +134,7 @@ public class SkyframeBuilder implements Builder {
     EvaluationResult<?> result;
 
     ActionExecutionStatusReporter statusReporter = ActionExecutionStatusReporter.create(
-        reporter, executor, skyframeExecutor.getEventBus());
+        reporter, skyframeExecutor.getEventBus());
 
     AtomicBoolean isBuildingExclusiveArtifacts = new AtomicBoolean(false);
     ActionExecutionInactivityWatchdog watchdog =
@@ -151,14 +156,16 @@ public class SkyframeBuilder implements Builder {
       result =
           skyframeExecutor.buildArtifacts(
               reporter,
+              resourceManager,
               executor,
               artifacts,
               targetsToBuild,
               aspects,
               parallelTests,
-              /*exclusiveTesting=*/ false,
+              exclusiveTests,
               options,
               actionCacheChecker,
+              topDownActionCache,
               executionProgressReceiver,
               topLevelArtifactContext);
       // progressReceiver is finished, so unsynchronized access to builtTargets is now safe.
@@ -168,17 +175,6 @@ public class SkyframeBuilder implements Builder {
               result,
               options.getOptions(KeepGoingOption.class).keepGoing,
               skyframeExecutor);
-
-      Preconditions.checkState(
-          exitCode != null
-              || result.keyNames().size()
-                  == (artifacts.size()
-                      + targetsToBuild.size()
-                      + aspects.size()
-                      + parallelTests.size()),
-          "Build reported as successful but not all artifacts and targets built: %s, %s",
-          result,
-          artifacts);
 
       if (exitCode != null) {
         exitCodes.add(exitCode.orNull());
@@ -191,16 +187,14 @@ public class SkyframeBuilder implements Builder {
         // Since only one artifact is being built at a time, we don't worry about an artifact being
         // built and then the build being interrupted.
         result =
-            skyframeExecutor.buildArtifacts(
+            skyframeExecutor.runExclusiveTest(
                 reporter,
+                resourceManager,
                 executor,
-                ImmutableSet.<Artifact>of(),
-                targetsToBuild,
-                aspects,
-                ImmutableSet.of(exclusiveTest),
-                /*exclusiveTesting=*/ true,
+                exclusiveTest,
                 options,
                 actionCacheChecker,
+                topDownActionCache,
                 null,
                 topLevelArtifactContext);
         exitCode =

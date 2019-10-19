@@ -24,8 +24,11 @@ import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.pkgcache.TargetPatternPreloader;
 import com.google.devtools.build.lib.pkgcache.TargetProvider;
 import com.google.devtools.build.lib.pkgcache.TransitivePackageLoader;
+import com.google.devtools.build.lib.query2.common.AbstractBlazeQueryEnvironment;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Setting;
+import com.google.devtools.build.lib.query2.query.BlazeQueryEnvironment;
+import com.google.devtools.build.lib.query2.query.GraphlessBlazeQueryEnvironment;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.WalkableGraph.WalkableGraphFactory;
 import java.util.List;
@@ -35,7 +38,6 @@ import javax.annotation.Nullable;
 /** A factory that creates instances of {@code AbstractBlazeQueryEnvironment<Target>}. */
 public class QueryEnvironmentFactory {
   /** Creates an appropriate {@link AbstractBlazeQueryEnvironment} based on the given options. */
-
   public AbstractBlazeQueryEnvironment<Target> create(
       TransitivePackageLoader transitivePackageLoader,
       WalkableGraphFactory graphFactory,
@@ -51,9 +53,10 @@ public class QueryEnvironmentFactory {
       Predicate<Label> labelFilter,
       ExtendedEventHandler eventHandler,
       Set<Setting> settings,
-      Iterable<QueryFunction> functions,
+      Iterable<QueryFunction> extraFunctions,
       @Nullable PathPackageLocator packagePath,
-      boolean blockUniverseEvaluationErrors) {
+      boolean blockUniverseEvaluationErrors,
+      boolean useGraphlessQuery) {
     Preconditions.checkNotNull(universeScope);
     if (canUseSkyQuery(orderedResults, universeScope, packagePath, strictScope, labelFilter)) {
       return new SkyQueryEnvironment(
@@ -61,12 +64,26 @@ public class QueryEnvironmentFactory {
           loadingPhaseThreads,
           eventHandler,
           settings,
-          functions,
+          extraFunctions,
           relativeWorkingDirectory.getPathString(),
           graphFactory,
           universeScope,
           packagePath,
           blockUniverseEvaluationErrors);
+    } else if (useGraphlessQuery) {
+      return new GraphlessBlazeQueryEnvironment(
+          transitivePackageLoader,
+          targetProvider,
+          cachingPackageLocator,
+          targetPatternPreloader,
+          relativeWorkingDirectory,
+          keepGoing,
+          strictScope,
+          loadingPhaseThreads,
+          labelFilter,
+          eventHandler,
+          settings,
+          extraFunctions);
     } else {
       return new BlazeQueryEnvironment(
           transitivePackageLoader,
@@ -80,7 +97,7 @@ public class QueryEnvironmentFactory {
           labelFilter,
           eventHandler,
           settings,
-          functions);
+          extraFunctions);
     }
   }
 

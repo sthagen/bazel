@@ -23,8 +23,8 @@ import com.google.devtools.build.lib.analysis.AnalysisResult;
 import com.google.devtools.build.lib.analysis.BuildInfoEvent;
 import com.google.devtools.build.lib.analysis.BuildView;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
+import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.DummyEnvironment;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
-import com.google.devtools.build.lib.analysis.config.DefaultsPackage;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.buildeventstream.BuildEventId;
 import com.google.devtools.build.lib.buildtool.PostAnalysisQueryBuildTool.PostAnalysisQueryCommandLineException;
@@ -44,9 +44,11 @@ import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
+import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.common.options.OptionsProvider;
+import com.google.devtools.common.options.RegexPatternOption;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.Pattern;
 
 /**
  * Provides the bulk of the implementation of the 'blaze build' command.
@@ -107,10 +109,6 @@ public class BuildTool {
     BuildOptions buildOptions;
     try (SilentCloseable c = Profiler.instance().profile("createBuildOptions")) {
       buildOptions = runtime.createBuildOptions(request);
-    }
-    // Sync the package manager before sending the BuildStartingEvent in runLoadingPhase()
-    try (SilentCloseable c = Profiler.instance().profile("setupPackageCache")) {
-      env.setupPackageCache(request, DefaultsPackage.getDefaultsPackageContent(buildOptions));
     }
 
     ExecutionTool executionTool = null;
@@ -201,8 +199,25 @@ public class BuildTool {
         env.getEventBus()
             .post(
                 new BuildInfoEvent(
-                    env.getBlazeWorkspace().getWorkspaceStatusActionFactory()
-                        .createDummyWorkspaceStatus()));
+                    env.getBlazeWorkspace()
+                        .getWorkspaceStatusActionFactory()
+                        .createDummyWorkspaceStatus(
+                            new DummyEnvironment() {
+                              @Override
+                              public Path getWorkspace() {
+                                return env.getWorkspace();
+                              }
+
+                              @Override
+                              public String getBuildRequestId() {
+                                return env.getBuildRequestId();
+                              }
+
+                              @Override
+                              public OptionsProvider getOptions() {
+                                return env.getOptions();
+                              }
+                            })));
       }
     }
   }
@@ -323,9 +338,11 @@ public class BuildTool {
    * Initializes the output filter to the value given with {@code --output_filter}.
    */
   private void initializeOutputFilter(BuildRequest request) {
-    Pattern outputFilter = request.getBuildOptions().outputFilter;
-    if (outputFilter != null) {
-      getReporter().setOutputFilter(OutputFilter.RegexOutputFilter.forPattern(outputFilter));
+    RegexPatternOption outputFilterOption = request.getBuildOptions().outputFilter;
+    if (outputFilterOption != null) {
+      getReporter()
+          .setOutputFilter(
+              OutputFilter.RegexOutputFilter.forPattern(outputFilterOption.regexPattern()));
     }
   }
 
@@ -348,7 +365,7 @@ public class BuildTool {
     result.setExitCondition(exitCondition);
     InterruptedException ie = null;
     try {
-      env.getSkyframeExecutor().notifyCommandComplete();
+      env.getSkyframeExecutor().notifyCommandComplete(env.getReporter());
     } catch (InterruptedException e) {
       env.getReporter().handle(Event.error("Build interrupted during command completion"));
       ie = e;
@@ -360,6 +377,10 @@ public class BuildTool {
             new BuildCompleteEvent(
                 result,
                 ImmutableList.of(BuildEventId.buildToolLogs(), BuildEventId.buildMetrics())));
+    // Post the build tool logs event; the corresponding local files may be contributed from
+    // modules, and this has to happen after posting the BuildCompleteEvent because that's when
+    // modules add their data to the collection.
+    env.getEventBus().post(result.getBuildToolLogCollection().freeze().toEvent());
     if (ie != null) {
       if (exitCondition.equals(ExitCode.SUCCESS)) {
         result.setExitCondition(ExitCode.INTERRUPTED);

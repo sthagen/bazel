@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.runtime;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ComparisonChain;
@@ -65,10 +66,13 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
       built = false;
     }
 
-    private void mergeFrom(TestSummary existingSummary) {
+    void mergeFrom(TestSummary existingSummary) {
       // Yuck, manually fill in fields.
       summary.shardRunStatuses =
           MultimapBuilder.hashKeys().arrayListValues().build(existingSummary.shardRunStatuses);
+      summary.firstStartTimeMillis = existingSummary.firstStartTimeMillis;
+      summary.lastStopTimeMillis = existingSummary.lastStopTimeMillis;
+      summary.totalRunDurationMillis = existingSummary.totalRunDurationMillis;
       setTarget(existingSummary.target);
       setConfiguration(existingSummary.configuration);
       setStatus(existingSummary.status);
@@ -139,9 +143,21 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
       return this;
     }
 
+    public Builder addPassedLog(Path passedLog) {
+      checkMutation(passedLog);
+      summary.passedLogs.add(passedLog);
+      return this;
+    }
+
     public Builder addFailedLogs(List<Path> failedLogs) {
       checkMutation(failedLogs);
       summary.failedLogs.addAll(failedLogs);
+      return this;
+    }
+
+    public Builder addFailedLog(Path failedLog) {
+      checkMutation(failedLog);
+      summary.failedLogs.add(failedLog);
       return this;
     }
 
@@ -232,6 +248,15 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
     public Builder addTestTimes(List<Long> testTimes) {
       checkMutation(testTimes);
       summary.testTimes.addAll(testTimes);
+      return this;
+    }
+
+    public Builder mergeTiming(long startTimeMillis, long runDurationMillis) {
+      checkMutation();
+      summary.firstStartTimeMillis = Math.min(summary.firstStartTimeMillis, startTimeMillis);
+      summary.lastStopTimeMillis =
+          Math.max(summary.lastStopTimeMillis, startTimeMillis + runDurationMillis);
+      summary.totalRunDurationMillis += runDurationMillis;
       return this;
     }
 
@@ -342,6 +367,9 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
   private List<String> warnings = new ArrayList<>();
   private List<Path> coverageFiles = new ArrayList<>();
   private List<Long> testTimes = new ArrayList<>();
+  private long totalRunDurationMillis;
+  private long firstStartTimeMillis = Long.MAX_VALUE;
+  private long lastStopTimeMillis = Long.MIN_VALUE;
   private FailedTestCasesStatus failedTestCasesStatus = null;
   private int totalTestCases;
 
@@ -354,15 +382,6 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
    */
   public static Builder newBuilder() {
     return new Builder();
-  }
-
-  /**
-   * Creates a new Builder initialized with a copy of the existing object's values.
-   */
-  public static Builder newBuilderFromExisting(TestSummary existing) {
-    Builder builder = new Builder();
-    builder.mergeFrom(existing);
-    return builder;
   }
 
   public Label getLabel() {
@@ -476,6 +495,18 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
         .result();
   }
 
+  @Override
+  public String toString() {
+    return MoreObjects.toStringHelper(this)
+        .add("target", this.getTarget())
+        .add("status", status)
+        .add("numCached", numCached)
+        .add("numLocalActionCached", numLocalActionCached)
+        .add("actionRan", actionRan)
+        .add("ranRemotely", ranRemotely)
+        .toString();
+  }
+
   public List<Long> getTestTimes() {
     // The return result is unmodifiable (UnmodifiableList instance)
     return testTimes;
@@ -487,6 +518,18 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
 
   public int totalRuns() {
     return testTimes.size();
+  }
+
+  public long getTotalRunDurationMillis() {
+    return totalRunDurationMillis;
+  }
+
+  public long getFirstStartTimeMillis() {
+    return firstStartTimeMillis;
+  }
+
+  public long getLastStopTimeMillis() {
+    return lastStopTimeMillis;
   }
 
   static Mode getStatusMode(BlazeTestStatus status) {
@@ -534,7 +577,10 @@ public class TestSummary implements Comparable<TestSummary>, BuildEventWithOrder
         BuildEventStreamProtos.TestSummary.newBuilder()
             .setOverallStatus(BuildEventStreamerUtils.bepStatus(status))
             .setTotalNumCached(getNumCached())
-            .setTotalRunCount(totalRuns());
+            .setTotalRunCount(totalRuns())
+            .setFirstStartTimeMillis(firstStartTimeMillis)
+            .setLastStopTimeMillis(lastStopTimeMillis)
+            .setTotalRunDurationMillis(totalRunDurationMillis);
     for (Path path : getFailedLogs()) {
       String uri = pathConverter.apply(path);
       if (uri != null) {

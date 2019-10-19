@@ -78,18 +78,6 @@ public class ResourceProcessorBusyBox {
         RClassGeneratorAction.main(args);
       }
     },
-    GENERATE_LIBRARY_R() {
-      @Override
-      void call(String[] args) throws Exception {
-        LibraryRClassGeneratorAction.main(args);
-      }
-    },
-    GENERATE_ROBOLECTRIC_R() {
-      @Override
-      void call(String[] args) throws Exception {
-        GenerateRobolectricResourceSymbolsAction.main(args);
-      }
-    },
     PARSE() {
       @Override
       void call(String[] args) throws Exception {
@@ -150,16 +138,29 @@ public class ResourceProcessorBusyBox {
         Aapt2ResourceShrinkingAction.main(args);
       }
     },
+    AAPT2_OPTIMIZE() {
+      @Override
+      void call(String[] args) throws Exception {
+        Aapt2OptimizeAction.main(args);
+      }
+    },
     MERGE_ASSETS() {
       @Override
       void call(String[] args) throws Exception {
         AndroidAssetMergingAction.main(args);
+      }
+    },
+    PROCESS_DATABINDING {
+      @Override
+      void call(String[] args) throws Exception {
+        AndroidDataBindingProcessingAction.main(args);
       }
     };
 
     abstract void call(String[] args) throws Exception;
   }
 
+  public static final String PROPERTY_KEY_PREFIX = "rpbb.";
   private static final Logger logger = Logger.getLogger(ResourceProcessorBusyBox.class.getName());
 
   /** Converter for the Tool enum. */
@@ -181,13 +182,13 @@ public class ResourceProcessorBusyBox {
         effectTags = {OptionEffectTag.UNKNOWN},
         help =
             "The processing tool to execute. "
-                + "Valid tools: PACKAGE, VALIDATE, GENERATE_BINARY_R, GENERATE_LIBRARY_R, PARSE, "
+                + "Valid tools: PACKAGE, VALIDATE, GENERATE_BINARY_R, PARSE, "
                 + "MERGE, GENERATE_AAR, SHRINK, MERGE_MANIFEST, COMPILE_LIBRARY_RESOURCES, "
                 + "LINK_STATIC_LIBRARY, AAPT2_PACKAGE, SHRINK_AAPT2, MERGE_COMPILED.")
     public Tool tool;
   }
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws Exception {
     // It's cheaper and cleaner to detect for a single flag to start worker mode without having to
     // initialize Options/OptionsParser here. This keeps the processRequest interface minimal and
     // minimizes moving option state between these methods.
@@ -198,7 +199,7 @@ public class ResourceProcessorBusyBox {
     }
   }
 
-  private static int runPersistentWorker() {
+  private static int runPersistentWorker() throws Exception {
     while (true) {
       try {
         WorkRequest request = WorkRequest.parseDelimitedFrom(System.in);
@@ -222,11 +223,13 @@ public class ResourceProcessorBusyBox {
     return 0;
   }
 
-  private static int processRequest(List<String> args) {
-    OptionsParser optionsParser = OptionsParser.newOptionsParser(Options.class);
-    optionsParser.setAllowResidue(true);
-    optionsParser.enableParamsFileSupport(
-        new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()));
+  private static int processRequest(List<String> args) throws Exception {
+    OptionsParser optionsParser =
+        OptionsParser.builder()
+            .optionsClasses(Options.class)
+            .allowResidue(true)
+            .argsPreProcessor(new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()))
+            .build();
     Options options;
     try {
       optionsParser.parse(args);
@@ -239,10 +242,10 @@ public class ResourceProcessorBusyBox {
         | Aapt2Exception
         | InvalidJavaIdentifier e) {
       logSuppressed(e);
-      return 1;
+      throw e;
     } catch (Exception e) {
-      logger.log(Level.SEVERE, "Error during prcessing", e);
-      return 1;
+      logger.log(Level.SEVERE, "Error during processing", e);
+      throw e;
     }
     return 0;
   }

@@ -16,65 +16,54 @@ package com.google.devtools.build.skydoc.fakebuildapi;
 
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAttrApi.Descriptor;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AttributeInfo;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AttributeType;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.ProviderNameGroup;
+import java.util.List;
 
 /**
  * Fake implementation of {@link Descriptor}.
  */
 public class FakeDescriptor implements Descriptor {
-  private final Type type;
+  private final AttributeType type;
   private final String docString;
   private final boolean mandatory;
+  private final List<List<String>> providerNameGroups;
+  private final String defaultRepresentation;
 
-  public FakeDescriptor(Type type, String docString, boolean mandatory) {
+  public FakeDescriptor(
+      AttributeType type,
+      String docString,
+      boolean mandatory,
+      List<List<String>> providerNameGroups,
+      Object defaultObject) {
     this.type = type;
     this.docString = docString;
     this.mandatory = mandatory;
-  }
-
-  public Type getType() {
-    return type;
-  }
-
-  public String getDocString() {
-    return docString;
-  }
-
-  public boolean isMandatory() {
-    return mandatory;
+    this.providerNameGroups = providerNameGroups;
+    this.defaultRepresentation = defaultObject.toString();
   }
 
   @Override
   public void repr(SkylarkPrinter printer) {}
 
-  /**
-   * Attribute type. For example, an attribute described by attr.label() will be of type LABEL.
-   */
-  public enum Type {
-    INT("Integer"),
-    LABEL("Label"),
-    STRING("String"),
-    STRING_LIST("List of strings"),
-    INT_LIST("List of integers"),
-    LABEL_LIST("List of labels"),
-    BOOLEAN("Boolean"),
-    LICENSE("List of strings"),
-    LABEL_STRING_DICT("Dictionary: Label -> String"),
-    STRING_DICT("Dictionary: String -> String"),
-    STRING_LIST_DICT("Dictionary: String -> List of strings"),
-    OUTPUT("Label"),
-    OUTPUT_LIST("List of labels");
+  public AttributeInfo asAttributeInfo(String attributeName) {
+    AttributeInfo.Builder attrInfo =
+        AttributeInfo.newBuilder()
+            .setName(attributeName)
+            .setDocString(docString)
+            .setType(type)
+            .setMandatory(mandatory)
+            .setDefaultValue(mandatory ? "" : defaultRepresentation);
 
-    private final String description;
-
-    Type(String description) {
-      this.description = description;
+    if (!providerNameGroups.isEmpty()) {
+      for (List<String> providerNameGroup : providerNameGroups) {
+        ProviderNameGroup.Builder providerNameListBuild = ProviderNameGroup.newBuilder();
+        ProviderNameGroup providerNameList =
+            providerNameListBuild.addAllProviderName(providerNameGroup).build();
+        attrInfo.addProviderNameGroup(providerNameList);
+      }
     }
-
-    /**
-     * Returns a human-readable string representing this attribute type.
-     */
-    public String getDescription() {
-      return description;
-    }
+    return attrInfo.build();
   }
 }

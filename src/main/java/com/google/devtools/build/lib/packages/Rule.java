@@ -20,7 +20,6 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.ListMultimap;
@@ -35,7 +34,6 @@ import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.BinaryPredicate;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -43,14 +41,14 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * An instance of a build rule in the build language.  A rule has a name, a
- * package to which it belongs, a class such as <code>cc_library</code>, and
- * set of typed attributes.  The set of attribute names and types is a property
- * of the rule's class.  The use of the term "class" here has nothing to do
- * with Java classes.  All rules are implemented by the same Java classes, Rule
- * and RuleClass.
+ * An instance of a build rule in the build language. A rule has a name, a package to which it
+ * belongs, a class such as <code>cc_library</code>, and set of typed attributes. The set of
+ * attribute names and types is a property of the rule's class. The use of the term "class" here has
+ * nothing to do with Java classes. All rules are implemented by the same Java classes, Rule and
+ * RuleClass.
  *
  * <p>Here is a typical rule as it appears in a BUILD file:
+ *
  * <pre>
  * cc_library(name = 'foo',
  *            defines = ['-Dkey=value'],
@@ -58,7 +56,8 @@ import java.util.Set;
  *            deps = ['bar'])
  * </pre>
  */
-public final class Rule implements Target, DependencyFilter.AttributeInfoProvider {
+// Non-final only for mocking in tests. Do not subclass!
+public class Rule implements Target, DependencyFilter.AttributeInfoProvider {
 
   /** Label predicate that allows every label. */
   public static final Predicate<Label> ALL_LABELS = Predicates.alwaysTrue();
@@ -74,6 +73,8 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   private RuleVisibility visibility;
 
   private boolean containsErrors;
+
+  private String definitionInformation;
 
   private final Location location;
 
@@ -118,16 +119,16 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     this.visibility = visibility;
   }
 
+  void setDefinitionInformation(String info) {
+    this.definitionInformation = info;
+  }
+
   void setAttributeValue(Attribute attribute, Object value, boolean explicit) {
     attributes.setAttributeValue(attribute, value, explicit);
   }
 
   void setAttributeValueByName(String attrName, Object value) {
     attributes.setAttributeValueByName(attrName, value);
-  }
-
-  void setAttributeLocation(int attrIndex, Location location) {
-    attributes.setAttributeLocation(attrIndex, location);
   }
 
   void setContainsErrors() {
@@ -166,13 +167,6 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   }
 
   /**
-   * Returns the build features that apply to this rule.
-   */
-  public ImmutableSet<String> getFeatures() {
-    return pkg.getFeatures();
-  }
-
-  /**
    * Returns true iff the outputs of this rule should be created beneath the
    * bin directory, false if beneath genfiles.  For most rule
    * classes, this is a constant, but for genrule, it is a property of the
@@ -182,6 +176,23 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     return ruleClass.getName().equals("genrule") // this is unfortunate...
         ? NonconfigurableAttributeMapper.of(this).get("output_to_bindir", Type.BOOLEAN)
         : ruleClass.hasBinaryOutput();
+  }
+
+  /** Returns true if this rule is an analysis test (set by analysis_test = true). */
+  public boolean isAnalysisTest() {
+    return ruleClass.isAnalysisTest();
+  }
+
+  /**
+   * Returns true if this rule has at least one attribute with an analysis test transition. (A
+   * starlark-defined transition using analysis_test_transition()).
+   */
+  public boolean hasAnalysisTestTransition() {
+    return ruleClass.hasAnalysisTestTransition();
+  }
+
+  public boolean isBuildSetting() {
+    return ruleClass.getBuildSetting() != null;
   }
 
   /**
@@ -200,26 +211,6 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    */
   public Collection<Attribute> getAttributes() {
     return ruleClass.getAttributes();
-  }
-
-  /**
-   * Returns true if this rule has any attributes that are configurable.
-   *
-   * <p>Note this is *not* the same as having attribute *types* that are configurable. For example,
-   * "deps" is configurable, in that one can write a rule that sets "deps" to a configuration
-   * dictionary. But if *this* rule's instance of "deps" doesn't do that, its instance
-   * of "deps" is not considered configurable.
-   *
-   * <p>In other words, this method signals which rules might have their attribute values
-   * influenced by the configuration.
-   */
-  public boolean hasConfigurableAttributes() {
-    for (Attribute attribute : getAttributes()) {
-      if (AbstractAttributeMapper.isConfigurable(this, attribute.getName(), attribute.getType())) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
@@ -275,6 +266,10 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     return location;
   }
 
+  public String getDefinitionInformation() {
+    return definitionInformation;
+  }
+
   public ImplicitOutputsFunction getImplicitOutputsFunction() {
     return implicitOutputsFunction;
   }
@@ -327,7 +322,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   }
 
   /**
-   * {@see #isAttributeValueExplicitlySpecified(String)}
+   * See {@link #isAttributeValueExplicitlySpecified(String)}
    */
   @Override
   public boolean isAttributeValueExplicitlySpecified(Attribute attribute) {
@@ -335,57 +330,13 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   }
 
   /**
-   * Returns true iff the value of the specified attribute is explicitly set in the BUILD file.
-   * This returns true also if the value explicity specified in the BUILD file is the same as the
+   * Returns true iff the value of the specified attribute is explicitly set in the BUILD file. This
+   * returns true also if the value explicitly specified in the BUILD file is the same as the
    * attribute's default value. In addition, this method return false if the rule has no attribute
    * with the given name.
    */
   public boolean isAttributeValueExplicitlySpecified(String attrName) {
     return attributes.isAttributeValueExplicitlySpecified(attrName);
-  }
-
-  /**
-   * Returns the location of the attribute definition for this rule, if known;
-   * or the location of the whole rule otherwise. "attrName" need not be a
-   * valid attribute name for this rule.
-   *
-   * <p>This method ignores whether the present rule was created by a macro or not.
-   */
-  public Location getAttributeLocationWithoutMacro(String attrName) {
-    return getAttributeLocation(attrName, /* useBuildLocation= */ false);
-  }
-
-  /**
-   * Returns the location of the attribute definition for this rule, if known;
-   * or the location of the whole rule otherwise. "attrName" need not be a
-   * valid attribute name for this rule.
-   *
-   * <p>If this rule was created by a macro, this method returns the
-   * location of the macro invocation in the BUILD file instead.
-   */
-  public Location getAttributeLocation(String attrName) {
-    return getAttributeLocation(attrName, /* useBuildLocation= */ true);
-  }
-
-  private Location getAttributeLocation(String attrName, boolean useBuildLocation) {
-    /*
-     * If the rule was created by a macro, we have to deal with two locations: one in the BUILD
-     * file where the macro is invoked and one in the bzl file where the rule is created.
-     * For error reporting, we are usually more interested in the former one.
-     * Different methods in this class refer to different locations, though:
-     * - getLocation() points to the location of the macro invocation in the BUILD file (thanks to
-     *   RuleFactory).
-     * - attributes.getAttributeLocation() points to the location in the bzl file.
-     */
-    if (wasCreatedByMacro() && useBuildLocation) {
-      return getLocation();
-    }
-
-    Location attrLocation = null;
-    if (!attrName.equals("name")) {
-      attrLocation = attributes.getAttributeLocation(attrName);
-    }
-    return attrLocation != null ? attrLocation : getLocation();
   }
 
   /**
@@ -404,7 +355,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   }
 
   /** Returns a new List instance containing all direct dependencies (all types). */
-  public Collection<Label> getLabels() throws InterruptedException {
+  public Collection<Label> getLabels() {
     final List<Label> labels = Lists.newArrayList();
     AggregatingAttributeMapper.of(this)
         .visitLabels()
@@ -423,8 +374,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    *     label. The label will be contained in the result iff (the predicate returned {@code true}
    *     and the labels are not outputs)
    */
-  public Collection<Label> getLabels(BinaryPredicate<? super Rule, Attribute> predicate)
-      throws InterruptedException {
+  public Collection<Label> getLabels(BinaryPredicate<? super Rule, Attribute> predicate) {
     return ImmutableSortedSet.copyOf(getTransitions(predicate).values());
   }
 
@@ -438,7 +388,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
    *     and the labels are not outputs)
    */
   public Multimap<Attribute, Label> getTransitions(
-      final BinaryPredicate<? super Rule, Attribute> predicate) throws InterruptedException {
+      final BinaryPredicate<? super Rule, Attribute> predicate) {
     final Multimap<Attribute, Label> transitions = HashMultimap.create();
     // TODO(bazel-team): move this to AttributeMap, too. Just like visitLabels, which labels should
     // be visited may depend on the calling context. We shouldn't implicitly decide this for
@@ -480,7 +430,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     }
   }
 
-  void populateOutputFilesInternal(
+  private void populateOutputFilesInternal(
       EventHandler eventHandler, Package.Builder pkgBuilder, boolean performChecks)
       throws LabelSyntaxException, InterruptedException {
     Preconditions.checkState(outputFiles == null);
@@ -613,7 +563,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     this.containsErrors = true;
   }
 
-  void reportWarning(String message, EventHandler eventHandler) {
+  private void reportWarning(String message, EventHandler eventHandler) {
     eventHandler.handle(Event.warn(location, message));
   }
 
@@ -672,6 +622,8 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
     if (isAttrDefined("licenses", BuildType.LICENSE)
         && isAttributeValueExplicitlySpecified("licenses")) {
       return NonconfigurableAttributeMapper.of(this).get("licenses", BuildType.LICENSE);
+    } else if (getRuleClassObject().ignoreLicenses()) {
+      return License.NO_LICENSE;
     } else {
       return getPackage().getDefaultLicense();
     }
@@ -701,7 +653,7 @@ public final class Rule implements Target, DependencyFilter.AttributeInfoProvide
   // null-valued, with a packageFragment that is null...). The bug that prompted
   // the introduction of this code is #2210848 (NullPointerException in
   // Package.checkForConflicts() ).
-  void checkForNullLabels() throws InterruptedException {
+  void checkForNullLabels() {
     AggregatingAttributeMapper.of(this)
         .visitLabels()
         .forEach(depEdge -> checkForNullLabel(depEdge.getLabel(), depEdge.getAttribute()));

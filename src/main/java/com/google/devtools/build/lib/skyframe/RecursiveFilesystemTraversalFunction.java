@@ -13,19 +13,28 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.devtools.build.lib.vfs.UnixGlob.DEFAULT_SYSCALLS;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
 import com.google.common.collect.Collections2;
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactSkyKey;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.FileStateType;
+import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
+import com.google.devtools.build.lib.actions.HasDigest;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.ResolvedFile;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.ResolvedFileFactory;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.TraversalRequest;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.Path;
@@ -35,9 +44,11 @@ import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
+import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -50,6 +61,15 @@ import javax.annotation.Nullable;
 public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
 
   private static final class MissingDepException extends Exception {}
+
+  private static final byte[] MISSING_FINGERPRINT =
+      new BigInteger(1, "NonexistentFileStateValue".getBytes(UTF_8)).toByteArray();
+
+  @AutoCodec @AutoCodec.VisibleForSerialization
+  static final HasDigest NON_EXISTENT_HAS_DIGEST = () -> MISSING_FINGERPRINT;
+
+  private static final FileInfo NON_EXISTENT_FILE_INFO =
+      new FileInfo(FileType.NONEXISTENT, NON_EXISTENT_HAS_DIGEST, null, null);
 
   /** Base class for exceptions that {@link RecursiveFilesystemTraversalFunctionException} wraps. */
   public abstract static class RecursiveFilesystemTraversalException extends Exception {
@@ -142,6 +162,21 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
 
       if (rootInfo.type.isFile()) {
         return resultForFileRoot(traversal.root.asRootedPath(), rootInfo);
+      } else if (rootInfo.type.isDirectory() && rootInfo.metadata instanceof TreeArtifactValue) {
+        final TreeArtifactValue value = (TreeArtifactValue) rootInfo.metadata;
+        ImmutableList.Builder<RecursiveFilesystemTraversalValue> list = ImmutableList.builder();
+        for (Map.Entry<TreeFileArtifact, FileArtifactValue> entry
+            : value.getChildValues().entrySet()) {
+          RootedPath path =
+              RootedPath.toRootedPath(
+                  traversal.root.asRootedPath().getRoot(), entry.getKey().getPath());
+          list.add(resultForFileRoot(
+              path,
+              // TreeArtifact can't have symbolic inside. So the assumption for FileType.FILE
+              // is always true.
+              new FileInfo(FileType.FILE, entry.getValue(), path, null)));
+        }
+        return resultForDirectory(traversal, rootInfo, list.build());
       }
 
       // Otherwise the root is a directory or a symlink to one.
@@ -197,15 +232,16 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
 
   private static final class FileInfo {
     final FileType type;
-    final Object metadata;
+    final HasDigest metadata;
     @Nullable final RootedPath realPath;
     @Nullable final PathFragment unresolvedSymlinkTarget;
 
     FileInfo(
         FileType type,
-        Object metadata,
+        HasDigest metadata,
         @Nullable RootedPath realPath,
         @Nullable PathFragment unresolvedSymlinkTarget) {
+      Preconditions.checkNotNull(metadata.getDigest(), metadata);
       this.type = Preconditions.checkNotNull(type);
       this.metadata = metadata;
       this.realPath = realPath;
@@ -223,49 +259,56 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
     }
   }
 
-  private static final FileInfo NON_EXISTENT_FILE_INFO =
-      new FileInfo(FileType.NONEXISTENT, new Integer(0), null, null);
-
   private static FileInfo lookUpFileInfo(Environment env, TraversalRequest traversal)
       throws MissingDepException, IOException, InterruptedException {
     if (traversal.isRootGenerated) {
-      FileArtifactValue fsVal = null;
+      HasDigest fsVal = null;
       if (traversal.root.getOutputArtifact() != null) {
         Artifact artifact = traversal.root.getOutputArtifact();
-        SkyKey artifactKey = ArtifactSkyKey.key(artifact, true);
+        SkyKey artifactKey = Artifact.key(artifact);
         SkyValue value = env.getValue(artifactKey);
         if (env.valuesMissing()) {
           throw new MissingDepException();
         }
 
-        if (value instanceof FileArtifactValue) {
-          fsVal = (FileArtifactValue) value;
+        if (value instanceof FileArtifactValue || value instanceof TreeArtifactValue) {
+          fsVal = (HasDigest) value;
+        } else if (value instanceof ActionExecutionValue) {
+          fsVal =
+              Preconditions.checkNotNull(
+                  ArtifactFunction.createSimpleFileArtifactValue(
+                      (Artifact.DerivedArtifact) artifact, (ActionExecutionValue) value));
         } else {
           return NON_EXISTENT_FILE_INFO;
         }
       }
-
       RootedPath realPath = traversal.root.asRootedPath();
       if (traversal.strictOutputFiles) {
         Preconditions.checkNotNull(fsVal, "Strict Fileset output tree has null FileArtifactValue");
-        return new FileInfo(FileType.FILE, fsVal, realPath, null);
+        return new FileInfo(
+            (fsVal instanceof TreeArtifactValue ? FileType.DIRECTORY : FileType.FILE),
+            fsVal, realPath, null);
       } else {
         // FileArtifactValue does not currently track symlinks. If it did, we could potentially
         // remove some of the filesystem operations we're doing here.
         Path path = traversal.root.asRootedPath().asPath();
-        FileStatus noFollowStat = path.stat(Symlinks.NOFOLLOW);
+        FileStateValue fileState =
+            FileStateValue.create(traversal.root.asRootedPath(), DEFAULT_SYSCALLS, null);
+        if (fileState.getType() == FileStateType.NONEXISTENT) {
+          throw new IOException("Missing file: " + path);
+        }
         FileStatus followStat = path.statIfFound(Symlinks.FOLLOW);
         FileType type;
         PathFragment unresolvedLinkTarget = null;
         if (followStat == null) {
           type = FileType.DANGLING_SYMLINK;
-          if (!noFollowStat.isSymbolicLink()) {
-            throw new IOException("Expected symlink for " + path + ", but got: " + noFollowStat);
+          if (fileState.getType() != FileStateType.SYMLINK) {
+            throw new IOException("Expected symlink for " + path + ", but got: " + fileState);
           }
           unresolvedLinkTarget = path.readSymbolicLink();
-        } else if (noFollowStat.isFile()) {
+        } else if (fileState.getType() == FileStateType.REGULAR_FILE) {
           type = FileType.FILE;
-        } else if (noFollowStat.isDirectory()) {
+        } else if (fileState.getType() == FileStateType.DIRECTORY) {
           type = FileType.DIRECTORY;
         } else {
           unresolvedLinkTarget = path.readSymbolicLink();
@@ -274,8 +317,10 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
                   Root.absoluteRoot(path.getFileSystem()), path.resolveSymbolicLinks());
           type = followStat.isFile() ? FileType.SYMLINK_TO_FILE : FileType.SYMLINK_TO_DIRECTORY;
         }
-        return new FileInfo(
-            type, fsVal != null ? fsVal : noFollowStat.hashCode(), realPath, unresolvedLinkTarget);
+        if (fsVal == null) {
+          fsVal = fileState;
+        }
+        return new FileInfo(type, withDigest(fsVal), realPath, unresolvedLinkTarget);
       }
     } else {
       // Stat the file.
@@ -297,16 +342,32 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
           type = fileValue.isDirectory() ? FileType.DIRECTORY : FileType.FILE;
         }
         return new FileInfo(
-            type, fileValue.realFileStateValue(), fileValue.realRootedPath(), unresolvedLinkTarget);
+            type,
+            withDigest(fileValue.realFileStateValue()),
+            fileValue.realRootedPath(),
+            unresolvedLinkTarget);
       } else {
         // If it doesn't exist, or it's a dangling symlink, we still want to handle that gracefully.
         return new FileInfo(
             fileValue.isSymlink() ? FileType.DANGLING_SYMLINK : FileType.NONEXISTENT,
-            fileValue.realFileStateValue(),
+            withDigest(fileValue.realFileStateValue()),
             null,
             fileValue.isSymlink() ? fileValue.getUnresolvedLinkTarget() : null);
       }
     }
+  }
+
+  private static HasDigest withDigest(HasDigest fsVal) {
+    if (fsVal instanceof FileStateValue) {
+      return new HasDigest.ByteStringDigest(
+          ((FileStateValue) fsVal).getValueFingerprint().toByteArray());
+    } else if (fsVal instanceof FileArtifactValue) {
+      FileArtifactValue artifactValue = (FileArtifactValue) fsVal;
+      // Transforming the FileArtifactValue to fingerprint the digests and retain other values
+      return FileArtifactValue.createForVirtualActionInput(
+          artifactValue.getValueFingerprint().toByteArray(), artifactValue.getSize());
+    }
+    return fsVal;
   }
 
   private static final class PkgLookupResult {
@@ -487,18 +548,20 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
     return RecursiveFilesystemTraversalValue.of(root, paths.build());
   }
 
-  private static int hashDirectorySymlink(Iterable<ResolvedFile> children, Object metadata) {
+  private static HasDigest hashDirectorySymlink(
+      Iterable<ResolvedFile> children, HasDigest metadata) {
     // If the root is a directory symlink, the associated FileStateValue does not change when the
     // linked directory's contents change, so we can't use the FileStateValue as metadata like we
     // do with other ResolvedFile kinds. Instead we compute a metadata hash from the child
     // elements and return that as the ResolvedFile's metadata hash.
-
-    // Compute the hash using the method described in Effective Java, 2nd ed., Item 9.
-    int result = 0;
-    for (ResolvedFile c : children) {
-      result = 31 * result + c.getMetadata().hashCode();
+    Fingerprint fp = new Fingerprint();
+    fp.addBytes(metadata.getDigest());
+    for (ResolvedFile file : children) {
+      fp.addPath(file.getNameInSymlinkTree());
+      fp.addBytes(file.getMetadata().getDigest());
     }
-    return 31 * result + metadata.hashCode();
+    byte[] result = fp.digestAndReset();
+    return new HasDigest.ByteStringDigest(result);
   }
 
   private static SkyValue getDependentSkyValue(Environment env, SkyKey key)

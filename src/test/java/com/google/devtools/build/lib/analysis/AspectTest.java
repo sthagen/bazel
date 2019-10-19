@@ -19,7 +19,7 @@ import static com.google.devtools.build.lib.analysis.configuredtargets.RuleConfi
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
@@ -291,12 +291,7 @@ public class AspectTest extends AnalysisTestCase {
     reporter.removeHandler(failFastHandler);
     // getConfiguredTarget() uses a separate code path that does not hit
     // SkyframeBuildView#configureTargets
-    try {
-      update("//a:a");
-      fail();
-    } catch (ViewCreationFailedException e) {
-      // expected
-    }
+    assertThrows(ViewCreationFailedException.class, () -> update("//a:a"));
     assertContainsEvent("Aspect error");
   }
 
@@ -314,12 +309,7 @@ public class AspectTest extends AnalysisTestCase {
     reporter.removeHandler(failFastHandler);
     // getConfiguredTarget() uses a separate code path that does not hit
     // SkyframeBuildView#configureTargets
-    try {
-      update("//a:a");
-      fail();
-    } catch (ViewCreationFailedException e) {
-      // expected
-    }
+    assertThrows(ViewCreationFailedException.class, () -> update("//a:a"));
     assertContainsEvent("Aspect error");
   }
 
@@ -437,7 +427,10 @@ public class AspectTest extends AnalysisTestCase {
 
       @Override
       public ConfiguredAspect create(
-          ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+          ConfiguredTargetAndData ctadBase,
+          RuleContext ruleContext,
+          AspectParameters parameters,
+          String toolsRepository)
           throws InterruptedException, ActionConflictException {
         Object lateBoundPrereq = ruleContext.getPrerequisite(":late", TARGET);
         return new ConfiguredAspect.Builder(this, parameters, ruleContext)
@@ -490,7 +483,7 @@ public class AspectTest extends AnalysisTestCase {
                                     .aspect(AspectThatRegistersAction.INSTANCE))
                             .add(
                                 attr(":action_listener", LABEL_LIST)
-                                    .cfg(HostTransition.INSTANCE)
+                                    .cfg(HostTransition.createFactory())
                                     .value(ACTION_LISTENER)));
 
     public static class AspectThatRegistersAction extends NativeAspectClass
@@ -507,7 +500,10 @@ public class AspectTest extends AnalysisTestCase {
 
       @Override
       public ConfiguredAspect create(
-          ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+          ConfiguredTargetAndData ctadBase,
+          RuleContext ruleContext,
+          AspectParameters parameters,
+          String toolsRepository)
           throws InterruptedException, ActionConflictException {
         ruleContext.registerAction(new NullAction(ruleContext.createOutputArtifact()));
         return new ConfiguredAspect.Builder(this, parameters, ruleContext).build();
@@ -540,7 +536,7 @@ public class AspectTest extends AnalysisTestCase {
     update();
 
     ConfiguredTarget a = getConfiguredTarget("//a:a");
-    NestedSet<Artifact> extraActionArtifacts =
+    NestedSet<Artifact.DerivedArtifact> extraActionArtifacts =
         a.getProvider(ExtraActionArtifactsProvider.class).getTransitiveExtraActionArtifacts();
     for (Artifact artifact : extraActionArtifacts) {
       assertThat(artifact.getOwnerLabel()).isEqualTo(Label.create("@//a", "b"));
@@ -593,11 +589,11 @@ public class AspectTest extends AnalysisTestCase {
         "x/extension.bzl",
         "def _aspect_impl(target, ctx):",
         "  ctx.actions.do_nothing(mnemonic='Mnemonic')",
-        "  return struct()",
+        "  return []",
         "aspect1 = aspect(_aspect_impl, attr_aspects=['deps'])",
         "aspect2 = aspect(_aspect_impl, attr_aspects=['extra_deps'])",
         "def _rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "injector1 = rule(_rule_impl, attrs = { 'deps' : attr.label_list(aspects = [aspect1]) })",
         "null_rule = rule(_rule_impl, attrs = { 'deps' : attr.label_list() })",
         "injector2 = rule(",
@@ -658,17 +654,16 @@ public class AspectTest extends AnalysisTestCase {
         "x/extension.bzl",
         "def _aspect_impl(target, ctx):",
         "  ctx.actions.do_nothing(mnemonic='Mnemonic')",
-        "  return struct()",
+        "  return []",
         "aspect1 = aspect(_aspect_impl, attr_aspects=['deps'], attrs =",
         "    {'param': attr.string(values = ['a', 'b'])})",
         "aspect2 = aspect(_aspect_impl, attr_aspects=['deps'])",
         "def _rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "injector1 = rule(_rule_impl, attrs =",
         "    { 'deps' : attr.label_list(aspects = [aspect1]), 'param' : attr.string() })",
         "injector2 = rule(_rule_impl, attrs = { 'deps' : attr.label_list(aspects = [aspect2]) })",
-        "null_rule = rule(_rule_impl, attrs = { 'deps' : attr.label_list() })"
-    );
+        "null_rule = rule(_rule_impl, attrs = { 'deps' : attr.label_list() })");
 
     scratch.file(
         "pkg1/BUILD",
@@ -679,6 +674,41 @@ public class AspectTest extends AnalysisTestCase {
 
     // Implicitly check that update() didn't throw an exception because of two actions producing
     // the same outputs.
+  }
+
+  @Test
+  public void sharedArtifactsInAspect() throws Exception {
+    scratch.file(
+        "foo/shared_aspect.bzl",
+        "def _shared_aspect_impl(target, ctx):",
+        "  shared_file = ctx.actions.declare_file('shared_file')",
+        "  ctx.actions.write(output=shared_file, content='Shared content')",
+        "  lib = ctx.rule.attr.lib",
+        "  if lib:",
+        "    result = depset([shared_file], transitive=[ctx.rule.attr.lib.prov])",
+        "  else:",
+        "    result = depset([shared_file])",
+        "  return struct(prov=result)",
+        "",
+        "shared_aspect = aspect(implementation = _shared_aspect_impl,",
+        "                       attr_aspects = ['lib'])",
+        "",
+        "def _rule_impl(ctx):",
+        "  pass",
+        "",
+        "simple_rule = rule(",
+        "    implementation=_rule_impl,",
+        "    attrs = {'lib': attr.label(providers = ['prov'],",
+        "                               aspects=[shared_aspect])})");
+    scratch.file(
+        "foo/BUILD",
+        "load(':shared_aspect.bzl', 'shared_aspect', 'simple_rule')",
+        "",
+        "simple_rule(name = 'top_rule', lib = ':first_dep')",
+        "simple_rule(name = 'first_dep', lib = ':second_dep')",
+        "simple_rule(name = 'second_dep')");
+    // Confirm that load is successful and doesn't crash.
+    update("//foo:top_rule");
   }
 
   @Test

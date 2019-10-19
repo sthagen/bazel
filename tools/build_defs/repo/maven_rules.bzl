@@ -181,9 +181,6 @@ def _generate_build_file(ctx, template, paths):
     )
     ctx.file("%s/BUILD" % paths.symlink_dir, contents, False)
 
-def _file_exists(ctx, filename):
-    return _execute(ctx, "[[ -f %s ]] && exit 0 || exit 1" % filename).return_code == 0
-
 # Constructs the maven command to retrieve the dependencies from remote
 # repositories using the dependency plugin, and executes it.
 def _mvn_download(ctx, paths, fully_qualified_name):
@@ -285,7 +282,7 @@ def _maven_aar_impl(ctx):
 maven_jar = repository_rule(
     implementation = _maven_jar_impl,
     attrs = dict(_common_maven_rule_attrs.items() + {
-        # Needed for compatability reasons with the native maven_jar rule.
+        # Needed for compatibility reasons with the native maven_jar rule.
         "repository": attr.string(default = ""),
         "server": attr.label(default = None),
     }.items()),

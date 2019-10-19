@@ -14,14 +14,13 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Action;
-import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionTemplate;
@@ -49,6 +48,7 @@ import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.Actio
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
+import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
@@ -143,12 +143,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
             .setOutputPathMapper(mapper)
             .build(ActionsTestUtil.NULL_ACTION_OWNER);
 
-    try {
-       evaluate(spawnActionTemplate);
-       fail("Expected ActionConflictException");
-    } catch (ActionConflictException e) {
-       // Expected ActionConflictException
-    }
+    assertThrows(ActionConflictException.class, () -> evaluate(spawnActionTemplate));
   }
 
   @Test
@@ -184,12 +179,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
             .setOutputPathMapper(mapper)
             .build(ActionsTestUtil.NULL_ACTION_OWNER);
 
-    try {
-       evaluate(spawnActionTemplate);
-       fail("Expected ArtifactPrefixConflictException");
-    } catch (ArtifactPrefixConflictException e) {
-       // Expected ArtifactPrefixConflictException
-    }
+    assertThrows(ArtifactPrefixConflictException.class, () -> evaluate(spawnActionTemplate));
   }
 
   private static final ActionLookupValue.ActionLookupKey CTKEY = new InjectedActionLookupKey("key");
@@ -199,12 +189,14 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
 
     differencer.inject(CTKEY, ctValue);
     ActionTemplateExpansionKey templateKey = ActionTemplateExpansionValue.key(CTKEY, 0);
+    EvaluationContext evaluationContext =
+        EvaluationContext.newBuilder()
+            .setKeepGoing(false)
+            .setNumThreads(SkyframeExecutor.DEFAULT_THREAD_COUNT)
+            .setEventHander(NullEventHandler.INSTANCE)
+            .build();
     EvaluationResult<ActionTemplateExpansionValue> result =
-        driver.evaluate(
-            ImmutableList.of(templateKey),
-            false,
-            SkyframeExecutor.DEFAULT_THREAD_COUNT,
-            NullEventHandler.INSTANCE);
+        driver.evaluate(ImmutableList.of(templateKey), evaluationContext);
     if (result.hasError()) {
       throw result.getError().getException();
     }
@@ -220,8 +212,9 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
       ActionTemplate<?> actionTemplate) {
     return new NonRuleConfiguredTargetValue(
         Mockito.mock(ConfiguredTarget.class),
-        Actions.GeneratingActions.fromSingleAction(actionTemplate),
-        NestedSetBuilder.<Package>stableOrder().build());
+        Actions.GeneratingActions.fromSingleAction(actionTemplate, CTKEY),
+        NestedSetBuilder.<Package>stableOrder().build(),
+        /*nonceVersion=*/ null);
   }
 
   private SpecialArtifact createTreeArtifact(String path) {
@@ -229,7 +222,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
     return new SpecialArtifact(
         ArtifactRoot.asDerivedRoot(rootDirectory, rootDirectory.getRelative("out")),
         execPath,
-        ArtifactOwner.NullArtifactOwner.INSTANCE,
+        CTKEY,
         SpecialArtifactType.TREE);
   }
 
@@ -239,11 +232,13 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
     Map<TreeFileArtifact, FileArtifactValue> treeFileArtifactMap = new LinkedHashMap<>();
 
     for (String childRelativePath : childRelativePaths) {
-      TreeFileArtifact treeFileArtifact = ActionInputHelper.treeFileArtifact(
-          treeArtifact, PathFragment.create(childRelativePath));
+      TreeFileArtifact treeFileArtifact =
+          ActionsTestUtil.createTreeFileArtifactWithNoGeneratingAction(
+              treeArtifact, childRelativePath);
       scratch.file(treeFileArtifact.getPath().toString(), childRelativePath);
       // We do not care about the FileArtifactValues in this test.
-      treeFileArtifactMap.put(treeFileArtifact, FileArtifactValue.create(treeFileArtifact));
+      treeFileArtifactMap.put(
+          treeFileArtifact, FileArtifactValue.createForTesting(treeFileArtifact));
     }
 
     artifactValueMap.put(

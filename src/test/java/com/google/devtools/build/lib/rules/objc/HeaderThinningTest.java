@@ -15,15 +15,19 @@
 package com.google.devtools.build.lib.rules.objc;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
@@ -33,10 +37,13 @@ import com.google.devtools.build.lib.analysis.util.ScratchAttributeWriter;
 import com.google.devtools.build.lib.packages.util.MockObjcSupport;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.IORuntimeException;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -50,7 +57,7 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
 
   @Before
   public void beforeEach() throws Exception {
-    MockObjcSupport.createCrosstoolPackage(mockToolsConfig);
+    MockObjcSupport.setupCcToolchainConfig(mockToolsConfig);
     MockObjcSupport.setupAppleSdks(mockToolsConfig);
     useConfiguration(
         "--crosstool_top=" + MockObjcSupport.DEFAULT_OSX_CROSSTOOL,
@@ -58,6 +65,22 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
         "--objc_use_dotd_pruning",
         "--xcode_version=" + MockObjcSupport.DEFAULT_XCODE_VERSION,
         "--ios_sdk_version=" + MockObjcSupport.DEFAULT_IOS_SDK_VERSION);
+  }
+
+  private Iterable<Artifact> determineAdditionalInputs(
+      HeaderThinning headerThinning, CppCompileAction action)
+      throws ExecException, InterruptedException, IOException {
+    try {
+      return headerThinning.determineAdditionalInputs(null, action, null, null).get();
+    } catch (ExecutionException e) {
+      Throwables.throwIfInstanceOf(e.getCause(), ExecException.class);
+      Throwables.throwIfInstanceOf(e.getCause(), InterruptedException.class);
+      if (e.getCause() instanceof IORuntimeException) {
+        throw ((IORuntimeException) e.getCause()).getCauseIOException();
+      }
+      Throwables.throwIfUnchecked(e.getCause());
+      throw new IllegalStateException(e.getCause());
+    }
   }
 
   @Test
@@ -73,7 +96,7 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
     HeaderThinning headerThinning = new HeaderThinning(getPotentialHeaders(expectedHeaders));
     writeToHeadersListFile(action, "objc/a.pch", "objc/b.h", "objc/c", "objc/d.hpp");
 
-    Iterable<Artifact> headersFound = headerThinning.determineAdditionalInputs(null, action, null);
+    Iterable<Artifact> headersFound = determineAdditionalInputs(headerThinning, action);
     assertThat(headersFound).containsExactlyElementsIn(expectedHeaders);
   }
 
@@ -86,13 +109,10 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
     HeaderThinning headerThinning = new HeaderThinning(getPotentialHeaders(expectedHeaders));
     writeToHeadersListFile(action, "objc/a.h", "objc/b.h", "objc/c.h");
 
-    try {
-      headerThinning.determineAdditionalInputs(null, action, null);
-      fail("Exception was not thrown");
-    } catch (ExecException e) {
-      assertThat(e).hasMessageThat().containsMatch("(objc/c.h)");
-      assertThat(e).isInstanceOf(UserExecException.class);
-    }
+    ExecException e =
+        assertThrows(ExecException.class, () -> determineAdditionalInputs(headerThinning, action));
+    assertThat(e).hasMessageThat().containsMatch("(objc/c.h)");
+    assertThat(e).isInstanceOf(UserExecException.class);
   }
 
   @Test
@@ -102,9 +122,9 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
     List<Artifact> expectedHeaders =
         ImmutableList.of(getSourceArtifact("objc/a.h"), getTreeArtifact("tree/dir"));
     HeaderThinning headerThinning = new HeaderThinning(getPotentialHeaders(expectedHeaders));
-    writeToHeadersListFile(action, "objc/a.h", "tree/dir/c.h");
+    writeToHeadersListFile(action, "objc/a.h", "out/tree/dir/c.h");
 
-    Iterable<Artifact> headersFound = headerThinning.determineAdditionalInputs(null, action, null);
+    Iterable<Artifact> headersFound = determineAdditionalInputs(headerThinning, action);
     assertThat(headersFound).containsExactlyElementsIn(expectedHeaders);
   }
 
@@ -125,7 +145,8 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
         HeaderThinning.findRequiredHeaderInputs(
             sourceFile,
             headersListFile,
-            createHeaderFilesMap(getPotentialHeaders(expectedHeaders)));
+            createHeaderFilesMap(getPotentialHeaders(expectedHeaders)),
+            ArtifactPathResolver.IDENTITY);
     assertThat(headersFound).containsExactlyElementsIn(expectedHeaders);
   }
 
@@ -187,7 +208,13 @@ public class HeaderThinningTest extends ObjcRuleTestCase {
   }
 
   private Artifact getTreeArtifact(String name) {
-    Artifact treeArtifactBase = getSourceArtifact(name);
+    DerivedArtifact treeArtifactBase =
+        getDerivedArtifact(
+            PathFragment.create(name),
+            ArtifactRoot.asDerivedRoot(
+                directories.getExecRoot("workspace"),
+                directories.getExecRoot("workspace").getChild("out")),
+            ActionsTestUtil.NULL_ARTIFACT_OWNER);
     return new SpecialArtifact(
         treeArtifactBase.getRoot(),
         treeArtifactBase.getExecPath(),

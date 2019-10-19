@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -34,19 +33,20 @@ import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.skyframe.BuildConfigurationValue.Key;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey.KeyAndHost;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.syntax.SkylarkImport;
 import com.google.devtools.build.skyframe.SkyFunctionName;
+import java.math.BigInteger;
 import javax.annotation.Nullable;
 
 /** An aspect in the context of the Skyframe graph. */
-@AutoCodec
 public final class AspectValue extends BasicActionLookupValue {
-
   /**
    * A base class for keys that have AspectValue as a Sky value.
    */
   public abstract static class AspectValueKey extends ActionLookupKey {
     public abstract String getDescription();
+
+    @Override
+    public abstract Label getLabel();
   }
 
   /** A base class for a key representing an aspect applied to a particular target. */
@@ -293,7 +293,7 @@ public final class AspectValue extends BasicActionLookupValue {
     private final Label targetLabel;
     private final BuildConfigurationValue.Key aspectConfigurationKey;
     private final ConfiguredTargetKey baseConfiguredTargetKey;
-    private final SkylarkImport skylarkImport;
+    private final Label skylarkFileLabel;
     private final String skylarkValueName;
     private int hashCode;
 
@@ -301,12 +301,12 @@ public final class AspectValue extends BasicActionLookupValue {
         Label targetLabel,
         BuildConfigurationValue.Key aspectConfigurationKey,
         ConfiguredTargetKey baseConfiguredTargetKey,
-        SkylarkImport skylarkImport,
+        Label skylarkFileLabel,
         String skylarkFunctionName) {
       this.targetLabel = targetLabel;
       this.aspectConfigurationKey = aspectConfigurationKey;
       this.baseConfiguredTargetKey = baseConfiguredTargetKey;
-      this.skylarkImport = skylarkImport;
+      this.skylarkFileLabel = skylarkFileLabel;
       this.skylarkValueName = skylarkFunctionName;
     }
 
@@ -315,12 +315,12 @@ public final class AspectValue extends BasicActionLookupValue {
       return SkyFunctions.LOAD_SKYLARK_ASPECT;
     }
 
-    public String getSkylarkValueName() {
+    String getSkylarkValueName() {
       return skylarkValueName;
     }
 
-    public SkylarkImport getSkylarkImport() {
-      return skylarkImport;
+    Label getSkylarkFileLabel() {
+      return skylarkFileLabel;
     }
 
     protected boolean isAspectConfigurationHost() {
@@ -328,10 +328,14 @@ public final class AspectValue extends BasicActionLookupValue {
     }
 
     @Override
+    public Label getLabel() {
+      return targetLabel;
+    }
+
+    @Override
     public String getDescription() {
       // Skylark aspects are referred to on command line with <file>%<value ame>
-      return String.format("%s%%%s of %s", skylarkImport.getImportString(),
-          skylarkValueName, targetLabel);
+      return String.format("%s%%%s of %s", skylarkFileLabel, skylarkValueName, targetLabel);
     }
 
     @Override
@@ -365,7 +369,7 @@ public final class AspectValue extends BasicActionLookupValue {
           targetLabel,
           aspectConfigurationKey,
           baseConfiguredTargetKey,
-          skylarkImport,
+          skylarkFileLabel,
           skylarkValueName);
     }
 
@@ -382,7 +386,7 @@ public final class AspectValue extends BasicActionLookupValue {
       return Objects.equal(targetLabel, that.targetLabel)
           && Objects.equal(aspectConfigurationKey, that.aspectConfigurationKey)
           && Objects.equal(baseConfiguredTargetKey, that.baseConfiguredTargetKey)
-          && Objects.equal(skylarkImport, that.skylarkImport)
+          && Objects.equal(skylarkFileLabel, that.skylarkFileLabel)
           && Objects.equal(skylarkValueName, that.skylarkValueName);
     }
 
@@ -404,13 +408,13 @@ public final class AspectValue extends BasicActionLookupValue {
         Label targetLabel,
         Key aspectConfigurationKey,
         ConfiguredTargetKey baseConfiguredTargetKey,
-        SkylarkImport skylarkImport,
+        Label skylarkFileLabel,
         String skylarkFunctionName) {
       super(
           targetLabel,
           aspectConfigurationKey,
           baseConfiguredTargetKey,
-          skylarkImport,
+          skylarkFileLabel,
           skylarkFunctionName);
     }
 
@@ -428,24 +432,7 @@ public final class AspectValue extends BasicActionLookupValue {
   @Nullable private AspectKey key;
   @Nullable private ConfiguredAspect configuredAspect;
   // May be null either after clearing or because transitive packages are not tracked.
-  @Nullable private NestedSet<Package> transitivePackagesForPackageRootResolution;
-
-  @AutoCodec.Instantiator
-  @AutoCodec.VisibleForSerialization
-  AspectValue(
-      AspectKey key,
-      Aspect aspect,
-      Label label,
-      Location location,
-      ConfiguredAspect configuredAspect) {
-    super(configuredAspect.getActions(), configuredAspect.getGeneratingActionIndex());
-    this.label = Preconditions.checkNotNull(label, actions);
-    this.aspect = Preconditions.checkNotNull(aspect, label);
-    this.location = Preconditions.checkNotNull(location, label);
-    this.key = Preconditions.checkNotNull(key, label);
-    this.configuredAspect = Preconditions.checkNotNull(configuredAspect, label);
-    this.transitivePackagesForPackageRootResolution = null;
-  }
+  @Nullable private transient NestedSet<Package> transitivePackagesForPackageRootResolution;
 
   public AspectValue(
       AspectKey key,
@@ -453,8 +440,9 @@ public final class AspectValue extends BasicActionLookupValue {
       Label label,
       Location location,
       ConfiguredAspect configuredAspect,
-      NestedSet<Package> transitivePackagesForPackageRootResolution) {
-    super(configuredAspect.getActions(), configuredAspect.getGeneratingActionIndex());
+      NestedSet<Package> transitivePackagesForPackageRootResolution,
+      BigInteger nonceVersion) {
+    super(configuredAspect.getActions(), nonceVersion);
     this.label = Preconditions.checkNotNull(label, actions);
     this.aspect = Preconditions.checkNotNull(aspect, label);
     this.location = Preconditions.checkNotNull(location, label);
@@ -489,7 +477,6 @@ public final class AspectValue extends BasicActionLookupValue {
     Preconditions.checkNotNull(location, this);
     Preconditions.checkNotNull(key, this);
     Preconditions.checkNotNull(configuredAspect, this);
-    Preconditions.checkNotNull(transitivePackagesForPackageRootResolution, this);
     if (clearEverything) {
       label = null;
       aspect = null;
@@ -498,6 +485,11 @@ public final class AspectValue extends BasicActionLookupValue {
       configuredAspect = null;
     }
     transitivePackagesForPackageRootResolution = null;
+  }
+
+  @Override
+  public final boolean mustBeReferenceComparedOnRecomputation() {
+    return true;
   }
 
   /**
@@ -512,7 +504,7 @@ public final class AspectValue extends BasicActionLookupValue {
 
   @Override
   public String toString() {
-    return MoreObjects.toStringHelper(this)
+    return getStringHelper()
         .add("label", label)
         .add("key", key)
         .add("location", location)
@@ -561,7 +553,7 @@ public final class AspectValue extends BasicActionLookupValue {
       Label targetLabel,
       BuildConfiguration aspectConfiguration,
       BuildConfiguration targetConfiguration,
-      SkylarkImport skylarkImport,
+      Label skylarkFileLabel,
       String skylarkExportName) {
     KeyAndHost keyAndHost = ConfiguredTargetKey.keyFromConfiguration(aspectConfiguration);
     SkylarkAspectLoadingKey key =
@@ -570,13 +562,13 @@ public final class AspectValue extends BasicActionLookupValue {
                 targetLabel,
                 keyAndHost.key,
                 ConfiguredTargetKey.of(targetLabel, targetConfiguration),
-                skylarkImport,
+                skylarkFileLabel,
                 skylarkExportName)
             : new SkylarkAspectLoadingKey(
                 targetLabel,
                 keyAndHost.key,
                 ConfiguredTargetKey.of(targetLabel, targetConfiguration),
-                skylarkImport,
+                skylarkFileLabel,
                 skylarkExportName);
 
     return skylarkAspectKeyInterner.intern(key);

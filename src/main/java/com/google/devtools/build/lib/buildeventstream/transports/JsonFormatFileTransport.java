@@ -15,28 +15,26 @@
 package com.google.devtools.build.lib.buildeventstream.transports;
 
 import com.google.common.base.Charsets;
+import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
 import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploader;
 import com.google.devtools.build.lib.buildeventstream.BuildEventProtocolOptions;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventTransport;
-import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
-import java.io.IOException;
-import java.util.function.Consumer;
+import java.io.BufferedOutputStream;
 
 /**
  * A simple {@link BuildEventTransport} that writes the JSON representation of the protocol-buffer
  * representation of the events to a file.
  */
 public final class JsonFormatFileTransport extends FileTransport {
-  JsonFormatFileTransport(
-      String path,
+  public JsonFormatFileTransport(
+      BufferedOutputStream outputStream,
       BuildEventProtocolOptions options,
       BuildEventArtifactUploader uploader,
-      Consumer<AbruptExitException> exitFunc)
-      throws IOException {
-    super(path, options, uploader, exitFunc);
+      ArtifactGroupNamer namer) {
+    super(outputStream, options, uploader, namer);
   }
 
   @Override

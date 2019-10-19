@@ -25,10 +25,24 @@ source "${CURRENT_DIR}/remote_helpers.sh" \
   || { echo "remote_helpers.sh not found!" >&2; exit 1; }
 
 
+# On Mac, set host config to use PY2 because our CI Mac workers don't have a
+# Python 3 runtime.
+# TODO(https://github.com/bazelbuild/continuous-integration/issues/578):
+# Remove this workaround.
+if [[ "$(uname -s | tr [:upper:] [:lower:] | grep -E 'darwin.*')" ]]; then
+    HOST_PY_FLAG="--host_force_python=PY2"
+    echo "Setting host Python to PY2 to workaround unavailability of Python 3 \
+on Mac CI"
+else
+    HOST_PY_FLAG=""
+fi
+
+
 test_pkg_tar() {
+  rm -rf main
   mkdir main
   cd main
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   echo Hello World > foo.txt
   echo Hello World, again > bar.txt
   cat > BUILD <<'EOF'
@@ -39,10 +53,88 @@ pkg_tar(
     srcs = glob(["*.txt"]),
 )
 EOF
-  bazel build --all_incompatible_changes ... \
+  bazel build --all_incompatible_changes $HOST_PY_FLAG ... &> $TEST_log \
     || fail "Expect success, even with all upcoming Skylark changes"
-  grep -q 'Hello World' `bazel info bazel-bin`/data.tar \
+  grep -q 'Hello World' `bazel info bazel-bin --all_incompatible_changes $HOST_PY_FLAG`/data.tar \
     || fail "Output not generated correctly"
+}
+
+test_pkg_tar_quoting() {
+  # Verify that pkg_tar can handle file names that are allowed as lablels
+  # but contain characters that could mess up options.
+  rm -rf main out
+  mkdir main
+  cd main
+  create_workspace_with_default_repos WORKSPACE
+  mkdir data
+  echo 'with equal' > data/'foo=bar'
+  echo 'like an option' > data/--foo
+  cat > BUILD <<'EOF'
+load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+
+pkg_tar(
+  name = "fancy",
+  srcs = glob(["data/**/*"]),
+  symlinks = {"link_with_colons" : "some:dangling:link"},
+)
+EOF
+  bazel build --all_incompatible_changes $HOST_PY_FLAG :fancy &> $TEST_log \
+      || fail "Expected success"
+  mkdir ../out
+  tar -C ../out -x -v -f `bazel info bazel-bin --all_incompatible_changes $HOST_PY_FLAG`/fancy.tar
+
+  grep equal ../out/foo=bar || fail "file with equal sign not packed correctly"
+  grep option ../out/--foo || fail "file with double minus not packed correctly"
+  readlink ../out/link_with_colons | grep -- 'some:dangling:link' \
+      || fail "symlink not packed"
+}
+
+test_pkg_tar_strip_directory() {
+  # Verify that pkg_tar's strip_prefix permits stripping off the name of
+  # directory output targets.
+  rm -rf main out
+  mkdir main
+  cd main
+  create_workspace_with_default_repos WORKSPACE
+  cat > BUILD <<'EOF'
+load(":apple.bzl", "create_banana_directory")
+
+create_banana_directory(
+    name = "banana_directory",
+)
+
+load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+
+pkg_tar(
+    name = "banana_tarball",
+    srcs = [":banana_directory"],
+    strip_prefix = "banana",
+)
+EOF
+  cat > apple.bzl <<'EOF'
+def _create_banana_directory_impl(ctx):
+    out = ctx.actions.declare_directory("banana")
+    ctx.actions.run(
+        executable = "bash",
+        arguments = ["-c", "mkdir -p %s/pear && touch %s/pear/grape" % (out.path, out.path)],
+        outputs = [out],
+    )
+    return [
+        DefaultInfo(
+            files = depset([out]),
+        ),
+    ]
+
+create_banana_directory = rule(
+    implementation = _create_banana_directory_impl,
+)
+EOF
+  bazel build --all_incompatible_changes $HOST_PY_FLAG :banana_tarball &> $TEST_log \
+      || fail "Expected success"
+  mkdir ../out
+  tar -C ../out -x -v -f `bazel info bazel-bin --all_incompatible_changes $HOST_PY_FLAG`/banana_tarball.tar
+
+  test -f ../out/pear/grape || fail "expected file to be present"
 }
 
 test_http_archive() {
@@ -58,7 +150,7 @@ EOF
   EXTREPODIR=`pwd`
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="ext",
@@ -77,7 +169,7 @@ genrule(
   executable = True,
 )
 EOF
-  bazel build --all_incompatible_changes :foo \
+  bazel build --all_incompatible_changes :foo &> $TEST_log \
     || fail "Expected to build even with incompatible changes"
   bazel run :foo | grep -q dragons || fail "wrong output"
 }
@@ -101,7 +193,7 @@ EOF
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 new_git_repository(
   name="ext",
@@ -119,7 +211,7 @@ genrule(
   executable = True,
 )
 EOF
-  bazel build --all_incompatible_changes :foo \
+  bazel build --all_incompatible_changes :foo &> $TEST_log \
     || fail "Expected to build even with incompatible changes"
   bazel run :foo | grep -q dragons || fail "wrong output"
 }

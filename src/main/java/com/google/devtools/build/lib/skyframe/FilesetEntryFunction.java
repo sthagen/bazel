@@ -23,9 +23,12 @@ import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.FilesetTraversalParams;
 import com.google.devtools.build.lib.actions.FilesetTraversalParams.DirectTraversal;
+import com.google.devtools.build.lib.actions.HasDigest;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalFunction.DanglingSymlinkException;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalFunction.RecursiveFilesystemTraversalException;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.ResolvedFile;
+import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.TraversalRequest;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
@@ -47,9 +50,21 @@ public final class FilesetEntryFunction implements SkyFunction {
     }
   }
 
+  private final Function<String, Path> getExecRoot;
+
+  public FilesetEntryFunction(Function<String, Path> getExecRoot) {
+    this.getExecRoot = getExecRoot;
+  }
+
   @Override
   public SkyValue compute(SkyKey key, Environment env)
       throws FilesetEntryFunctionException, InterruptedException {
+    WorkspaceNameValue workspaceNameValue =
+        (WorkspaceNameValue) env.getValue(WorkspaceNameValue.key());
+    if (workspaceNameValue == null) {
+      return null;
+    }
+
     FilesetTraversalParams t = (FilesetTraversalParams) key.argument();
     Preconditions.checkState(
         t.getDirectTraversal().isPresent() && t.getNestedArtifact() == null,
@@ -69,7 +84,7 @@ public final class FilesetEntryFunction implements SkyFunction {
     // root being the respective entry itself. These are all traversed for they may be
     // directories or symlinks to directories, and we need to establish Skyframe dependencies on
     // their contents for incremental correctness. If an entry is indeed a directory (but not when
-    // it's a symlink to one) then we have to create symlinks to each of their childen.
+    // it's a symlink to one) then we have to create symlinks to each of their children.
     // (NB: there seems to be no good reason for this, it's just how legacy Fileset works. We may
     // want to consider creating a symlink just for the directory and not for its child elements.)
     //
@@ -121,7 +136,7 @@ public final class FilesetEntryFunction implements SkyFunction {
       // the parent. Finding and discarding the children is easy if we traverse the tree from
       // root to leaf.
       DirectoryTree root = new DirectoryTree();
-      for (ResolvedFile f : rftv.getTransitiveFiles().toCollection()) {
+      for (ResolvedFile f : rftv.getTransitiveFiles()) {
         PathFragment path = f.getNameInSymlinkTree().relativeTo(prefixToRemove);
         if (!path.isEmpty()) {
           path = t.getDestPath().getRelative(path);
@@ -173,24 +188,28 @@ public final class FilesetEntryFunction implements SkyFunction {
           f.getMetadata(),
           t.getDestPath(),
           direct.isGenerated(),
-          outputSymlinks);
+          outputSymlinks,
+          getExecRoot.apply(workspaceNameValue.getName()));
     }
 
     return FilesetEntryValue.of(ImmutableSet.copyOf(outputSymlinks.values()));
   }
 
   /** Stores an output symlink unless it would overwrite an existing one. */
-  private static void maybeStoreSymlink(
+  private void maybeStoreSymlink(
       PathFragment linkName,
       PathFragment linkTarget,
-      Object metadata,
+      HasDigest metadata,
       PathFragment destPath,
       boolean isGenerated,
-      Map<PathFragment, FilesetOutputSymlink> result) {
+      Map<PathFragment, FilesetOutputSymlink> result,
+      Path execRoot) {
     linkName = destPath.getRelative(linkName);
     if (!result.containsKey(linkName)) {
       result.put(
-          linkName, FilesetOutputSymlink.create(linkName, linkTarget, metadata, isGenerated));
+          linkName,
+          FilesetOutputSymlink.create(
+              linkName, linkTarget, metadata, isGenerated, execRoot.asFragment()));
     }
   }
 
@@ -199,18 +218,43 @@ public final class FilesetEntryFunction implements SkyFunction {
     return null;
   }
 
+  /**
+   * Returns the {@link TraversalRequest} node used to compute the Skyframe value for {@code
+   * filesetEntryKey}. Should only be called to determine which nodes need to be rewound, and only
+   * when {@code filesetEntryKey.isGenerated()}.
+   */
+  public static TraversalRequest getDependencyForRewinding(FilesetEntryKey filesetEntryKey) {
+    FilesetTraversalParams t = filesetEntryKey.argument();
+    Preconditions.checkState(
+        t.getDirectTraversal().isPresent() && t.getNestedArtifact() == null,
+        "FilesetEntry does not support nested traversal: %s",
+        t);
+    Preconditions.checkState(
+        t.getDirectTraversal().get().isGenerated(),
+        "Rewinding is only supported for outputs: %s",
+        t);
+    // Traversals in the output tree inline any recursive TraversalRequest evaluations, i.e. there
+    // won't be any transitively depended-on TraversalRequests.
+    return createTraversalRequestKey(createErrorInfo(t), t.getDirectTraversal().get());
+  }
+
+  private static TraversalRequest createTraversalRequestKey(
+      String errorInfo, DirectTraversal traversal) {
+    return TraversalRequest.create(
+        traversal.getRoot(),
+        traversal.isGenerated(),
+        traversal.getPackageBoundaryMode(),
+        traversal.isStrictFilesetOutput(),
+        traversal.isPackage(),
+        errorInfo);
+  }
+
   private static RecursiveFilesystemTraversalValue traverse(
       Environment env, String errorInfo, DirectTraversal traversal)
       throws MissingDepException, InterruptedException {
-    RecursiveFilesystemTraversalValue.TraversalRequest depKey =
-        RecursiveFilesystemTraversalValue.TraversalRequest.create(
-            traversal.getRoot(),
-            traversal.isGenerated(),
-            traversal.getPackageBoundaryMode(),
-            traversal.isStrictFilesetOutput(),
-            traversal.isPackage(),
-            errorInfo);
-    RecursiveFilesystemTraversalValue v = (RecursiveFilesystemTraversalValue) env.getValue(depKey);
+    RecursiveFilesystemTraversalValue v =
+        (RecursiveFilesystemTraversalValue)
+            env.getValue(createTraversalRequestKey(errorInfo, traversal));
     if (env.valuesMissing()) {
       throw new MissingDepException();
     }

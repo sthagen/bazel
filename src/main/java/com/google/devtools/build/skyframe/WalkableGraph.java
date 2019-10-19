@@ -14,8 +14,7 @@
 package com.google.devtools.build.skyframe;
 
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.skyframe.QueryableGraph.Reason;
+import com.google.devtools.build.lib.util.Pair;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
@@ -83,24 +82,27 @@ public interface WalkableGraph {
   Map<SkyKey, Iterable<SkyKey>> getDirectDeps(Iterable<SkyKey> keys) throws InterruptedException;
 
   /**
+   * Returns the direct dependencies of the node with the given key. A node for that key must exist
+   * in the graph and be done.
+   */
+  Iterable<SkyKey> getDirectDeps(SkyKey key) throws InterruptedException;
+
+  /**
    * Returns a map giving the reverse dependencies of the nodes with the given keys. A node for each
    * given key must be done in the graph if it exists.
    */
   Map<SkyKey, Iterable<SkyKey>> getReverseDeps(Iterable<SkyKey> keys) throws InterruptedException;
 
   /**
-   * Examines all the given keys. Returns an iterable of keys whose corresponding nodes are
-   * currently available to be fetched.
-   *
-   * <p>Note: An unavailable node does not mean it is not in the graph. It only means it's not ready
-   * to be fetched immediately.
+   * Returns a map giving the reverse dependencies of the nodes with the given keys as well as the
+   * value
    */
-  Iterable<SkyKey> getCurrentlyAvailableNodes(Iterable<SkyKey> keys, Reason reason);
+  Map<SkyKey, Pair<SkyValue, Iterable<SkyKey>>> getValueAndRdeps(Iterable<SkyKey> keys)
+      throws InterruptedException;
 
   /** Provides a WalkableGraph on demand after preparing it. */
   interface WalkableGraphFactory {
-    EvaluationResult<SkyValue> prepareAndGet(
-        Set<SkyKey> roots, int numThreads, ExtendedEventHandler eventHandler)
+    EvaluationResult<SkyValue> prepareAndGet(Set<SkyKey> roots, EvaluationContext evaluationContext)
         throws InterruptedException;
 
     /** Returns the {@link SkyKey} that defines this universe. */

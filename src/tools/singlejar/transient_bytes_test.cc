@@ -24,6 +24,12 @@
 #include "src/tools/singlejar/transient_bytes.h"
 #include "googletest/include/gtest/gtest.h"
 
+#ifdef _MSC_VER
+#define SINGLEJAR_ALYWAYS_INLINE __forceinline
+#else
+#define SINGLEJAR_ALYWAYS_INLINE __attribute__((always_inline))
+#endif
+
 namespace {
 const char kStoredJar[] = "stored.zip";
 const char kCompressedJar[] = "compressed.zip";
@@ -65,7 +71,7 @@ class TransientBytesTest : public ::testing::Test {
 
   // The value of the byte at a given position in a file created by the
   // CreateFile method below.
-  static __attribute__((always_inline)) uint8_t file_byte_at(uint64_t offset) {
+  static SINGLEJAR_ALYWAYS_INLINE uint8_t file_byte_at(uint64_t offset) {
     // return offset >> (8 * (offset & 7));
     return offset & 255;
   }
@@ -128,7 +134,7 @@ TEST_F(TransientBytesTest, AppendBytes) {
   transient_bytes_->Append(kBytesSmall);
   EXPECT_EQ(strlen(kBytesSmall), transient_bytes_->data_size());
   std::ostringstream out;
-  out << *transient_bytes_.get();
+  out << *transient_bytes_;
   EXPECT_STREQ(kBytesSmall, out.str().c_str());
   out.flush();
 
@@ -137,7 +143,7 @@ TEST_F(TransientBytesTest, AppendBytes) {
     ASSERT_EQ((i + 1) * strlen(kBytesSmall), transient_bytes_->data_size());
   }
 
-  out << *transient_bytes_.get();
+  out << *transient_bytes_;
   std::string out_string = out.str();
   size_t size = strlen(kBytesSmall);
   for (size_t pos = 0; pos < kIter * size; pos += size) {

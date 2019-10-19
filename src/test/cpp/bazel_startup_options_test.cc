@@ -16,6 +16,8 @@
 
 #include <stdlib.h>
 
+#include <memory>
+
 #include "src/main/cpp/blaze_util_platform.h"
 #include "src/main/cpp/workspace_layout.h"
 #include "src/test/cpp/test_util.h"
@@ -32,7 +34,7 @@ class BazelStartupOptionsTest : public ::testing::Test {
     // This knowingly ignores the possibility of these environment variables
     // being unset because we expect our test runner to set them in all cases.
     // Otherwise, we'll crash here, but this keeps our code simpler.
-    old_test_tmpdir_ = GetEnv("TEST_TMPDIR");
+    old_test_tmpdir_ = GetPathEnv("TEST_TMPDIR");
 
     ReinitStartupOptions();
   }
@@ -88,7 +90,9 @@ TEST_F(BazelStartupOptionsTest, ValidStartupFlags) {
   ExpectIsNullaryOption(options, "home_rc");
   ExpectIsNullaryOption(options, "host_jvm_debug");
   ExpectIsNullaryOption(options, "ignore_all_rc_files");
+  ExpectIsNullaryOption(options, "incompatible_enable_execution_transition");
   ExpectIsNullaryOption(options, "master_bazelrc");
+  ExpectIsNullaryOption(options, "shutdown_on_low_sys_mem");
   ExpectIsNullaryOption(options, "system_rc");
   ExpectIsNullaryOption(options, "watchfs");
   ExpectIsNullaryOption(options, "workspace_rc");
@@ -98,16 +102,16 @@ TEST_F(BazelStartupOptionsTest, ValidStartupFlags) {
   ExpectIsUnaryOption(options, "connect_timeout_secs");
   ExpectIsUnaryOption(options, "digest_function");
   ExpectIsUnaryOption(options, "experimental_oom_more_eagerly_threshold");
-  ExpectIsUnaryOption(options, "host_javabase");
-  ExpectIsUnaryOption(options, "server_javabase");
   ExpectIsUnaryOption(options, "host_jvm_args");
   ExpectIsUnaryOption(options, "host_jvm_profile");
+  ExpectIsUnaryOption(options, "install_base");
   ExpectIsUnaryOption(options, "invocation_policy");
   ExpectIsUnaryOption(options, "io_nice_level");
-  ExpectIsUnaryOption(options, "install_base");
+  ExpectIsUnaryOption(options, "macos_qos_class");
   ExpectIsUnaryOption(options, "max_idle_secs");
   ExpectIsUnaryOption(options, "output_base");
   ExpectIsUnaryOption(options, "output_user_root");
+  ExpectIsUnaryOption(options, "server_javabase");
 }
 
 TEST_F(BazelStartupOptionsTest, BlazercFlagsAreNotAccepted) {

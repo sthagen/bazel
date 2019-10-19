@@ -11,6 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 #include <algorithm>
@@ -87,7 +91,12 @@ bool DeleteAllUnder(wstring path) {
   return result;
 }
 
-bool CreateDummyFile(const wstring& path) {
+bool CreateDummyFile(const wstring& path, const std::string& content) {
+  return CreateDummyFile(path, content.c_str(), content.size());
+}
+
+bool CreateDummyFile(const std::wstring& path, const void* content,
+                     const DWORD size) {
   HANDLE handle =
       ::CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -96,8 +105,8 @@ bool CreateDummyFile(const wstring& path) {
   }
   bool result = true;
   DWORD actually_written = 0;
-  if (!::WriteFile(handle, "hello", 5, &actually_written, NULL) &&
-      actually_written != 5) {
+  if (!::WriteFile(handle, content, size, &actually_written, NULL) &&
+      actually_written != size) {
     result = false;
   }
   CloseHandle(handle);

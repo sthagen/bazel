@@ -18,13 +18,14 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.InconsistentFilesystemException;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelValidator;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.BuildFileName;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
 import com.google.devtools.build.lib.packages.ErrorDeterminingRepositoryException;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
+import com.google.devtools.build.lib.packages.RepositoryFetchException;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -72,17 +73,6 @@ public class PackageLookupFunction implements SkyFunction {
 
     PackageIdentifier packageKey = (PackageIdentifier) skyKey.argument();
 
-    if (PackageFunction.isDefaultsPackage(packageKey)
-        && PrecomputedValue.isInMemoryToolsDefaults(env)) {
-      return PackageLookupValue.success(pkgLocator.getPathEntries().get(0), BuildFileName.BUILD);
-    }
-
-    if (!packageKey.getRepository().isMain()) {
-      return computeExternalPackageLookupValue(skyKey, env, packageKey);
-    } else if (packageKey.equals(Label.EXTERNAL_PACKAGE_IDENTIFIER)) {
-      return computeWorkspacePackageLookupValue(env, pkgLocator.getPathEntries());
-    }
-
     String packageNameErrorMsg = LabelValidator.validatePackageName(
         packageKey.getPackageFragment().getPathString());
     if (packageNameErrorMsg != null) {
@@ -92,6 +82,12 @@ public class PackageLookupFunction implements SkyFunction {
 
     if (deletedPackages.get().contains(packageKey)) {
       return PackageLookupValue.DELETED_PACKAGE_VALUE;
+    }
+
+    if (!packageKey.getRepository().isMain()) {
+      return computeExternalPackageLookupValue(skyKey, env, packageKey);
+    } else if (packageKey.equals(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER)) {
+      return computeWorkspacePackageLookupValue(env, pkgLocator.getPathEntries());
     }
 
     BlacklistedPackagePrefixesValue blacklistedPatternsValue =
@@ -108,6 +104,35 @@ public class PackageLookupFunction implements SkyFunction {
     }
 
     return findPackageByBuildFile(env, pkgLocator, packageKey);
+  }
+
+  /**
+   * For a package identifier {@code packageKey} such that the compute for {@code
+   * PackageLookupValue.key(packageKey)} returned {@code NO_BUILD_FILE_VALUE}, provide a
+   * human-readable error message with more details on where we searched for the package.
+   */
+  public static String explainNoBuildFileValue(PackageIdentifier packageKey, Environment env)
+      throws InterruptedException {
+    String educationalMessage = "Add a BUILD file to a directory to mark it as a package.";
+    if (packageKey.getRepository().isMain()) {
+      PathPackageLocator pkgLocator = PrecomputedValue.PATH_PACKAGE_LOCATOR.get(env);
+      StringBuilder message = new StringBuilder();
+      message.append("BUILD file not found in any of the following directories. ");
+      message.append(educationalMessage);
+      for (Root root : pkgLocator.getPathEntries()) {
+        message
+            .append("\n - ")
+            .append(root.asPath().getRelative(packageKey.getPackageFragment()).getPathString());
+      }
+      return message.toString();
+    } else {
+      return "BUILD file not found in directory '"
+          + packageKey.getPackageFragment()
+          + "' of external repository "
+          + packageKey.getRepository()
+          + ". "
+          + educationalMessage;
+    }
   }
 
   @Nullable
@@ -272,7 +297,10 @@ public class PackageLookupFunction implements SkyFunction {
       throws PackageLookupFunctionException, InterruptedException {
     PackageLookupValue result =
         getPackageLookupValue(
-            env, packagePathEntries, Label.EXTERNAL_PACKAGE_IDENTIFIER, BuildFileName.WORKSPACE);
+            env,
+            packagePathEntries,
+            LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
+            BuildFileName.WORKSPACE);
     if (result == null) {
       return null;
     }
@@ -286,10 +314,11 @@ public class PackageLookupFunction implements SkyFunction {
       return PackageLookupValue.NO_BUILD_FILE_VALUE;
     }
     Root lastPackagePath = packagePathEntries.get(packagePathEntries.size() - 1);
-    FileValue lastPackagePackagePathFileValue = getFileValue(
-        RootedPath.toRootedPath(lastPackagePath, PathFragment.EMPTY_FRAGMENT),
-        env,
-        Label.EXTERNAL_PACKAGE_IDENTIFIER);
+    FileValue lastPackagePackagePathFileValue =
+        getFileValue(
+            RootedPath.toRootedPath(lastPackagePath, PathFragment.EMPTY_FRAGMENT),
+            env,
+            LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER);
     if (lastPackagePackagePathFileValue == null) {
       return null;
     }
@@ -316,13 +345,16 @@ public class PackageLookupFunction implements SkyFunction {
       if (repositoryValue == null) {
         return null;
       }
-    } catch (NoSuchPackageException | IOException | EvalException e) {
+    } catch (NoSuchPackageException e) {
       throw new PackageLookupFunctionException(new BuildFileNotFoundException(id, e.getMessage()),
           Transience.PERSISTENT);
+    } catch (IOException | EvalException e) {
+      throw new PackageLookupFunctionException(
+          new RepositoryFetchException(id, e.getMessage()), Transience.PERSISTENT);
     }
     if (!repositoryValue.repositoryExists()) {
       // TODO(ulfjack): Maybe propagate the error message from the repository delegator function?
-      return PackageLookupValue.NO_SUCH_REPOSITORY_VALUE;
+      return new PackageLookupValue.NoRepositoryPackageLookupValue(id.getRepository().getName());
     }
 
     // This checks for the build file names in the correct precedence order.
@@ -351,6 +383,10 @@ public class PackageLookupFunction implements SkyFunction {
    */
   private static final class PackageLookupFunctionException extends SkyFunctionException {
     public PackageLookupFunctionException(BuildFileNotFoundException e, Transience transience) {
+      super(e, transience);
+    }
+
+    public PackageLookupFunctionException(RepositoryFetchException e, Transience transience) {
       super(e, transience);
     }
 

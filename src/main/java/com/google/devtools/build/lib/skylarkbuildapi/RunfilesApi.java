@@ -19,16 +19,12 @@ import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 
-/**
- * An interface for a set of runfiles.
- */
+/** An interface for a set of runfiles. */
 @SkylarkModule(
-  name = "runfiles",
-  category = SkylarkModuleCategory.NONE,
-  doc = "An interface for a set of runfiles."
-)
+    name = "runfiles",
+    category = SkylarkModuleCategory.BUILTIN,
+    doc = "An interface for a set of runfiles.")
 public interface RunfilesApi {
 
   @SkylarkCallable(
@@ -39,7 +35,13 @@ public interface RunfilesApi {
   public NestedSet<? extends FileApi> getArtifacts();
 
   @SkylarkCallable(name = "symlinks", doc = "Returns the set of symlinks.", structField = true)
-  public NestedSet<? extends SkylarkValue> getSymlinks();
+  public NestedSet<? extends SymlinkEntryApi> getSymlinks();
+
+  @SkylarkCallable(
+      name = "root_symlinks",
+      doc = "Returns the set of root symlinks.",
+      structField = true)
+  public NestedSet<? extends SymlinkEntryApi> getRootSymlinks();
 
   @SkylarkCallable(
     name = "empty_filenames",

@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 # Description:
 #   Skyframe Java code
 package(
@@ -19,6 +21,7 @@ java_library(
     visibility = ["//visibility:public"],
     deps = [
         "//third_party:guava",
+        "//third_party:jsr305",
     ],
 )
 
@@ -30,17 +33,19 @@ java_library(
     ),
     deps = [
         ":skyframe-objects",
+        "//src/main/java/com/google/devtools/build/lib:bug-report",
         "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/clock",  # keep
-        "//src/main/java/com/google/devtools/build/lib/collect",
+        "//src/main/java/com/google/devtools/build/lib/collect/compacthashmap",
         "//src/main/java/com/google/devtools/build/lib/collect/compacthashset",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/lib/supplier",
         "//src/main/java/com/google/devtools/common/options",
-        "//third_party:error_prone",
+        "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

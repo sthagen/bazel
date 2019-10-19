@@ -29,23 +29,23 @@ android/ @ahumesky @jin
 
 # Apple
 
-/src/objc_tools/ @allevato @davidgoldman @dierksen @dmaclach @sergiocampama @kelvinchan-google @reinhillman thomasv@google.com
+/src/objc_tools/ @allevato @davidgoldman @dmaclach @sergiocampama @kelvinchan-google @reinhillman @thomasvl
 
-/src/test/shell/bazel/apple/ @allevato @davidgoldman @dierksen @dmaclach @sergiocampama @kelvinchan-google @reinhillman thomasv@google.com
+/src/test/shell/bazel/apple/ @allevato @davidgoldman @dmaclach @sergiocampama @kelvinchan-google @reinhillman @thomasvl
 
 # Documentation
 
-/site @spomorski
+/site @aiuto
 
 # C++
 
-/src/tools/cpp @mhlopko @scentini @oquenchil
+/src/tools/cpp @hlopko @scentini @oquenchil
 
-/src/test/shell/bazel/cpp @mhlopko @scentini @oquenchil
+/src/test/shell/bazel/cpp @hlopko @scentini @oquenchil
 
-/src/test/java/com/google/devtools/build/lib/rules/cpp/ @mhlopko @scentini @oquenchil
+/src/test/java/com/google/devtools/build/lib/rules/cpp/ @hlopko @scentini @oquenchil
 
-/src/main/java/com/google/devtools/build/lib/rules/cpp/ @mhlopko @scentini @oquenchil
+/src/main/java/com/google/devtools/build/lib/rules/cpp/ @hlopko @scentini @oquenchil
 
 # Java
 
@@ -57,31 +57,27 @@ android/ @ahumesky @jin
 
 # Remote caching and execution
 
-/src/main/java/com/google/devtools/build/lib/remote/ @buchgr @philwo @ola-rozenfeld
+/src/main/java/com/google/devtools/build/lib/remote/ @buchgr @ola-rozenfeld
 
-/src/test/shell/bazel/remote/ @buchgr @philwo @ola-rozenfeld
+/src/test/shell/bazel/remote/ @buchgr @ola-rozenfeld
 
 /src/tools/execlog/ @buchgr @ola-rozenfeld
-/src/tools/remote/ @buchgr @philwo @ola-rozenfeld
+/src/tools/remote/ @buchgr @ola-rozenfeld
 
 # Execution and I/O related code
 
-/src/main/java/com/google/devtools/build/lib/authandtls/ @philwo
-/src/main/java/com/google/devtools/build/lib/clock/ @philwo
-/src/main/java/com/google/devtools/build/lib/exec/ @philwo
 /src/main/java/com/google/devtools/build/lib/sandbox/ @philwo
-/src/main/java/com/google/devtools/build/lib/shell/ @philwo
 /src/main/java/com/google/devtools/build/lib/ssd/ @philwo
 /src/main/java/com/google/devtools/build/lib/standalone/ @philwo
-/src/main/java/com/google/devtools/build/lib/unix/ @philwo
-/src/main/java/com/google/devtools/build/lib/vfs/ @philwo
 /src/main/java/com/google/devtools/build/lib/worker/ @philwo
 /src/main/java/com/google/devtools/build/lib/rules/java/ @iirina
-/src/main/java/com/google/devtools/build/lib/rules/ @lberki
+/src/main/java/com/google/devtools/build/lib/rules/ @hlopko
 
 # Skylark
 
-/src/main/java/com/google/devtools/build/lib/syntax/ @brandjon @c-parsons @dkelmer @dslomov @laurentlb @vladmos
+/src/main/java/com/google/devtools/build/lib/syntax/ @brandjon @c-parsons @dslomov @laurentlb @vladmos
 
 /tools/coverage/ @iirina
-/tools/test/ @iirina
+/tools/test/collect_coverage.sh @iirina
+/tools/test/collect_cc_coverage.sh @iirina
+/tools/test/CoverageOutputGenerator/ @iirina

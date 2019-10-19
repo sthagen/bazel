@@ -24,8 +24,6 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "src/main/cpp/util/file.h"
-#include "src/main/cpp/util/path.h"
 
 #define RUNFILES_TEST_TOSTRING_HELPER(x) #x
 #define RUNFILES_TEST_TOSTRING(x) RUNFILES_TEST_TOSTRING_HELPER(x)
@@ -99,14 +97,14 @@ string RunfilesTest::GetTemp() {
 #ifdef _WIN32
   DWORD size = ::GetEnvironmentVariableA("TEST_TMPDIR", NULL, 0);
   if (size == 0) {
-    return std::move(string());  // unset or empty envvar
+    return string();  // unset or empty envvar
   }
   unique_ptr<char[]> value(new char[size]);
   ::GetEnvironmentVariableA("TEST_TMPDIR", value.get(), size);
-  return std::move(string(value.get()));
+  return value.get();
 #else
   char* result = getenv("TEST_TMPDIR");
-  return result != NULL ? std::move(string(result)) : std::move(string());
+  return result != NULL ? string(result) : string();
 #endif
 }
 
@@ -122,19 +120,34 @@ RunfilesTest::MockFile* RunfilesTest::MockFile::Create(
     return nullptr;
   }
 
-  string tmp(std::move(RunfilesTest::GetTemp()));
+  string tmp(RunfilesTest::GetTemp());
   if (tmp.empty()) {
     cerr << "WARNING: " << __FILE__ << "(" << __LINE__
          << "): $TEST_TMPDIR is empty" << endl;
     return nullptr;
   }
   string path(tmp + "/" + name);
-  string dirname = blaze_util::Dirname(path);
-  if (!blaze_util::MakeDirectories(dirname, 0777)) {
-    cerr << "WARNING: " << __FILE__ << "(" << __LINE__ << "): MakeDirectories("
-         << dirname << ") failed" << endl;
-    return nullptr;
+
+  string::size_type i = 0;
+#ifdef _WIN32
+  while ((i = name.find_first_of("/\\", i + 1)) != string::npos) {
+    string d = tmp + "\\" + name.substr(0, i);
+    if (!CreateDirectoryA(d.c_str(), NULL)) {
+      cerr << "ERROR: " << __FILE__ << "(" << __LINE__
+           << "): failed to create directory \"" << d << "\"" << endl;
+      return nullptr;
+    }
   }
+#else
+  while ((i = name.find_first_of('/', i + 1)) != string::npos) {
+    string d = tmp + "/" + name.substr(0, i);
+    if (mkdir(d.c_str(), 0777)) {
+      cerr << "ERROR: " << __FILE__ << "(" << __LINE__
+           << "): failed to create directory \"" << d << "\"" << endl;
+      return nullptr;
+    }
+  }
+#endif
 
   auto stm = std::ofstream(path);
   for (auto i : lines) {
@@ -307,29 +320,17 @@ TEST_F(RunfilesTest, ManifestAndDirectoryBasedRunfilesRlocationAndEnvVars) {
 }
 
 TEST_F(RunfilesTest, ManifestBasedRunfilesEnvVars) {
-  const vector<string> suffixes({"/MANIFEST", ".runfiles_manifest",
-                                 "runfiles_manifest", ".runfiles", ".manifest",
-                                 ".txt"});
-  for (vector<string>::size_type i = 0; i < suffixes.size(); ++i) {
-    unique_ptr<MockFile> mf(
-        MockFile::Create(string("foo" LINE_AS_STRING()) + suffixes[i]));
-    EXPECT_TRUE(mf != nullptr) << " (suffix=\"" << suffixes[i] << "\")";
+  unique_ptr<MockFile> mf(
+      MockFile::Create(string("foo" LINE_AS_STRING() ".runfiles_manifest")));
+  EXPECT_TRUE(mf != nullptr);
 
-    string error;
-    unique_ptr<Runfiles> r(
-        Runfiles::Create("ignore-argv0", mf->Path(), "", &error));
-    if (i < 2) {
-      ASSERT_NE(r, nullptr) << " (suffix=\"" << suffixes[i] << "\")";
-      EXPECT_TRUE(error.empty());
+  string error;
+  unique_ptr<Runfiles> r(
+      Runfiles::Create("ignore-argv0", mf->Path(), "", &error));
+  ASSERT_NE(r, nullptr);
+  EXPECT_TRUE(error.empty());
 
-      // The object can compute the runfiles directory when i=0 and i=1, but not
-      // when i>1 because the manifest file's name doesn't end in a well-known
-      // way.
-      AssertEnvvars(*r, mf->Path(), "");
-    } else {
-      ASSERT_EQ(r, nullptr) << " (suffix=\"" << suffixes[i] << "\")";
-    }
-  }
+  AssertEnvvars(*r, mf->Path(), "");
 }
 
 TEST_F(RunfilesTest, CreatesDirectoryBasedRunfilesFromDirectoryNextToBinary) {

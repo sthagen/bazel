@@ -29,7 +29,7 @@ repo_with_local_include() {
   # Generate a repository, in the current working directory, with a target
   # //src:hello that includes a file via a local path.
 
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   mkdir src
   cat > src/main.c <<'EOF'
 #include <stdio.h>
@@ -57,7 +57,7 @@ library_with_local_include() {
   # is a library with headers that include via paths relative to the root of
   # that repository
 
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   mkdir lib
   cat > lib/lib.h <<'EOF'
 #include "lib/constants.h"
@@ -86,7 +86,7 @@ EOF
 
 
 test_local_paths_main () {
-  # Verify that a target in the main repository may refer to a truely source
+  # Verify that a target in the main repository may refer to a truly source
   # file in its own repository by a path relative to the repository root.
   WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
   cd "${WRKDIR}"
@@ -101,7 +101,7 @@ test_local_paths_main () {
 }
 
 test_local_paths_remote() {
-  # Verify that a target in an external repository may refer to a truely source
+  # Verify that a target in an external repository may refer to a truly source
   # file in its own repository by a path relative to the root of that repository
   WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
   cd "${WRKDIR}"
@@ -113,7 +113,7 @@ test_local_paths_remote() {
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="remote",
@@ -128,9 +128,9 @@ EOF
 }
 
 test_lib_paths_main() {
-  # Verify that libaries from the main repostiory can be used via include
+  # Verify that libaries from the main repository can be used via include
   # path relative to their repository root and that they may refer to other
-  # truely source files from the same libary via paths relative to their
+  # truly source files from the same library via paths relative to their
   # repository root.
 
   WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
@@ -140,7 +140,7 @@ test_lib_paths_main() {
   cd main
   library_with_local_include
 
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   cat > main.c <<'EOF'
 #include "lib/lib.h"
 
@@ -165,7 +165,7 @@ EOF
 test_lib_paths_remote() {
   # Verify that libaries from an external repository can be used via include
   # path relative to their repository root and that they may refer to other
-  # truely source files from the same libary via paths relative to their
+  # truly source files from the same library via paths relative to their
   # repository root.
 
   WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
@@ -178,7 +178,7 @@ test_lib_paths_remote() {
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="remote",
@@ -210,7 +210,7 @@ EOF
 test_lib_paths_all_remote() {
   # Verify that libaries from an external repository can be used by another
   # external repository via include path relative to their repository root and
-  # that they may refer to other truely source files from the same libary via
+  # that they may refer to other truly source files from the same library via
   # paths relative to their repository root.
 
   WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
@@ -244,7 +244,7 @@ EOF
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="remotelib",
@@ -263,7 +263,7 @@ EOF
 }
 
 repo_with_local_path_reference() {
-  # create, in the current working directory, a pacakge called
+  # create, in the current working directory, a package called
   # withpath, that contains rule depending on hard-code path relative
   # to the repository root.
   mkdir -p withpath
@@ -293,7 +293,7 @@ test_fixed_path_local() {
 
   mkdir main
   cd main
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   repo_with_local_path_reference
 
   bazel build //withpath:it || fail "Expected success"
@@ -312,7 +312,7 @@ DISABLED_test_fixed_path_remote() {
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="remote",
@@ -326,7 +326,7 @@ EOF
 repo_with_local_implicit_dependencies() {
   # create, in the current working directory, a package called rule
   # that has an implicit dependency on a target in the same repository;
-  # the point here is that this dependency can be named without knowlege
+  # the point here is that this dependency can be named without knowledge
   #  of the repository name.
   mkdir -p rule
   cat > rule/BUILD <<'EOF'
@@ -337,8 +337,8 @@ cat $1 | tr 'a-z' 'A-Z' > $2
 EOF
   cat > rule/to_upper.bzl <<'EOF'
 def _to_upper_impl(ctx):
-  output = ctx.new_file(ctx.label.name + ".txt")
-  ctx.action(
+  output = ctx.actions.declare_file(ctx.label.name + ".txt")
+  ctx.actions.run_shell(
     inputs = ctx.files.src + ctx.files._toupper_sh,
     outputs = [output],
     command = ["/bin/sh"] + [f.path for f in ctx.files._toupper_sh] \
@@ -366,7 +366,7 @@ test_local_rules() {
 
   mkdir main
   cd main
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   repo_with_local_implicit_dependencies
   mkdir call
   echo hello world > call/hello.txt
@@ -395,7 +395,7 @@ test_remote_rules() {
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="r",
@@ -444,7 +444,7 @@ EOF
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="a",
@@ -489,8 +489,8 @@ genrule(
 EOF
   cat > rule/to_html.bzl <<'EOF'
 def _to_html_impl(ctx):
-  output = ctx.new_file(ctx.label.name + ".html")
-  ctx.action(
+  output = ctx.actions.declare_file(ctx.label.name + ".html")
+  ctx.actions.run_shell(
     inputs = ctx.files.src + ctx.files._to_html + ctx.files._preamb + ctx.files._postamb,
     outputs = [output],
     command = ["/bin/sh"] + [f.path for f in ctx.files._to_html] \
@@ -524,7 +524,7 @@ test_embedded_local() {
   cd "${WRKDIR}"
 
   mkdir main
-  touch WORKSPACE
+  create_workspace_with_default_repos WORKSPACE
   repo_with_embedded_paths
   mkdir call
   cat > call/plain.txt <<'EOF'
@@ -556,7 +556,7 @@ test_embedded_remote() {
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="r",
@@ -609,7 +609,7 @@ EOF
 
   mkdir main
   cd main
-  cat > WORKSPACE <<EOF
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
   name="r",
@@ -642,8 +642,8 @@ genrule(
 EOF
   cat > rule/add_preamb.bzl <<'EOF'
 def _add_preamb_impl(ctx):
-  output = ctx.new_file(ctx.label.name + ".txt")
-  ctx.action(
+  output = ctx.actions.declare_file(ctx.label.name + ".txt")
+  ctx.actions.run_shell(
     inputs = ctx.files.src + ctx.files._add_preamb + ctx.files._preamb,
     outputs = [output],
     command = ["/bin/sh"] + [f.path for f in ctx.files._add_preamb] \

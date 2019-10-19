@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 # Description:
 #   A devtools-common options parser.
 #   Open-sourced as part of Bazel.
@@ -34,6 +36,7 @@ java_library(
         ],
     ),
     deps = [
+        "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

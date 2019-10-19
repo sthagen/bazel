@@ -14,7 +14,10 @@
 
 package com.google.devtools.build.lib.vfs;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.hash.HashFunction;
 import com.google.common.hash.Hashing;
@@ -25,7 +28,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map.Entry;
 
 /**
@@ -70,18 +72,21 @@ public class DigestHashFunction {
   public static final DigestHashFunction SHA256 = register(Hashing.sha256(), "SHA-256", "SHA256");
 
   private static DigestHashFunction defaultHash;
-  private static boolean defaultHasBeenSet = false;
 
   private final HashFunction hashFunction;
   private final DigestLength digestLength;
   private final String name;
   private final MessageDigest messageDigestPrototype;
   private final boolean messageDigestPrototypeSupportsClone;
+  private final ImmutableList<String> names;
 
-  private DigestHashFunction(HashFunction hashFunction, DigestLength digestLength, String name) {
+  private DigestHashFunction(
+      HashFunction hashFunction, DigestLength digestLength, ImmutableList<String> names) {
     this.hashFunction = hashFunction;
     this.digestLength = digestLength;
-    this.name = name;
+    checkArgument(!names.isEmpty());
+    this.name = names.get(0);
+    this.names = names;
     this.messageDigestPrototype = getMessageDigestInstance();
     this.messageDigestPrototypeSupportsClone = supportsClone(messageDigestPrototype);
   }
@@ -113,8 +118,9 @@ public class DigestHashFunction {
           e);
     }
 
-    DigestHashFunction hashFunction = new DigestHashFunction(hash, digestLength, hashName);
-    List<String> names = ImmutableList.<String>builder().add(hashName).add(altNames).build();
+    ImmutableList<String> names =
+        ImmutableList.<String>builder().add(hashName).add(altNames).build();
+    DigestHashFunction hashFunction = new DigestHashFunction(hash, digestLength, names);
     synchronized (hashFunctionRegistry) {
       for (String name : names) {
         if (hashFunctionRegistry.containsKey(name)) {
@@ -138,11 +144,27 @@ public class DigestHashFunction {
    */
   public static synchronized DigestHashFunction getDefault()
       throws DefaultHashFunctionNotSetException {
-    if (!defaultHasBeenSet) {
+    DigestHashFunction hash = defaultHash;
+    if (hash == null) {
       throw new DefaultHashFunctionNotSetException("DigestHashFunction default has not been set");
     }
-    return defaultHash;
+    return hash;
   }
+
+  /**
+   * Returns the default DigestHashFunction, or the testing default if unset.
+   */
+  public static DigestHashFunction getDefaultUnchecked() {
+    try {
+      return getDefault();
+    } catch (DefaultHashFunctionNotSetException e) {
+      // Some tests use this class without calling GoogleUnixFileSystemModule.globalInit().
+      Preconditions.checkState(
+          System.getenv("TEST_TMPDIR") != null, "Default hash function has not been set");
+      return DigestHashFunction.MD5;
+    }
+  }
+
 
   /** Indicates that the default has not been initialized. */
   public static final class DefaultHashFunctionNotSetException extends Exception {
@@ -159,14 +181,16 @@ public class DigestHashFunction {
    */
   public static synchronized void setDefault(DigestHashFunction hash)
       throws DefaultAlreadySetException {
-    if (defaultHasBeenSet) {
-      throw new DefaultAlreadySetException(
-          String.format(
-              "setDefault(%s) failed. The default has already been set to %s, you cannot reset it.",
-              hash.name, defaultHash.name));
+    Preconditions.checkNotNull(hash);
+    // Permit redundant calls.  This is difficult to avoid with test suites.
+    if (defaultHash == null || defaultHash == hash) {
+      defaultHash = hash;
+      return;
     }
-    defaultHash = hash;
-    defaultHasBeenSet = true;
+    throw new DefaultAlreadySetException(
+        String.format(
+            "setDefault(%s) failed. The default has already been set to %s, you cannot change it.",
+            hash.name, defaultHash.name));
   }
 
   /** Failure to set the default if the default already being set. */
@@ -215,6 +239,10 @@ public class DigestHashFunction {
     return digestLength;
   }
 
+  public ImmutableList<String> getNames() {
+    return names;
+  }
+
   @Override
   public String toString() {
     return name;
@@ -243,13 +271,4 @@ public class DigestHashFunction {
   static Collection<DigestHashFunction> getPossibleHashFunctions() {
     return hashFunctionRegistry.values();
   }
-
-  /**
-   * For tests that are testing the FileSystems themselves, those test should be parametrized and
-   * run with all the standard hash functions that Bazel supports using {@link
-   * #getPossibleHashFunctions} above. For tests that just need a FileSystem to test some adjacent
-   * behavior, though, we use this default.
-   */
-  @VisibleForTesting
-  public static final DigestHashFunction DEFAULT_HASH_FOR_TESTS = DigestHashFunction.MD5;
 }

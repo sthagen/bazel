@@ -49,8 +49,6 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.logging.Logger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import javax.xml.namespace.QName;
 import javax.xml.stream.XMLEventReader;
 import javax.xml.stream.XMLInputFactory;
@@ -144,17 +142,23 @@ public class ResourceCompiler {
     public List<Path> call() throws Exception {
       final String directoryName = file.getParent().getFileName().toString();
       final Qualifiers qualifiers = Qualifiers.parseFrom(directoryName);
-      final String filename = interpolateAapt2Filename(qualifiers, file.getFileName().toString());
+      final ResourceFolderType resourceFolderType = qualifiers.asFolderType();
+      if (resourceFolderType == null) {
+        throw new CompileError(
+            new IllegalArgumentException("Unexpected resource folder for file: " + file));
+      }
 
+      final String filename =
+          interpolateAapt2Filename(resourceFolderType, file.getFileName().toString());
       final List<Path> results = new ArrayList<>();
-      if (qualifiers.asFolderType().equals(ResourceFolderType.VALUES)
-          || (qualifiers.asFolderType().equals(ResourceFolderType.RAW)
+      if (resourceFolderType.equals(ResourceFolderType.VALUES)
+          || (resourceFolderType.equals(ResourceFolderType.RAW)
               && file.getFileName().toString().endsWith(".xml"))) {
         extractAttributes(directoryName, filename, results);
       }
 
       if (qualifiers.containDefaultLocale()
-          && qualifiers.asFolderType().equals(ResourceFolderType.VALUES)) {
+          && resourceFolderType.equals(ResourceFolderType.VALUES)) {
         compile(
             directoryName,
             filename,
@@ -171,11 +175,30 @@ public class ResourceCompiler {
       return results;
     }
 
-    static String interpolateAapt2Filename(Qualifiers qualifiers, String filename) {
-      return qualifiers.asFolderType().equals(ResourceFolderType.VALUES)
-          ? (filename.indexOf('.') != -1 ? filename.substring(0, filename.indexOf('.')) : filename)
-              + ".arsc"
-          : filename;
+    static String interpolateAapt2Filename(ResourceFolderType resourceFolderType, String filename) {
+      // res/<not values>/foo.bar -> foo.bar
+      if (!resourceFolderType.equals(ResourceFolderType.VALUES)) {
+        return filename;
+      }
+
+      int periodIndex = filename.indexOf('.');
+
+      // res/values/foo -> foo.arsc
+      if (periodIndex == -1) {
+        return filename + ".arsc";
+      }
+
+      // res/values/foo.bar.baz -> throw error.
+      if (filename.lastIndexOf('.') != periodIndex) {
+        throw new CompileError(
+            new IllegalArgumentException(
+                "aapt2 does not support compiling resource xmls with multiple periods in the "
+                    + "filename: "
+                    + filename));
+      }
+
+      // res/values/foo.xml -> foo.arsc
+      return filename.substring(0, periodIndex) + ".arsc";
     }
 
     private void compile(
@@ -262,7 +285,12 @@ public class ResourceCompiler {
 
       AndroidDataSerializer serializer = AndroidDataSerializer.create();
       final Path resourcesAttributesPath =
-          compiledResourcesOut.resolve(type + "_" + filename + ".attributes");
+          CompilingVisitor.destinationPath(file,
+              compiledResourcesOut).resolve(
+                  type + "_" + filename + ".attributes");
+
+      Preconditions.checkArgument(!Files.exists(resourcesAttributesPath),
+          "%s was already created for another resource.", resourcesAttributesPath);
 
       while (attributeIterator.hasNext()) {
         Attribute attribute = attributeIterator.next();
@@ -318,47 +346,11 @@ public class ResourceCompiler {
       this.generatedResourcesOut = generatedResourcesOut;
     }
 
-    static final Pattern REGION_PATTERN =
-        Pattern.compile("(sr[_\\-]r?latn)|(es[_\\-]r?419)", Pattern.CASE_INSENSITIVE);
-
     @Override
     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
       // Ignore directories and "hidden" files that start with .
       if (!Files.isDirectory(file) && !file.getFileName().toString().startsWith(".")) {
-        Path outputDirectory = destinationPath(file, compiledResourcesOut);
-
-        Path maybeFixedPath =
-            file.getParent()
-                .getParent()
-                .resolve(
-                    maybeFixRegion(file.getParent().getFileName()).resolve(file.getFileName()));
-
-        if (!(maybeFixedPath.equals(file))) {
-          if (!Files.exists(maybeFixedPath)) {
-            logger.severe(
-                String.format(
-                    "The locale identifier  in %s is not supported by aapt2. Converting to %s. "
-                        + "This will be an error in the future.",
-                    file, maybeFixedPath));
-            // Only use the processed path if doesn't exist. If it exists, there are is already
-            // resources for that region.
-            pathToProcessed.add(
-                Files.copy(
-                    file,
-                    Files.createDirectories(
-                            outputDirectory.resolve(maybeFixedPath.getParent().getFileName()))
-                        .resolve(file.getFileName())));
-          } else {
-            logger.severe(
-                String.format(
-                    "Skipping resource compilation for %s: it has the same qualifiers as %s."
-                        + " The locale identifier is not supported by aapt2."
-                        + " This will be an error in the future.",
-                    file, maybeFixedPath));
-          }
-        } else {
-          pathToProcessed.add(file);
-        }
+        pathToProcessed.add(file);
       }
       return super.visitFile(file, attrs);
     }
@@ -375,18 +367,6 @@ public class ResourceCompiler {
       } catch (IOException e) {
         throw new CompileError(e);
       }
-    }
-
-    /** Aapt cannot interpret these regions so we rename them to get them to compile. */
-    static Path maybeFixRegion(Path p) {
-      Matcher matcher = REGION_PATTERN.matcher(p.toString());
-      if (!matcher.find()) {
-        return p;
-      }
-      StringBuffer fixedConfiguration = new StringBuffer();
-      matcher.appendReplacement(
-          fixedConfiguration, matcher.group(2) == null ? "b+sr+Latn" : "b+es+419");
-      return p.getFileSystem().getPath(matcher.appendTail(fixedConfiguration).toString());
     }
 
     List<Path> getCompiledArtifacts() {

@@ -18,6 +18,36 @@
 
 set -o errexit
 
+# Check if all necessary tools are available.
+# List: https://github.com/bazelbuild/bazel/issues/7641#issuecomment-472344261
+for tool in basename cat chmod comm cp dirname find grep ln ls mkdir mktemp \
+            readlink rm sed sort tail touch tr uname unzip which; do
+  if ! hash "$tool" >/dev/null; then
+    echo >&2 "ERROR: cannot find \"$tool\"; check your PATH."
+    echo >&2 "       You may need to run the following command or similar:"
+    echo >&2 "         export PATH=\"/bin:/usr/bin:\$PATH\""
+    exit 1
+  fi
+done
+
+# Ensure Python is on the PATH on Windows, otherwise we would see
+# "LAUNCHER ERROR" messages from py_binary exe launchers.
+case "$(uname -s | tr "[:upper:]" "[:lower:]")" in
+msys*|mingw*|cygwin*)
+  # Ensure Python is on the PATH, otherwise the bootstrapping fails later.
+  if ! hash python.exe >/dev/null; then
+    echo >&2 "ERROR: cannot locate python.exe; check your PATH."
+    echo >&2 "       You may need to run the following command, or something"
+    echo >&2 "       similar, depending on where you installed Python:"
+    echo >&2 "         export PATH=\"/c/Python27:\$PATH\""
+    exit 1
+  fi
+  # Ensure TMPDIR uses the user-specified TMPDIR or TMP or TEMP.
+  # This is necessary to avoid overly longs paths during bootstrapping, see for
+  # example https://github.com/bazelbuild/bazel/issues/4536
+  export TMPDIR="${TMPDIR:-${TMP:-${TEMP:-}}}"
+esac
+
 # If BAZEL_WRKDIR is set, default all variables to point into
 # that directory
 
@@ -50,26 +80,6 @@ WORKSPACE_DIR="$(dirname "$(dirname "${DIR}")")"
 JAVA_VERSION=${JAVA_VERSION:-1.8}
 BAZELRC=${BAZELRC:-"/dev/null"}
 PLATFORM="$(uname -s | tr 'A-Z' 'a-z')"
-
-MACHINE_TYPE="$(uname -m)"
-MACHINE_IS_64BIT='no'
-if [ "${MACHINE_TYPE}" = 'amd64' -o "${MACHINE_TYPE}" = 'x86_64' -o "${MACHINE_TYPE}" = 's390x' -o "${MACHINE_TYPE}" = 'aarch64' ]; then
-  MACHINE_IS_64BIT='yes'
-fi
-
-MACHINE_IS_ARM='no'
-if [ "${MACHINE_TYPE}" = 'arm' -o "${MACHINE_TYPE}" = 'armv7l' -o "${MACHINE_TYPE}" = 'aarch64' ]; then
-  MACHINE_IS_ARM='yes'
-fi
-
-MACHINE_IS_Z='no'
-if [ "${MACHINE_TYPE}" = 's390x' ]; then
-  MACHINE_IS_Z='yes'
-fi
-
-if [ "${MACHINE_TYPE}" = 'ppc64' -o "${MACHINE_TYPE}" = 'ppc64le' ]; then
-  MACHINE_IS_64BIT='yes'
-fi
 
 PATHSEP=":"
 case "${PLATFORM}" in
@@ -308,8 +318,55 @@ function link_dir() {
   local dest=$2
 
   if [[ "${PLATFORM}" == "windows" ]]; then
-    cmd.exe /C "mklink /J \"$(cygpath -w "$dest")\" \"$(cygpath -w "$source")\""
+    local -r s="$(cygpath -w "$source")"
+    local -r d="$(cygpath -w "$dest")"
+    powershell -command "New-Item -ItemType Junction -Path '$d' -Value '$s'"
   else
     ln -s "${source}" "${dest}"
   fi
+}
+
+function link_file() {
+  local source=$1
+  local dest=$2
+
+  if [[ "${PLATFORM}" == "windows" ]]; then
+    # Attempt creating a symlink to the file. This is supported without
+    # elevation (Administrator privileges) on Windows 10 version 1709 when
+    # Developer Mode is enabled.
+    local -r s="$(cygpath -w "$source")"
+    local -r d="$(cygpath -w "$dest")"
+    if ! powershell -command "New-Item -ItemType SymbolicLink -Path '$d' -Value '$s'"; then
+      # If the previous call failed to create a symlink, just copy the file.
+      cp "$source" "$dest"
+    fi
+  else
+    ln -s "${source}" "${dest}"
+  fi
+}
+
+# Link direct children (subdirectories and files) of a directory.
+# Usage:
+#   link_children "$PWD" "tools" "${BAZEL_TOOLS_REPO}"
+# This creates:
+#   ${BAZEL_TOOLS_REPO}/tools/android -> $PWD/tools/android
+#   ${BAZEL_TOOLS_REPO}/tools/bash -> $PWD/tools/bash
+#   ... and so on for all files and directories directly under "tools".
+function link_children() {
+  local -r source_dir=${1%/}
+  local -r source_subdir=${2%/}
+  local -r dest_dir=${3%/}
+
+  for e in $(find "${source_dir}/${source_subdir}" -mindepth 1 -maxdepth 1 -type d); do
+    local dest_path="${dest_dir}/${e#$source_dir/}"
+    if [[ ! -d "$dest_path" ]]; then
+      link_dir "$e" "$dest_path"
+    fi
+  done
+  for e in $(find "${source_dir}/${source_subdir}" -mindepth 1 -maxdepth 1 -type f); do
+    local dest_path="${dest_dir}/${e#$source_dir/}"
+    if [[ ! -f "$dest_path" ]]; then
+      link_file "$e" "$dest_path"
+    fi
+  done
 }

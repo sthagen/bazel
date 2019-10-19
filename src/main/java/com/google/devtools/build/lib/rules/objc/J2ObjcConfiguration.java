@@ -26,7 +26,6 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkbuildapi.apple.J2ObjcConfigurationApi;
 import java.util.Collections;
 import javax.annotation.Nullable;
@@ -36,7 +35,6 @@ import javax.annotation.Nullable;
  * configuration fragment is used by Java rules that can be transpiled (specifically, J2ObjCAspects
  * thereof).
  */
-@AutoCodec
 @Immutable
 public class J2ObjcConfiguration extends Fragment implements J2ObjcConfigurationApi {
   /**
@@ -91,30 +89,20 @@ public class J2ObjcConfiguration extends Fragment implements J2ObjcConfiguration
   private final ImmutableList<String> translationFlags;
   private final boolean removeDeadCode;
   private final boolean experimentalJ2ObjcHeaderMap;
+  private final boolean experimentalShorterHeaderPath;
   @Nullable private final Label deadCodeReport;
 
-  J2ObjcConfiguration(J2ObjcCommandLineOptions j2ObjcOptions) {
-    this(
+  private J2ObjcConfiguration(J2ObjcCommandLineOptions j2ObjcOptions) {
+    this.translationFlags =
         ImmutableList.<String>builder()
             .addAll(J2OBJC_DEFAULT_TRANSLATION_FLAGS)
             .addAll(j2ObjcOptions.translationFlags)
             .addAll(J2OBJC_ALWAYS_ON_TRANSLATION_FLAGS)
-            .build(),
-        j2ObjcOptions.removeDeadCode,
-        j2ObjcOptions.experimentalJ2ObjcHeaderMap,
-        j2ObjcOptions.deadCodeReport);
-  }
-
-  @AutoCodec.Instantiator
-  J2ObjcConfiguration(
-      ImmutableList<String> translationFlags,
-      boolean removeDeadCode,
-      boolean experimentalJ2ObjcHeaderMap,
-      Label deadCodeReport) {
-    this.translationFlags = translationFlags;
-    this.removeDeadCode = removeDeadCode;
-    this.experimentalJ2ObjcHeaderMap = experimentalJ2ObjcHeaderMap;
-    this.deadCodeReport = deadCodeReport;
+            .build();
+    this.removeDeadCode = j2ObjcOptions.removeDeadCode;
+    this.experimentalJ2ObjcHeaderMap = j2ObjcOptions.experimentalJ2ObjcHeaderMap;
+    this.experimentalShorterHeaderPath = j2ObjcOptions.experimentalShorterHeaderPath;
+    this.deadCodeReport = j2ObjcOptions.deadCodeReport;
   }
 
   /**
@@ -161,6 +149,13 @@ public class J2ObjcConfiguration extends Fragment implements J2ObjcConfiguration
    */
   public boolean experimentalJ2ObjcHeaderMap() {
     return experimentalJ2ObjcHeaderMap;
+  }
+
+  /**
+   * Returns whether to use a shorter path for generated header files.
+   */
+  public boolean experimentalShorterHeaderPath() {
+    return experimentalShorterHeaderPath;
   }
 
   @Override

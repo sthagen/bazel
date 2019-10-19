@@ -18,9 +18,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 
-/**
- * Implementation for the java_plugin rule.
- */
+/** Implementation for the java_plugin rule. */
 public class JavaPlugin implements RuleConfiguredTargetFactory {
 
   private final JavaSemantics semantics;
@@ -32,6 +30,7 @@ public class JavaPlugin implements RuleConfiguredTargetFactory {
   @Override
   public final ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
+    JavaCommon.checkRuleLoadedThroughMacro(ruleContext);
     return new JavaLibrary(semantics)
         .init(
             ruleContext,

@@ -14,26 +14,18 @@
 
 package com.google.devtools.build.lib.analysis.config;
 
+import static java.util.Map.Entry.comparingByKey;
+
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.common.options.OptionDefinition;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsBase;
 import java.io.Serializable;
 import java.util.Map;
-import java.util.Set;
+import javax.annotation.Nullable;
 
 /** Command-line build options for a Blaze module. */
 public abstract class FragmentOptions extends OptionsBase implements Cloneable, Serializable {
-  /**
-   * Returns the labels contributed to the defaults package by this fragment.
-   *
-   * <p>The set of keys returned by this function should be constant, however, the values are
-   * allowed to change depending on the value of the options.
-   */
-  @SuppressWarnings("unused")
-  public Map<String, Set<Label>> getDefaultsLabels() {
-    return ImmutableMap.of();
-  }
 
   @Override
   public FragmentOptions clone() {
@@ -46,17 +38,112 @@ public abstract class FragmentOptions extends OptionsBase implements Cloneable, 
   }
 
   /**
-   * Creates a new FragmentOptions instance with all flags set to default.
+   * Creates a new instance of this {@code FragmentOptions} with all flags set to their default
+   * values.
    */
   public FragmentOptions getDefault() {
     return Options.getDefaults(getClass());
   }
 
   /**
-   * Creates a new FragmentOptions instance with flags adjusted to host platform.
+   * Creates a new instance of this {@code FragmentOptions} with all flags adjusted as needed to
+   * represent the host platform.
    */
   @SuppressWarnings("unused")
   public FragmentOptions getHost() {
     return getDefault();
+  }
+
+  /**
+   * Returns an instance of {@code FragmentOptions} with all flags adjusted to be suitable for
+   * forming configurations.
+   *
+   * <p>If this instance is already suitable, it will be returned without creating a new instance.
+   *
+   * <p>Motivation: Sometimes a fragment's physical option values, as set by the options parser, do
+   * not correspond to their logical interpretation. For example, an option may need custom code to
+   * determine its logical default value at runtime, but it's limited to a single hard-coded
+   * physical default value in the {@link Option#defaultValue} annotation field. If two instances of
+   * the fragment have the same logical value but different physical values, a redundant
+   * configuration can be created, which results in an action conflict (particularly for unshareable
+   * actions; see #7808).
+   *
+   * <p>To solve this, we can distinguish between "normalized" and "non-normalized" instances of a
+   * fragment type, and preserve the invariant that configured targets only ever see normalized
+   * instances. This requires that 1) the top-level configuration is normalized, and 2) all
+   * transitions preserve normalization. Step 1) is ensured by {@link BuildOptions} calling this
+   * method. Step 2) is the responsibility of each transition implementation.
+   */
+  public FragmentOptions getNormalized() {
+    return this;
+  }
+
+  /** Tracks limitations on referring to an option in a {@code config_setting}. */
+  // TODO(bazel-team): There will likely also be a need to customize whether or not an option is
+  // visible to users for setting on the command line (or perhaps even in a test of a Starlark
+  // rule). This class may be a good place to add this functionality.
+  public static final class SelectRestriction {
+
+    private final boolean visibleWithinToolsPackage;
+
+    @Nullable private final String errorMessage;
+
+    public SelectRestriction(boolean visibleWithinToolsPackage, @Nullable String errorMessage) {
+      this.visibleWithinToolsPackage = visibleWithinToolsPackage;
+      this.errorMessage = errorMessage;
+    }
+
+    /**
+     * Whether the option can still be seen by {@code config_setting}s that are defined by packages
+     * underneath the tools repository's "tools" package, e.g. {@code @bazel_tools//tools/...}.
+     */
+    public boolean isVisibleWithinToolsPackage() {
+      return visibleWithinToolsPackage;
+    }
+
+    /**
+     * An additional explanation to append to the generic error message when a user attempts to use
+     * this option. Should explain why this option is unavailable.
+     *
+     * <p>If null, no content will be appended to the generic error message.
+     */
+    @Nullable
+    public String getErrorMessage() {
+      return errorMessage;
+    }
+  }
+
+  /**
+   * Returns a map from options defined by this fragment to restrictions on whether the option may
+   * appear in a {@code config_setting}. If an option defined by this fragment is not a key of this
+   * map, then it has no restriction.
+   *
+   * <p>In addition to making options unconditionally non-selectable, this can also be used to gate
+   * selectability based on the value of other flags in the same fragment -- for instance,
+   * experimental or incompatible change flags.
+   *
+   * <p>The intended usage pattern is to define, for each flag {@code foo} to have a restriction, a
+   * field
+   *
+   * <pre>{@code
+   * private static final OptionDefinition FOO_DEFINITION =
+   *     OptionsParser.getOptionDefinitionByName(ThisClass.class, "foo");
+   * }</pre>
+   *
+   * This way, if the option is ever renamed (especially common for an experimental flag), if the
+   * definition is not updated at the same time it will fail-fast during static initialization.
+   */
+  public Map<OptionDefinition, SelectRestriction> getSelectRestrictions() {
+    return ImmutableMap.of();
+  }
+
+  public void describe(StringBuilder sb) {
+    sb.append("Fragment ").append(getClass().getName()).append(" {\n");
+    Map<String, Object> options = asMap();
+    options.entrySet().stream()
+        .sorted(comparingByKey())
+        .forEach(
+            e -> sb.append("  ").append(e.getKey()).append(": ").append(e.getValue()).append("\n"));
+    sb.append("}\n");
   }
 }

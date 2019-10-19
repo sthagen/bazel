@@ -16,15 +16,17 @@ package com.google.devtools.build.lib.rules.config;
 
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.packages.NativeProvider;
+import com.google.devtools.build.lib.packages.RequiredProviders;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigFeatureFlagProviderApi;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 import java.util.Map;
 
 /** Provider for exporting value and valid value predicate of feature flags to consuming targets. */
@@ -36,6 +38,9 @@ public class ConfigFeatureFlagProvider extends NativeInfo implements ConfigFeatu
 
   /** Skylark constructor and identifier for ConfigFeatureFlagProvider. */
   static final NativeProvider<ConfigFeatureFlagProvider> SKYLARK_CONSTRUCTOR = new Constructor();
+
+  static final RequiredProviders REQUIRE_CONFIG_FEATURE_FLAG_PROVIDER =
+      RequiredProviders.acceptAnyBuilder().addSkylarkSet(ImmutableSet.of(id())).build();
 
   private final String value;
   private final Predicate<String> validityPredicate;
@@ -61,7 +66,7 @@ public class ConfigFeatureFlagProvider extends NativeInfo implements ConfigFeatu
 
     @Override
     protected ConfigFeatureFlagProvider createInstanceFromSkylark(
-        Object[] args, Environment env, Location loc) throws EvalException {
+        Object[] args, StarlarkThread thread, Location loc) throws EvalException {
 
       @SuppressWarnings("unchecked")
       Map<String, Object> kwargs = (Map<String, Object>) args[0];

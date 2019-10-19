@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.runtime;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
@@ -95,6 +96,20 @@ public class AllIncompatibleChangesExpansionTest {
       help = "Migrate to B"
     )
     public boolean incompatibleB;
+
+    @Option(
+        name = "incompatible_C",
+        oldName = "experimental_C",
+        metadataTags = {
+            OptionMetadataTag.INCOMPATIBLE_CHANGE,
+            OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+        },
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.NO_OP},
+        defaultValue = "true",
+        help = "Migrate to C"
+    )
+    public boolean incompatibleC;
   }
 
   /** Dummy comment (linter suppression) */
@@ -138,31 +153,33 @@ public class AllIncompatibleChangesExpansionTest {
 
   @Test
   public void noChangesSelected() throws OptionsParsingException {
-    OptionsParser parser = OptionsParser.newOptionsParser(ExampleOptions.class);
+    OptionsParser parser = OptionsParser.builder().optionsClasses(ExampleOptions.class).build();
     parser.parse("");
     ExampleOptions opts = parser.getOptions(ExampleOptions.class);
     assertThat(opts.x).isFalse();
     assertThat(opts.y).isTrue();
     assertThat(opts.incompatibleA).isFalse();
     assertThat(opts.incompatibleB).isFalse();
+    assertThat(opts.incompatibleC).isTrue();
   }
 
   @Test
   public void allChangesSelected() throws OptionsParsingException {
-    OptionsParser parser = OptionsParser.newOptionsParser(ExampleOptions.class);
+    OptionsParser parser = OptionsParser.builder().optionsClasses(ExampleOptions.class).build();
     parser.parse("--all");
     ExampleOptions opts = parser.getOptions(ExampleOptions.class);
     assertThat(opts.x).isFalse();
     assertThat(opts.y).isTrue();
     assertThat(opts.incompatibleA).isTrue();
     assertThat(opts.incompatibleB).isTrue();
+    assertThat(opts.incompatibleC).isTrue();
   }
 
   @Test
   public void rightmostOverrides() throws OptionsParsingException {
     // Check that all-expansion behaves just like any other expansion flag:
     // the rightmost setting of any individual option wins.
-    OptionsParser parser = OptionsParser.newOptionsParser(ExampleOptions.class);
+    OptionsParser parser = OptionsParser.builder().optionsClasses(ExampleOptions.class).build();
     parser.parse("--noincompatible_A", "--all", "--noincompatible_B");
     ExampleOptions opts = parser.getOptions(ExampleOptions.class);
     assertThat(opts.incompatibleA).isTrue();
@@ -174,7 +191,9 @@ public class AllIncompatibleChangesExpansionTest {
     // Check that all-expansion behaves just like any other expansion flag:
     // the rightmost setting of any individual option wins.
     OptionsParser parser =
-        OptionsParser.newOptionsParser(ExampleOptions.class, ExampleExpansionOptions.class);
+        OptionsParser.builder()
+            .optionsClasses(ExampleOptions.class, ExampleExpansionOptions.class)
+            .build();
     parser.parse("--all");
     ExampleOptions opts = parser.getOptions(ExampleOptions.class);
     assertThat(opts.x).isTrue();
@@ -195,8 +214,7 @@ public class AllIncompatibleChangesExpansionTest {
     InvocationPolicy policy = invocationPolicyBuilder.build();
     InvocationPolicyEnforcer enforcer = new InvocationPolicyEnforcer(policy);
 
-    OptionsParser parser =
-        OptionsParser.newOptionsParser(ExampleOptions.class);
+    OptionsParser parser = OptionsParser.builder().optionsClasses(ExampleOptions.class).build();
     parser.parse("--all");
     enforcer.enforce(parser);
 
@@ -223,7 +241,9 @@ public class AllIncompatibleChangesExpansionTest {
   @Test
   public void incompatibleChangeTagDoesNotTriggerAllIncompatibleChangesCheck() {
     try {
-      OptionsParser.newOptionsParser(ExampleOptions.class, IncompatibleChangeTagOption.class);
+      OptionsParser.builder()
+          .optionsClasses(ExampleOptions.class, IncompatibleChangeTagOption.class)
+          .build();
     } catch (OptionsParser.ConstructionException e) {
       fail(
           "some_option_with_a_tag should not trigger the expansion, so there should be no checks "
@@ -244,12 +264,15 @@ public class AllIncompatibleChangesExpansionTest {
   // Because javadoc can't resolve inner classes.
   @SuppressWarnings("javadoc")
   private static void assertBadness(Class<? extends OptionsBase> optionsBaseClass, String message) {
-    try {
-      OptionsParser.newOptionsParser(ExampleOptions.class, optionsBaseClass);
-      fail("Should have failed with message \"" + message + "\"");
-    } catch (OptionsParser.ConstructionException e) {
-      assertThat(e).hasMessageThat().contains(message);
-    }
+    OptionsParser.ConstructionException e =
+        assertThrows(
+            "Should have failed with message \"" + message + "\"",
+            OptionsParser.ConstructionException.class,
+            () ->
+                OptionsParser.builder()
+                    .optionsClasses(ExampleOptions.class, optionsBaseClass)
+                    .build());
+    assertThat(e).hasMessageThat().contains(message);
   }
 
   /** Dummy comment (linter suppression) */

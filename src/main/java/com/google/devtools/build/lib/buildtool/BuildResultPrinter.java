@@ -24,16 +24,12 @@ import com.google.devtools.build.lib.analysis.TopLevelArtifactHelper;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.configuredtargets.InputFileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.OutputFileConfiguredTarget;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
-import com.google.devtools.build.lib.packages.NoSuchPackageException;
-import com.google.devtools.build.lib.packages.NoSuchTargetException;
-import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.util.io.OutErr;
@@ -66,6 +62,15 @@ class BuildResultPrinter {
     // problem where the summary message and the exit code disagree.  The logic
     // here is already complex.
 
+    String productName = env.getRuntime().getProductName();
+    PathPrettyPrinter prettyPrinter =
+        OutputDirectoryLinksUtils.getPathPrettyPrinter(
+            request.getBuildOptions().getSymlinkPrefix(productName),
+            productName,
+            env.getWorkspace(),
+            request.getBuildOptions().printWorkspaceInOutputPathsIfNeeded
+                ? env.getWorkingDirectory()
+                : env.getWorkspace());
     OutErr outErr = request.getOutErr();
     Collection<ConfiguredTarget> targetsToPrint = filterTargetsToPrint(configuredTargets);
     Collection<AspectValue> aspectsToPrint = filterAspectsToPrint(aspects);
@@ -100,7 +105,7 @@ class BuildResultPrinter {
               outErr.printErr("Target " + label + " up-to-date:\n");
               headerFlag = false;
             }
-            outErr.printErrLn(formatArtifactForShowResults(artifact, request));
+            outErr.printErrLn(formatArtifactForShowResults(prettyPrinter, artifact));
           }
         }
         if (headerFlag) {
@@ -113,21 +118,10 @@ class BuildResultPrinter {
         // For failed compilation, it is still useful to examine temp artifacts,
         // (ie, preprocessed and assembler files).
         OutputGroupInfo topLevelProvider = OutputGroupInfo.get(target);
-        String productName = env.getRuntime().getProductName();
         if (topLevelProvider != null) {
           for (Artifact temp : topLevelProvider.getOutputGroup(OutputGroupInfo.TEMP_FILES)) {
             if (temp.getPath().exists()) {
-              outErr.printErrLn(
-                  "  See temp at "
-                      + OutputDirectoryLinksUtils.getPrettyPath(
-                          temp.getPath(),
-                          env.getWorkspaceName(),
-                          env.getWorkspace(),
-                          request.getBuildOptions().printWorkspaceInOutputPathsIfNeeded
-                              ? env.getWorkingDirectory()
-                              : env.getWorkspace(),
-                          request.getBuildOptions().getSymlinkPrefix(productName),
-                          productName));
+              outErr.printErrLn("  See temp at " + prettyPrinter.getPrettyPath(temp.getPath()));
             }
           }
         }
@@ -158,7 +152,7 @@ class BuildResultPrinter {
             headerFlag = false;
           }
           if (shouldPrint(importantArtifact)) {
-            outErr.printErrLn(formatArtifactForShowResults(importantArtifact, request));
+            outErr.printErrLn(formatArtifactForShowResults(prettyPrinter, importantArtifact));
           }
         }
         if (headerFlag) {
@@ -182,18 +176,8 @@ class BuildResultPrinter {
     return !artifact.isSourceArtifact() && !artifact.isMiddlemanArtifact();
   }
 
-  private String formatArtifactForShowResults(Artifact artifact, BuildRequest request) {
-    String productName = env.getRuntime().getProductName();
-    return "  "
-        + OutputDirectoryLinksUtils.getPrettyPath(
-            artifact.getPath(),
-            env.getWorkspaceName(),
-            env.getWorkspace(),
-            request.getBuildOptions().printWorkspaceInOutputPathsIfNeeded
-                ? env.getWorkingDirectory()
-                : env.getWorkspace(),
-            request.getBuildOptions().getSymlinkPrefix(productName),
-            productName);
+  private String formatArtifactForShowResults(PathPrettyPrinter prettyPrinter, Artifact artifact) {
+    return "  " + prettyPrinter.getPrettyPath(artifact.getPath());
   }
 
   /**
@@ -246,17 +230,9 @@ class BuildResultPrinter {
         // Suppress display of source files (because we do no work to build them).
         continue;
       }
-      Target target = null;
-      try {
-        target = env.getPackageManager().getTarget(env.getReporter(), configuredTarget.getLabel());
-      } catch (NoSuchPackageException | NoSuchTargetException | InterruptedException e) {
-        env.getReporter()
-            .handle(Event.error("Unable to get target when filtering targets to print. " + e));
-        continue;
-      }
-      if (target instanceof Rule) {
-        Rule rule = (Rule) target;
-        if (rule.getRuleClass().contains("$")) {
+      if (configuredTarget instanceof RuleConfiguredTarget) {
+        RuleConfiguredTarget ruleCt = (RuleConfiguredTarget) configuredTarget;
+        if (ruleCt.getRuleClassString().contains("$")) {
           // Suppress display of hidden rules
           continue;
         }

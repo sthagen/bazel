@@ -21,6 +21,8 @@ import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.ListMultimap;
+import com.google.common.collect.Multimap;
 import com.google.common.collect.Streams;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -35,11 +37,8 @@ import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
-import com.google.devtools.build.lib.rules.apple.ApplePlatform;
-import com.google.devtools.build.lib.rules.cpp.CcLinkingInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.objc.CompilationSupport.ExtraLinkArgs;
-import com.google.devtools.build.lib.rules.proto.ProtoSourcesProvider;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import java.util.List;
 import java.util.Map;
@@ -57,9 +56,6 @@ public class MultiArchBinarySupport {
    */
   static ImmutableMap<BuildConfiguration, CcToolchainProvider> getChildConfigurationsAndToolchains(
       RuleContext ruleContext) {
-    // This is currently a hack to obtain all child configurations regardless of the attribute
-    // values of this rule -- this rule does not currently use the actual info provided by
-    // this attribute. b/28403953 tracks cc toolchain usage.
     ImmutableListMultimap<BuildConfiguration, ToolchainInfo> configToProvider =
         ruleContext.getPrerequisitesByConfiguration(
             ObjcRuleClasses.CHILD_CONFIG_ATTR, Mode.SPLIT, ToolchainInfo.PROVIDER);
@@ -69,6 +65,15 @@ public class MultiArchBinarySupport {
       CcToolchainProvider toolchain =
           (CcToolchainProvider) Iterables.getOnlyElement(configToProvider.get(config));
       result.put(config, toolchain);
+    }
+
+    return result.build();
+  }
+
+  static <V> ImmutableListMultimap<String, V> transformMap(Multimap<BuildConfiguration, V> input) {
+    ImmutableListMultimap.Builder<String, V> result = ImmutableListMultimap.builder();
+    for (Map.Entry<BuildConfiguration, V> entry : input.entries()) {
+      result.put(entry.getKey().getCpu(), entry.getValue());
     }
 
     return result.build();
@@ -120,14 +125,13 @@ public class MultiArchBinarySupport {
   /**
    * Registers actions to create a multi-arch Apple binary.
    *
-   * @param platform the platform for which the binary is targeted
    * @param extraLinkArgs the extra linker args to add to link actions linking single-architecture
    *     binaries together
    * @param dependencySpecificConfigurations a set of {@link DependencySpecificConfiguration} that
    *     corresponds to child configurations for this target. Can be obtained via {@link
    *     #getDependencySpecificConfigurations}
    * @param extraLinkInputs the extra linker inputs to be made available during link actions
-   * @param configToDepsCollectionMap a multimap from dependency configuration to the list of
+   * @param cpuToDepsCollectionMap a multimap from dependency configuration to the list of
    *     provider collections which are propagated from the dependencies of that configuration
    * @param outputMapCollector a map to which output groups created by compile action generation are
    *     added
@@ -135,11 +139,10 @@ public class MultiArchBinarySupport {
    * @throws RuleErrorException if there are attribute errors in the current rule context
    */
   public NestedSet<Artifact> registerActions(
-      ApplePlatform platform,
       ExtraLinkArgs extraLinkArgs,
       Set<DependencySpecificConfiguration> dependencySpecificConfigurations,
       Iterable<Artifact> extraLinkInputs,
-      ImmutableListMultimap<BuildConfiguration, TransitiveInfoCollection> configToDepsCollectionMap,
+      ListMultimap<String, TransitiveInfoCollection> cpuToDepsCollectionMap,
       Map<String, NestedSet<Artifact>> outputMapCollector)
       throws RuleErrorException, InterruptedException {
 
@@ -151,7 +154,7 @@ public class MultiArchBinarySupport {
           ObjcRuleClasses.intermediateArtifacts(
               ruleContext, dependencySpecificConfiguration.config());
       Iterable<TransitiveInfoCollection> infoCollections =
-          configToDepsCollectionMap.get(dependencySpecificConfiguration.config());
+          cpuToDepsCollectionMap.get(dependencySpecificConfiguration.config().getCpu());
       J2ObjcMappingFileProvider j2ObjcMappingFileProvider =
           J2ObjcMappingFileProvider.union(
               getTypedProviders(infoCollections, J2ObjcMappingFileProvider.class));
@@ -200,17 +203,16 @@ public class MultiArchBinarySupport {
    *
    * @param childConfigurationsAndToolchains the set of configurations and toolchains for which
    *     dependencies of the current rule are built
-   * @param configToDepsCollectionMap a map from child configuration to providers that "deps" of the
-   *     current rule have propagated in that configuration
+   * @param cpuToDepsCollectionMap a map from child configuration CPU to providers that "deps" of
+   *     the current rule have propagated in that configuration
    * @param dylibProviders {@link TransitiveInfoCollection}s that dynamic library dependencies of
    *     the current rule have propagated
    * @throws RuleErrorException if there are attribute errors in the current rule context
    */
   public ImmutableSet<DependencySpecificConfiguration> getDependencySpecificConfigurations(
       Map<BuildConfiguration, CcToolchainProvider> childConfigurationsAndToolchains,
-      ImmutableListMultimap<BuildConfiguration, TransitiveInfoCollection> configToDepsCollectionMap,
-      ImmutableListMultimap<BuildConfiguration, ConfiguredTargetAndData>
-          configToCTATDepsCollectionMap,
+      ImmutableListMultimap<String, TransitiveInfoCollection> cpuToDepsCollectionMap,
+      ImmutableListMultimap<String, ConfiguredTargetAndData> cpuToCTATDepsCollectionMap,
       Iterable<TransitiveInfoCollection> dylibProviders)
       throws RuleErrorException, InterruptedException {
     Iterable<ObjcProvider> dylibObjcProviders = getDylibObjcProviders(dylibProviders);
@@ -219,9 +221,9 @@ public class MultiArchBinarySupport {
     NestedSet<Artifact> protosToAvoid = protoArtifactsToAvoid(dylibProtoProviders);
     ImmutableSet.Builder<DependencySpecificConfiguration> childInfoBuilder = ImmutableSet.builder();
 
-    for (BuildConfiguration childConfig : childConfigurationsAndToolchains.keySet()) {
-      Iterable<TransitiveInfoCollection> infoCollections =
-          configToDepsCollectionMap.get(childConfig);
+    for (BuildConfiguration childToolchainConfig : childConfigurationsAndToolchains.keySet()) {
+      String childCpu = childToolchainConfig.getCpu();
+      Iterable<TransitiveInfoCollection> infoCollections = cpuToDepsCollectionMap.get(childCpu);
       Iterable<ObjcProtoProvider> depProtoProviders =
           getTypedProviders(infoCollections, ObjcProtoProvider.SKYLARK_CONSTRUCTOR);
       Optional<ObjcProvider> protosObjcProvider;
@@ -229,21 +231,20 @@ public class MultiArchBinarySupport {
         ProtobufSupport protoSupport =
             new ProtobufSupport(
                     ruleContext,
-                    childConfig,
+                    childToolchainConfig,
                     protosToAvoid,
-                    ImmutableList.<ProtoSourcesProvider>of(),
                     depProtoProviders,
                     ProtobufSupport.getTransitivePortableProtoFilters(depProtoProviders),
-                    childConfigurationsAndToolchains.get(childConfig))
-                .registerGenerationActions()
-                .registerCompilationActions();
+                    childConfigurationsAndToolchains.get(childToolchainConfig))
+                .registerGenerationAction()
+                .registerCompilationAction();
         protosObjcProvider = protoSupport.getObjcProvider();
       } else {
         protosObjcProvider = Optional.absent();
       }
 
       IntermediateArtifacts intermediateArtifacts =
-          ObjcRuleClasses.intermediateArtifacts(ruleContext, childConfig);
+          ObjcRuleClasses.intermediateArtifacts(ruleContext, childToolchainConfig);
 
       Iterable<ObjcProvider> additionalDepProviders =
           Iterables.concat(
@@ -253,19 +254,18 @@ public class MultiArchBinarySupport {
       ObjcCommon common =
           common(
               ruleContext,
-              childConfig,
+              childToolchainConfig,
               intermediateArtifacts,
-              nullToEmptyList(configToCTATDepsCollectionMap.get(childConfig)),
+              nullToEmptyList(cpuToCTATDepsCollectionMap.get(childCpu)),
               additionalDepProviders);
       ObjcProvider objcProviderWithDylibSymbols = common.getObjcProvider();
       ObjcProvider objcProvider =
-          objcProviderWithDylibSymbols.subtractSubtrees(
-              dylibObjcProviders, ImmutableList.<CcLinkingInfo>of());
+          objcProviderWithDylibSymbols.subtractSubtrees(dylibObjcProviders, ImmutableList.of());
 
       childInfoBuilder.add(
           DependencySpecificConfiguration.create(
-              childConfig,
-              childConfigurationsAndToolchains.get(childConfig),
+              childToolchainConfig,
+              childConfigurationsAndToolchains.get(childToolchainConfig),
               objcProvider,
               objcProviderWithDylibSymbols));
     }
@@ -320,9 +320,7 @@ public class MultiArchBinarySupport {
       Iterable<ObjcProtoProvider> avoidedProviders) {
     NestedSetBuilder<Artifact> avoidArtifacts = NestedSetBuilder.stableOrder();
     for (ObjcProtoProvider avoidProvider : avoidedProviders) {
-      for (NestedSet<Artifact> avoidProviderOutputGroup : avoidProvider.getProtoGroups()) {
-        avoidArtifacts.addTransitive(avoidProviderOutputGroup);
-      }
+      avoidArtifacts.addTransitive(avoidProvider.getProtoFiles());
     }
     return avoidArtifacts.build();
   }

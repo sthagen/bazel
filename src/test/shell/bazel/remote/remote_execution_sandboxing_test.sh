@@ -26,12 +26,14 @@ source "${CURRENT_DIR}/../../sandboxing_test_utils.sh" \
 
 function set_up() {
   work_path=$(mktemp -d "${TEST_TMPDIR}/remote.XXXXXXXX")
+  cas_path=$(mktemp -d "${TEST_TMPDIR}/remote.XXXXXXXX")
   writable_path=$(mktemp -d "${TEST_TMPDIR}/remote.XXXXXXXX")
   readonly_path=$(mktemp -d "${TEST_TMPDIR}/remote.XXXXXXXX")
   pid_file=$(mktemp -u "${TEST_TMPDIR}/remote.XXXXXXXX")
   worker_port=$(pick_random_unused_tcp_port) || fail "no port found"
   "${BAZEL_RUNFILES}/src/tools/remote/worker" \
       --work_path="${work_path}" \
+      --cas_path="${cas_path}" \
       --listen_port=${worker_port} \
       --sandboxing \
       --sandboxing_writable_path="${writable_path}" \
@@ -80,13 +82,14 @@ function tear_down() {
   fi
   rm -rf "${pid_file}"
   rm -rf "${work_path}"
+  rm -rf "${cas_path}"
 }
 
 function test_genrule() {
   bazel build \
       --spawn_strategy=remote \
-      --remote_executor=localhost:${worker_port} \
-      --remote_cache=localhost:${worker_port} \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --remote_cache=grpc://localhost:${worker_port} \
       examples/genrule:simple &> $TEST_log \
     || fail "Hermetic genrule failed: examples/genrule:simple"
 }
@@ -94,8 +97,8 @@ function test_genrule() {
 function test_genrule_can_write_to_path() {
   bazel build \
       --spawn_strategy=remote \
-      --remote_executor=localhost:${worker_port} \
-      --remote_cache=localhost:${worker_port} \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --remote_cache=grpc://localhost:${worker_port} \
       examples/genrule:writes_to_writable_path &> $TEST_log \
     || fail "Hermetic genrule failed: examples/genrule:writes_to_writable_path"
   [ -f "$(cat examples/genrule/writable_path.txt)/out.txt" ] \
@@ -105,8 +108,8 @@ function test_genrule_can_write_to_path() {
 function test_genrule_cannot_write_to_other_path() {
   bazel build \
       --spawn_strategy=remote \
-      --remote_executor=localhost:${worker_port} \
-      --remote_cache=localhost:${worker_port} \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --remote_cache=grpc://localhost:${worker_port} \
       examples/genrule:writes_to_readonly_path &> $TEST_log \
     && fail "Non-hermetic genrule succeeded: examples/genrule:writes_to_readonly_path" || true
   [ -f "$(cat examples/genrule/readonly_path.txt)/out.txt" ] \

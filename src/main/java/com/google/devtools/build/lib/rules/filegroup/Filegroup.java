@@ -33,10 +33,11 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.InstrumentationSpec;
-import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Iterator;
@@ -71,11 +72,14 @@ public class Filegroup implements RuleConfiguredTargetFactory {
         CompilationHelper.getAggregatingMiddleman(
             ruleContext, Actions.escapeLabel(ruleContext.getLabel()), filesToBuild);
 
-    InstrumentedFilesProvider instrumentedFilesProvider =
-        InstrumentedFilesCollector.collect(ruleContext,
+    InstrumentedFilesInfo instrumentedFilesProvider =
+        InstrumentedFilesCollector.collect(
+            ruleContext,
             // what do *we* know about whether this is a source file or not
             new InstrumentationSpec(FileTypeSet.ANY_FILE, "srcs", "deps", "data"),
-            InstrumentedFilesCollector.NO_METADATA_COLLECTOR, filesToBuild);
+            InstrumentedFilesCollector.NO_METADATA_COLLECTOR,
+            filesToBuild,
+            /* reportedToActualSources= */ NestedSetBuilder.create(Order.STABLE_ORDER));
 
     RunfilesProvider runfilesProvider = RunfilesProvider.withData(
         new Runfiles.Builder(
@@ -94,10 +98,9 @@ public class Filegroup implements RuleConfiguredTargetFactory {
         .add(RunfilesProvider.class, runfilesProvider)
         .setFilesToBuild(filesToBuild)
         .setRunfilesSupport(null, getExecutable(filesToBuild))
-        .add(InstrumentedFilesProvider.class, instrumentedFilesProvider)
+        .addNativeDeclaredProvider(instrumentedFilesProvider)
         .add(MiddlemanProvider.class, new MiddlemanProvider(middleman))
-        .add(FilegroupPathProvider.class,
-            new FilegroupPathProvider(getFilegroupPath(ruleContext)))
+        .add(FilegroupPathProvider.class, new FilegroupPathProvider(getFilegroupPath(ruleContext)))
         .build();
   }
 

@@ -17,14 +17,15 @@ package com.google.devtools.build.lib.rules.objc;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_KEYED_STRING_DICT;
-import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
-import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
+import static com.google.devtools.build.lib.packages.Type.STRING;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
-import com.google.devtools.build.lib.analysis.config.ComposingRuleTransitionFactory;
+import com.google.devtools.build.lib.analysis.config.HostTransition;
+import com.google.devtools.build.lib.analysis.config.transitions.ComposingTransitionFactory;
 import com.google.devtools.build.lib.packages.Attribute.AllowedValueSet;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.RuleClass;
@@ -140,6 +141,13 @@ public class AppleBinaryRule implements RuleDefinition {
                 .allowedFileTypes()
                 .nonconfigurable("defines an aspect of configuration")
                 .mandatoryProviders(ImmutableList.of(ConfigFeatureFlagProvider.id())))
+        .add(
+            attr(ObjcRuleClasses.HEADER_SCANNER_ATTRIBUTE, LABEL)
+                .cfg(HostTransition.createFactory())
+                .value(ObjcRuleClasses.headerScannerAttribute(env)))
+        .add(
+            attr(ObjcRuleClasses.APPLE_SDK_ATTRIBUTE, LABEL)
+                .value(ObjcRuleClasses.CompilingRule.SDK_LATE_BOUND_DEFAULT))
         /*<!-- #BLAZE_RULE(apple_binary).IMPLICIT_OUTPUTS -->
         <ul>
          <li><code><var>name</var>_lipobin</code>: the 'lipo'ed potentially multi-architecture
@@ -149,7 +157,7 @@ public class AppleBinaryRule implements RuleDefinition {
         .setImplicitOutputsFunction(
             ImplicitOutputsFunction.fromFunctions(ObjcRuleClasses.LIPOBIN_OUTPUT))
         .cfg(
-            new ComposingRuleTransitionFactory(
+            ComposingTransitionFactory.of(
                 (rule) -> AppleCrosstoolTransition.APPLE_CROSSTOOL_TRANSITION,
                 new ConfigFeatureFlagTransitionFactory("feature_flags")))
         .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(env))

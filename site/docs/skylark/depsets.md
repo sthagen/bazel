@@ -25,12 +25,13 @@ Example uses of depsets include:
 If you don't need the merge operation, consider using another type, such as
 [list](lib/list.html) or [dict](lib/dict.html).
 
-<!-- [TOC] -->
+* ToC
+{:toc}
 
 ## Full example
 
 
-This example is avalable at
+This example is available at
 [https://github.com/bazelbuild/examples/tree/master/rules/depsets](https://github.com/bazelbuild/examples/tree/master/rules/depsets).
 
 Suppose we have a hypothetical interpreted language Foo. In order to build each
@@ -165,7 +166,7 @@ Each node in the DAG holds a list of direct elements and a list of child nodes.
 The contents of the depset are the transitive elements, i.e. the direct elements
 of all the nodes. A new depset can be created using the
 [depset](lib/globals.html#depset) constructor: it accepts a list of direct
-elemens and another list of child nodes.
+elements and another list of child nodes.
 
 ```python
 s = depset(["a", "b", "c"])
@@ -273,7 +274,7 @@ def create(order):
   a = depset(["a"], order=order)
   b = depset(["b"], transitive = [a], order = order)
   c = depset(["c"], transitive = [a], order = order)
-  d = depset(["d"], transtive = [b, c], order = order)
+  d = depset(["d"], transitive = [b, c], order = order)
   return d
 
 print(create("postorder").to_list())    # ["a", "b", "c", "d"]
@@ -354,22 +355,5 @@ at the end in a binary rule is fine, since the overall cost is just O(n). It’s
 when many non-terminal targets try to call `to_list()` that we start to get into
 quadratic behavior.
 
-## Upcoming changes
-
-The API for depsets is being updated to be more consistent. Here are some recent
-and/or upcoming changes.
-
-*   When it's necessary to retrieve a depset's contents, this should be done by
-    explicitly converting the depset to a list via its `to_list()` method. Do
-    not iterate directly over the depset itself; direct iteration is deprecated
-    and will be removed. For example, don't use `list(...)`, `sorted(...)`, or
-    other functions expecting an iterable, on depsets. The rationale of this
-    change is that iterating over depsets is generally expensive, and expensive
-    operations should be made obvious in code.
-
-*   Depset elements currently must have the same type, e.g. all ints or all
-    strings. This restriction will be lifted.
-
-*   A merge operation should be done by using the `transitive` argument in the
-    depset constructor. All other methods (`|` and `+` operators, and the
-    `union` method) are deprecated and will be going away.
+The [performance](performance.md) page also contains information about using
+depsets efficiently.

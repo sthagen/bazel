@@ -19,10 +19,12 @@ import com.google.common.collect.Sets;
 import com.google.common.collect.Sets.SetView;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Argument;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.ArgumentType;
+import com.google.devtools.build.lib.query2.engine.QueryEnvironment.CustomFunctionQueryEnvironment;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryTaskCallable;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryTaskFuture;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.ThreadSafeMutableSet;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -62,6 +64,20 @@ class SomePathFunction implements QueryFunction {
     final QueryTaskFuture<ThreadSafeMutableSet<T>> toValueFuture =
         QueryUtil.evalAll(env, context, args.get(1).getExpression());
 
+    if (env instanceof CustomFunctionQueryEnvironment) {
+      return env.whenAllSucceedCall(
+          ImmutableList.of(fromValueFuture, toValueFuture),
+          new QueryTaskCallable<Void>() {
+            @Override
+            public Void call() throws QueryException, InterruptedException {
+              Collection<T> fromValue = fromValueFuture.getIfSuccessful();
+              Collection<T> toValue = toValueFuture.getIfSuccessful();
+              ((CustomFunctionQueryEnvironment<T>) env)
+                  .somePath(fromValue, toValue, expression, callback);
+              return null;
+            }
+          });
+    }
     return env.whenAllSucceedCall(
         ImmutableList.of(fromValueFuture, toValueFuture),
         new QueryTaskCallable<Void>() {
@@ -77,12 +93,13 @@ class SomePathFunction implements QueryFunction {
 
             env.buildTransitiveClosure(expression, fromValue, Integer.MAX_VALUE);
 
-            // This set contains all nodes whose TC does not intersect "toValue".
-            Uniquifier<T> uniquifier = env.createUniquifier();
-
-            for (T x : uniquifier.unique(fromValue)) {
+            for (T x : fromValue) {
+              // TODO(b/122548314): if x was already seen as part of a previous node's tc, we should
+              // skip it here. That's subsumed by the TODO below.
               ThreadSafeMutableSet<T> xSet = env.createThreadSafeMutableSet();
               xSet.add(x);
+              // TODO(b/122548314): this transitive closure building should stop at any nodes that
+              // have already been visited.
               ThreadSafeMutableSet<T> xtc = env.getTransitiveClosure(xSet, context);
               SetView<T> result;
               if (xtc.size() > toValue.size()) {
@@ -94,7 +111,6 @@ class SomePathFunction implements QueryFunction {
                 callback.process(env.getNodesOnPath(x, result.iterator().next(), context));
                 return null;
               }
-              uniquifier.unique(xtc);
             }
             callback.process(ImmutableSet.<T>of());
             return null;

@@ -14,11 +14,14 @@
 
 package com.google.devtools.build.lib.rules.repository;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
+import com.google.devtools.build.lib.events.ExtendedEventHandler.ResolvedEvent;
 import com.google.devtools.build.lib.packages.BuildFileName;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
@@ -40,22 +43,38 @@ public class LocalRepositoryFunction extends RepositoryFunction {
   }
 
   @Override
-  public RepositoryDirectoryValue.Builder fetch(Rule rule, Path outputDirectory,
-      BlazeDirectories directories, Environment env, Map<String, String> markerData)
+  public RepositoryDirectoryValue.Builder fetch(
+      Rule rule,
+      Path outputDirectory,
+      BlazeDirectories directories,
+      Environment env,
+      Map<String, String> markerData,
+      SkyKey key)
       throws InterruptedException, RepositoryFunctionException {
-    PathFragment pathFragment = RepositoryFunction.getTargetPath(rule, directories.getWorkspace());
-    return LocalRepositoryFunction.symlink(outputDirectory, pathFragment, env);
+    String userDefinedPath = RepositoryFunction.getPathAttr(rule);
+    PathFragment pathFragment =
+        RepositoryFunction.getTargetPath(userDefinedPath, directories.getWorkspace());
+    RepositoryDirectoryValue.Builder result =
+        LocalRepositoryFunction.symlink(outputDirectory, pathFragment, userDefinedPath, env);
+    if (result != null) {
+      env.getListener().post(resolve(rule, directories));
+    }
+    return result;
   }
 
   public static RepositoryDirectoryValue.Builder symlink(
-      Path source, PathFragment destination, Environment env)
+      Path source, PathFragment destination, String userDefinedPath, Environment env)
       throws RepositoryFunctionException, InterruptedException {
     try {
       source.createSymbolicLink(destination);
     } catch (IOException e) {
       throw new RepositoryFunctionException(
-          new IOException("Could not create symlink to repository " + destination + ": "
-              + e.getMessage(), e), Transience.TRANSIENT);
+          new IOException(
+              String.format(
+                  "Could not create symlink to repository \"%s\" (absolute path: \"%s\"): %s",
+                  userDefinedPath, destination, e.getMessage()),
+              e),
+          Transience.TRANSIENT);
     }
     FileValue repositoryValue = getRepositoryDirectory(source, env);
     if (repositoryValue == null) {
@@ -66,7 +85,12 @@ public class LocalRepositoryFunction extends RepositoryFunction {
 
     if (!repositoryValue.isDirectory()) {
       throw new RepositoryFunctionException(
-          new IOException(source + " must be an existing directory"), Transience.PERSISTENT);
+          new IOException(
+              String.format(
+                  "The repository's path is \"%s\" (absolute: \"%s\") "
+                      + "but this directory does not exist.",
+                  userDefinedPath, destination)),
+          Transience.PERSISTENT);
     }
 
     // Check that the repository contains a WORKSPACE file.
@@ -110,5 +134,47 @@ public class LocalRepositoryFunction extends RepositoryFunction {
           Transience.PERSISTENT);
     }
     return value;
+  }
+
+  private static ResolvedEvent resolve(Rule rule, BlazeDirectories directories) {
+    String name = rule.getName();
+    Object pathObj = rule.getAttributeContainer().getAttr("path");
+    String path;
+    if (pathObj instanceof String) {
+      path = (String) pathObj;
+    } else {
+      path = "";
+    }
+    // Find a descrption of the path; there is a case, where we do not(!) want to hard-code
+    // the argument we obtained: if the path is under the embedded binaries root.
+    String pathArg;
+    PathFragment pathFragment = PathFragment.create(path);
+    PathFragment embeddedDir = directories.getEmbeddedBinariesRoot().asFragment();
+    if (pathFragment.isAbsolute() && pathFragment.startsWith(embeddedDir)) {
+      pathArg =
+          "__embedded_dir__ + \"/\" + "
+              + Printer.getPrinter().repr(pathFragment.relativeTo(embeddedDir).toString());
+    } else {
+      pathArg = Printer.getPrinter().repr(path).toString();
+    }
+    String repr =
+        "local_repository(name = " + Printer.getPrinter().repr(name) + ", path = " + pathArg + ")";
+    return new ResolvedEvent() {
+      @Override
+      public String getName() {
+        return name;
+      }
+
+      @Override
+      public Object getResolvedInformation() {
+        return ImmutableMap.<String, Object>builder()
+            .put(ResolvedHashesFunction.ORIGINAL_RULE_CLASS, "local_repository")
+            .put(
+                ResolvedHashesFunction.ORIGINAL_ATTRIBUTES,
+                ImmutableMap.<String, Object>builder().put("name", name).put("path", path).build())
+            .put(ResolvedHashesFunction.NATIVE, repr)
+            .build();
+      }
+    };
   }
 }

@@ -19,10 +19,10 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.skyframe.PackageErrorMessageValue.Result;
+import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -30,13 +30,6 @@ import org.junit.runners.JUnit4;
 /** Tests for {@link PackageErrorMessageFunction}. */
 @RunWith(JUnit4.class)
 public class PackageErrorMessageFunctionTest extends BuildViewTestCase {
-
-  private SkyframeExecutor skyframeExecutor;
-
-  @Before
-  public final void createSkyframeExecutor() {
-    skyframeExecutor = getSkyframeExecutor();
-  }
 
   @Test
   public void testNoErrorMessage() throws Exception {
@@ -65,21 +58,21 @@ public class PackageErrorMessageFunctionTest extends BuildViewTestCase {
     assertThat(packageErrorMessageValue.getResult()).isEqualTo(Result.NO_SUCH_PACKAGE_EXCEPTION);
     assertThat(packageErrorMessageValue.getNoSuchPackageExceptionMessage())
         .isEqualTo(
-            "error loading package 'a': Extension file not found. Unable to load file "
-                + "'//a:does_not_exist.bzl': file doesn't exist or isn't a file");
+            "error loading package 'a': Unable to load file "
+                + "'//a:does_not_exist.bzl': file doesn't exist");
   }
 
   private PackageErrorMessageValue getPackageErrorMessageValue(boolean keepGoing)
       throws InterruptedException {
     SkyKey key = PackageErrorMessageValue.key(PackageIdentifier.createInMainRepo("a"));
+    EvaluationContext evaluationContext =
+        EvaluationContext.newBuilder()
+            .setKeepGoing(keepGoing)
+            .setNumThreads(SequencedSkyframeExecutor.DEFAULT_THREAD_COUNT)
+            .setEventHander(reporter)
+            .build();
     EvaluationResult<SkyValue> result =
-        skyframeExecutor
-            .getDriverForTesting()
-            .evaluate(
-                ImmutableList.of(key),
-                /*keepGoing=*/ keepGoing,
-                SequencedSkyframeExecutor.DEFAULT_THREAD_COUNT,
-                reporter);
+        skyframeExecutor.getDriver().evaluate(ImmutableList.of(key), evaluationContext);
     assertThat(result.hasError()).isFalse();
     SkyValue value = result.get(key);
     assertThat(value).isInstanceOf(PackageErrorMessageValue.class);

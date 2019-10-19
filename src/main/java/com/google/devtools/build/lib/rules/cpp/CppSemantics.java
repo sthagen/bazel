@@ -16,7 +16,9 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.HeadersCheckingMode;
 
 /** Pluggable C++ compilation semantics. */
@@ -27,25 +29,22 @@ public interface CppSemantics {
    * <p>Gives the semantics implementation the opportunity to change compile actions at the last
    * minute.
    */
-  void finalizeCompileActionBuilder(RuleContext ruleContext, CppCompileActionBuilder actionBuilder);
-
-  /**
-   * Called before {@link CcCompilationContext}s are finalized.
-   *
-   * <p>Gives the semantics implementation the opportunity to change what the C++ rule propagates to
-   * dependent rules.
-   */
-  void setupCcCompilationContext(
-      RuleContext ruleContext, CcCompilationContext.Builder ccCompilationContextBuilder);
+  void finalizeCompileActionBuilder(
+      BuildConfiguration configuration,
+      FeatureConfiguration featureConfiguration,
+      CppCompileActionBuilder actionBuilder);
 
   /**
    * Returns the set of includes which are not mandatory and may be pruned by include processing.
    */
   NestedSet<Artifact> getAdditionalPrunableIncludes();
 
-  /**
-   * Determines the applicable mode of headers checking for the passed in ruleContext.
-   */
+  /** Return an alternate source of inputs for constructing the include scanning data. */
+  default Iterable<Artifact> getAlternateIncludeScanningDataInputs() {
+    return null;
+  }
+
+  /** Determines the applicable mode of headers checking for the passed in ruleContext. */
   HeadersCheckingMode determineHeadersCheckingMode(RuleContext ruleContext);
 
   /** Returns the include processing closure, which handles include processing for this build */
@@ -55,6 +54,8 @@ public interface CppSemantics {
   boolean needsDotdInputPruning();
 
   void validateAttributes(RuleContext ruleContext);
+
+  default void validateDeps(RuleContext ruleContext) {}
 
   /** Returns true iff this build requires include validation. */
   boolean needsIncludeValidation();

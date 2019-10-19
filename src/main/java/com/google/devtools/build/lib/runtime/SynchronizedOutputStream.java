@@ -16,17 +16,19 @@ package com.google.devtools.build.lib.runtime;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.base.Preconditions;
+import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.io.OutputStream;
 
 /**
- * {@link OutputStream} suitably synchronized for producer-consumer use cases.
- * The method {@link #readAndReset()} allows to read the bytes accumulated so far
- * and simultaneously truncate precisely the bytes read. Moreover, upon such a reset
- * the amount of memory retained is reset to a small constant. This is a difference
- * with resecpt to the behaviour of the standard classes {@link ByteArrayOutputStream}
- * which only resets the index but keeps the array. This difference matters, as we need
- * to support output peeks without retaining this ammount of memory for the rest of the
+ * {@link OutputStream} suitably synchronized for producer-consumer use cases. The method {@link
+ * #readAndReset()} allows to read the bytes accumulated so far and simultaneously truncate
+ * precisely the bytes read. Moreover, upon such a reset the amount of memory retained is reset to a
+ * small constant. This is a difference with resecpt to the behaviour of the standard classes {@link
+ * ByteArrayOutputStream} which only resets the index but keeps the array. This difference matters,
+ * as we need to support output peeks without retaining this amount of memory for the rest of the
  * build.
  *
  * <p>This class is expected to be used with the {@link BuildEventStreamer}.
@@ -38,7 +40,9 @@ public class SynchronizedOutputStream extends OutputStream {
   // so the actual size we store in this buffer can be the maximum (not the sum)
   // of this value and the amount of bytes written in a single call to the
   // {@link write(byte[] buffer, int offset, int count)} method.
-  private final long maxBufferedLength;
+  private final int maxBufferedLength;
+
+  private final int maxChunkSize;
 
   private byte[] buf;
   private long count;
@@ -47,32 +51,30 @@ public class SynchronizedOutputStream extends OutputStream {
   // The event streamer that is supposed to flush stdout/stderr.
   private BuildEventStreamer streamer;
 
-  public SynchronizedOutputStream(long maxBufferedLength) {
+  public SynchronizedOutputStream(int maxBufferedLength, int maxChunkSize) {
+    Preconditions.checkArgument(maxChunkSize > 0);
     buf = new byte[64];
     count = 0;
     discardAll = false;
     this.maxBufferedLength = maxBufferedLength;
+    this.maxChunkSize = Math.max(maxChunkSize, maxBufferedLength);
   }
 
   public void registerStreamer(BuildEventStreamer streamer) {
     this.streamer = streamer;
   }
 
-  public synchronized void setDiscardAll() {
-    discardAll = true;
-    count = 0;
-    buf = null;
-  }
-
   /**
-   * Read the contents of the stream and simultaneously clear them. Also, reset the amount of
-   * memory retained to a constant amount.
+   * Read the contents of the stream and simultaneously clear them. Also, reset the amount of memory
+   * retained to a constant amount.
    */
-  public synchronized String readAndReset() {
+  public synchronized Iterable<String> readAndReset() {
     String content = new String(buf, 0, (int) count, UTF_8);
     buf = new byte[64];
     count = 0;
-    return content;
+    return content.isEmpty()
+        ? ImmutableList.of()
+        : Splitter.fixedLength(maxChunkSize).split(content);
   }
 
   @Override

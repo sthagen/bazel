@@ -227,7 +227,7 @@ public final class QueryParser {
           consume(TokenKind.RPAREN);
           return new FunctionExpression(function, args);
         } else {
-          return new TargetLiteral(word);
+            return validateTargetLiteral(word);
         }
       }
       case LET: {
@@ -250,7 +250,7 @@ public final class QueryParser {
         consume(TokenKind.LPAREN);
         List<TargetLiteral> words = new ArrayList<>();
         while (token.kind == TokenKind.WORD) {
-          words.add(new TargetLiteral(consume(TokenKind.WORD)));
+            words.add(validateTargetLiteral(consume(TokenKind.WORD)));
         }
         consume(TokenKind.RPAREN);
         return new SetExpression(words);
@@ -258,5 +258,17 @@ public final class QueryParser {
       default:
         throw syntaxError(token);
     }
+  }
+
+  /**
+   * Unquoted words may not start with a hyphen or asterisk, even though relative target names may
+   * start with those characters.
+   */
+  private static TargetLiteral validateTargetLiteral(String word) throws QueryException {
+    if (word.startsWith("-") || word.startsWith("*")) {
+      throw new QueryException(
+          "target literal must not begin with " + "(" + word.charAt(0) + "): " + word);
+    }
+    return new TargetLiteral(word);
   }
 }

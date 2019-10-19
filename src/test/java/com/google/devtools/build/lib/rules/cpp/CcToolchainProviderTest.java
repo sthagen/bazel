@@ -15,24 +15,20 @@
 package com.google.devtools.build.lib.rules.cpp;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.testing.EqualsTester;
-import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.analysis.config.CompilationMode;
+import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
-import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.rules.cpp.FdoProvider.FdoMode;
-import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.ToolPath;
-import java.util.List;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.Provider;
+import com.google.devtools.build.lib.packages.SkylarkProvider;
+import com.google.devtools.build.lib.packages.StructImpl;
+import com.google.devtools.build.lib.packages.util.Crosstool.CcToolchainConfig;
+import com.google.devtools.build.lib.packages.util.MockCcSupport;
+import com.google.devtools.build.lib.packages.util.ResourceLoader;
+import com.google.devtools.build.lib.util.Pair;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -43,117 +39,35 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class CcToolchainProviderTest extends BuildViewTestCase {
   @Test
-  public void equalityIsObjectIdentity() throws Exception {
-    CcToolchainProvider a =
-        new CcToolchainProvider(
-            /* values= */ ImmutableMap.of(),
-            /* cppConfiguration= */ null,
-            /* toolchainInfo= */ null,
-            /* crosstoolTopPathFragment= */ null,
-            /* crosstool= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* crosstoolMiddleman= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* compile= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* strip= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* objCopy= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* as= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* ar= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* link= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* interfaceSoBuilder= */ null,
-            /* dwp= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* coverage= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* libcLink= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* staticRuntimeLinkInputs= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* staticRuntimeLinkMiddleman= */ null,
-            /* dynamicRuntimeLinkInputs= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* dynamicRuntimeLinkMiddleman= */ null,
-            /* dynamicRuntimeSolibDir= */ PathFragment.EMPTY_FRAGMENT,
-            CcCompilationContext.EMPTY,
-            /* supportsParamFiles= */ false,
-            /* supportsHeaderParsing= */ false,
-            CcToolchainVariables.EMPTY,
-            /* builtinIncludeFiles= */ ImmutableList.<Artifact>of(),
-            /* coverageEnvironment= */ NestedSetBuilder.emptySet(Order.COMPILE_ORDER),
-            /* linkDynamicLibraryTool= */ null,
-            /* builtInIncludeDirectories= */ ImmutableList.<PathFragment>of(),
-            /* sysroot= */ null,
-            FdoMode.OFF,
-            /* useLLVMCoverageMapFormat= */ false,
-            /* codeCoverageEnabled= */ false,
-            /* isHostConfiguration= */ false);
-
-    CcToolchainProvider b =
-        new CcToolchainProvider(
-            /* values= */ ImmutableMap.of(),
-            /* cppConfiguration= */ null,
-            /* toolchainInfo= */ null,
-            /* crosstoolTopPathFragment= */ null,
-            /* crosstool= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* crosstoolMiddleman= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* compile= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* strip= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* objCopy= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* as= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* ar= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* link= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* interfaceSoBuilder= */ null,
-            /* dwp= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* coverage= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* libcLink= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* staticRuntimeLinkInputs= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* staticRuntimeLinkMiddleman= */ null,
-            /* dynamicRuntimeLinkInputs= */ NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
-            /* dynamicRuntimeLinkMiddleman= */ null,
-            /* dynamicRuntimeSolibDir= */ PathFragment.EMPTY_FRAGMENT,
-            CcCompilationContext.EMPTY,
-            /* supportsParamFiles= */ false,
-            /* supportsHeaderParsing= */ false,
-            CcToolchainVariables.EMPTY,
-            /* builtinIncludeFiles= */ ImmutableList.<Artifact>of(),
-            /* coverageEnvironment= */ NestedSetBuilder.emptySet(Order.COMPILE_ORDER),
-            /* linkDynamicLibraryTool= */ null,
-            /* builtInIncludeDirectories= */ ImmutableList.<PathFragment>of(),
-            /* sysroot= */ null,
-            FdoMode.OFF,
-            /* useLLVMCoverageMapFormat= */ false,
-            /* codeCoverageEnabled= */ false,
-            /* isHostConfiguration= */ false);
-
-    new EqualsTester()
-        .addEqualityGroup(a)
-        .addEqualityGroup(b)
-        .testEquals();
-  }
-
-  @Test
   public void testSkylarkCallables() throws Exception {
     AnalysisMock.get()
         .ccSupport()
-        .setupCrosstool(
-            mockToolsConfig,
-            CrosstoolConfig.CToolchain.newBuilder()
-                .addCompilerFlag("-foo_compiler")
-                .addCxxFlag("-foo_cxx")
-                .setBuiltinSysroot("/usr/local/custom-sysroot")
-                .addToolPath(ToolPath.newBuilder().setName("ar").setPath("foo/ar/path").build())
-                .buildPartial());
-    useConfiguration("--cpu=k8");
-    scratch.file("test/rule.bzl",
+        .setupCcToolchainConfig(
+            mockToolsConfig, CcToolchainConfig.builder().withFeatures(CppRuleClasses.SUPPORTS_PIC));
+    useConfiguration("--cpu=k8", "--force_pic");
+    scratch.file(
+        "test/rule.bzl",
+        "MyInfo = provider()",
         "def _impl(ctx):",
         "  provider = ctx.attr._cc_toolchain[cc_common.CcToolchainInfo]",
-        "  return struct(",
+        "  feature_configuration = cc_common.configure_features(",
+        "    ctx = ctx,",
+        "    cc_toolchain = provider,",
+        "  )",
+        "  return MyInfo(",
         "    dirs = provider.built_in_include_directories,",
-        "    link_options = provider.link_options_do_not_use,",
-        "    unfiltered_compiler_options = provider.unfiltered_compiler_options([]),",
         "    sysroot = provider.sysroot,",
         "    cpu = provider.cpu,",
-        "    compiler_options = provider.compiler_options(),",
-        "    cxx_options = provider.cxx_options(),",
         "    ar_executable = provider.ar_executable,",
+        "    use_pic_for_dynamic_libraries = provider.needs_pic_for_dynamic_libraries(",
+        "      feature_configuration = feature_configuration,",
+        "    ),",
         "  )",
         "",
         "my_rule = rule(",
         "  _impl,",
-        "  attrs = {'_cc_toolchain': attr.label(default=Label('//test:toolchain')) }",
+        "  attrs = {'_cc_toolchain': attr.label(default=Label('//test:toolchain'))},",
+        "  fragments = [ 'cpp' ],",
         ")");
 
     scratch.file("test/BUILD",
@@ -162,257 +76,420 @@ public class CcToolchainProviderTest extends BuildViewTestCase {
         "my_rule(name = 'target')");
 
     ConfiguredTarget ct = getConfiguredTarget("//test:target");
+    Provider.Key key =
+        new SkylarkProvider.SkylarkKey(
+            Label.parseAbsolute("//test:rule.bzl", ImmutableMap.of()), "MyInfo");
+    StructImpl info = (StructImpl) ct.get(key);
+
+    assertThat((String) info.getValue("ar_executable")).endsWith("/usr/bin/mock-ar");
+
+    assertThat(info.getValue("cpu")).isEqualTo("k8");
+
+    assertThat(info.getValue("sysroot")).isEqualTo("/usr/grte/v1");
 
     @SuppressWarnings("unchecked")
-    List<String> compilerOptions = (List<String>) ct.get("compiler_options");
-    assertThat(compilerOptions).contains("-foo_compiler");
-
-    @SuppressWarnings("unchecked")
-    List<String> cxxOptions = (List<String>) ct.get("cxx_options");
-    assertThat(cxxOptions).contains("-foo_cxx");
-
-    assertThat((String) ct.get("ar_executable")).endsWith("foo/ar/path");
-
-    assertThat(ct.get("cpu")).isEqualTo("k8");
-
-    assertThat(ct.get("sysroot")).isEqualTo("/usr/local/custom-sysroot");
-
-    @SuppressWarnings("unchecked")
-    List<String> linkOptions = (List<String>) ct.get("link_options");
-    assertThat(linkOptions).contains("--sysroot=/usr/local/custom-sysroot");
-
-    @SuppressWarnings("unchecked")
-    List<String> unfilteredCompilerOptions = (List<String>) ct.get("unfiltered_compiler_options");
-    assertThat(unfilteredCompilerOptions).contains("--sysroot=/usr/local/custom-sysroot");
+    boolean usePicForDynamicLibraries = (boolean) info.getValue("use_pic_for_dynamic_libraries");
+    assertThat(usePicForDynamicLibraries).isTrue();
   }
 
   @Test
-  public void testDisablingMostlyStaticLinkOptions() throws Exception {
-    testDisablingLinkingApiMethod("provider.mostly_static_link_options(False)");
-  }
-
-  @Test
-  public void testDisablingFullyStaticLinkOptions() throws Exception {
-    testDisablingLinkingApiMethod("provider.fully_static_link_options(True)");
-  }
-
-  @Test
-  public void testDisablingDynamicLinkOptions() throws Exception {
-    testDisablingLinkingApiMethod("provider.dynamic_link_options(False)");
-  }
-
-  @Test
-  public void testDisablingLinkOptions() throws Exception {
-    testDisablingLinkingApiMethod("provider.link_options_do_not_use");
-  }
-
-  @Test
-  public void testDisablingMostlyStaticLinkOptionsFromConfiguration() throws Exception {
-    testDisablingLinkingApiMethod("ctx.fragments.cpp.mostly_static_link_options([], False)");
-  }
-
-  @Test
-  public void testDisablingFullyStaticLinkOptionsFromConfiguration() throws Exception {
-    testDisablingLinkingApiMethod("ctx.fragments.cpp.fully_static_link_options([], True)");
-  }
-
-  @Test
-  public void testDisablingDynamicLinkOptionsFromConfiguration() throws Exception {
-    testDisablingLinkingApiMethod("ctx.fragments.cpp.dynamic_link_options([], False)");
-  }
-
-  @Test
-  public void testDisablingLinkOptionsFromConfiguration() throws Exception {
-    testDisablingLinkingApiMethod("ctx.fragments.cpp.link_options");
-  }
-
-  private void testDisablingLinkingApiMethod(String method) throws Exception {
-    useConfiguration("--experimental_disable_legacy_cc_linking_api");
+  public void testRemoveCpuAndCompiler() throws Exception {
     scratch.file(
-        "test/rule.bzl",
-        "def _impl(ctx):",
-        "  provider = ctx.attr._cc_toolchain[cc_common.CcToolchainInfo]",
-        "  return struct(",
-        "    link_options = " + method + ",",
-        "  )",
-        "",
-        "my_rule = rule(",
-        "  _impl,",
-        "  fragments = [ 'cpp' ],",
-        "  attrs = {'_cc_toolchain': attr.label(default=Label('//test:toolchain')) }",
-        ")");
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(name = 'empty')",
+        "cc_toolchain_suite(",
+        "    name = 'a_suite',",
+        "    toolchains = { 'k8': ':a' },",
+        ")",
+        "cc_toolchain_suite(",
+        "    name = 'b_suite',",
+        "    toolchains = { 'k9': ':b', },",
+        ")",
+        "cc_toolchain_suite(",
+        "    name = 'c_suite',",
+        "    toolchains = { 'k10': ':c', },",
+        ")",
+        "cc_toolchain(",
+        "    name = 'a',",
+        "    cpu = 'banana',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':banana_config',",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    compiler = 'banana',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':banana_config',",
+        ")",
+        "cc_toolchain(",
+        "    name = 'c',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':banana_config',",
+        ")",
+        "cc_toolchain_config(name = 'banana_config')");
+
+    scratch.file("a/cc_toolchain_config.bzl", MockCcSupport.EMPTY_CC_TOOLCHAIN);
+
+    reporter.removeHandler(failFastHandler);
+    useConfiguration(
+        "--crosstool_top=//a:a_suite",
+        "--cpu=k8",
+        "--host_cpu=k8",
+        "--incompatible_remove_cpu_and_compiler_attributes_from_cc_toolchain");
+    assertThat(getConfiguredTarget("//a:a_suite")).isNull();
+    assertContainsEvent(
+        "attributes 'cpu' and 'compiler' have been deprecated, please remove them.");
+    eventCollector.clear();
+
+    useConfiguration(
+        "--crosstool_top=//a:b_suite",
+        "--cpu=k9",
+        "--host_cpu=k9",
+        "--incompatible_remove_cpu_and_compiler_attributes_from_cc_toolchain");
+    assertThat(getConfiguredTarget("//a:b_suite")).isNull();
+    assertContainsEvent(
+        "attributes 'cpu' and 'compiler' have been deprecated, please remove them.");
+    eventCollector.clear();
+
+    useConfiguration(
+        "--crosstool_top=//a:c_suite",
+        "--cpu=k10",
+        "--host_cpu=k10",
+        "--incompatible_remove_cpu_and_compiler_attributes_from_cc_toolchain");
+    getConfiguredTarget("//a:c_suite");
+    assertNoEvents();
+  }
+
+  /*
+   * Crosstools should load fine with or without 'gcov-tool'. Those that define 'gcov-tool'
+   * should also add a make variable.
+   */
+  @Test
+  public void testGcovToolNotDefined() throws Exception {
+    // Crosstool with gcov-tool
     scratch.file(
-        "test/BUILD",
-        "load(':rule.bzl', 'my_rule')",
-        "cc_toolchain_alias(name = 'toolchain')",
-        "my_rule(name = 'target')");
-    AssertionError e =
-        assertThrows(AssertionError.class, () -> getConfiguredTarget("//test:target"));
-    assertThat(e)
-        .hasMessageThat()
-        .contains(
-            "Skylark APIs accessing linking flags has been removed. "
-                + "Use the new API on cc_common.");
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(",
+        "   name='empty')",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b' },",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':k8-compiler_config',",
+        ")",
+        CcToolchainConfig.builder()
+            .withToolPaths(
+                Pair.of("gcc", "path-to-gcc-tool"),
+                Pair.of("ar", "ar"),
+                Pair.of("cpp", "cpp"),
+                Pair.of("gcov", "gcov"),
+                Pair.of("ld", "ld"),
+                Pair.of("nm", "nm"),
+                Pair.of("objdump", "objdump"),
+                Pair.of("strip", "strip"))
+            .build()
+            .getCcToolchainConfigRule());
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    mockToolsConfig.create(
+        "a/cc_toolchain_config.bzl",
+        ResourceLoader.readFromResources(
+            "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
+    useConfiguration("--cpu=k8", "--host_cpu=k8");
+    CcToolchainProvider ccToolchainProvider =
+        (CcToolchainProvider) getConfiguredTarget("//a:a").get(ToolchainInfo.PROVIDER);
+    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
+    ccToolchainProvider.addGlobalMakeVariables(builder);
+    assertThat(builder.build().get("GCOVTOOL")).isNull();
   }
 
   @Test
-  public void testDisablingCompilerOptions() throws Exception {
-    testDisablingCompilationApiMethod("provider.compiler_options()");
-  }
-
-  @Test
-  public void testDisablingCxxOptions() throws Exception {
-    testDisablingCompilationApiMethod("provider.cxx_options()");
-  }
-
-  @Test
-  public void testDisablingCOptions() throws Exception {
-    testDisablingCompilationApiMethod("provider.c_options()");
-  }
-
-  @Test
-  public void testDisablingUnfilteredOptions() throws Exception {
-    testDisablingCompilationApiMethod("provider.unfiltered_compiler_options([])");
-  }
-
-  @Test
-  public void testDisablingCompilerOptionsFromConfiguration() throws Exception {
-    testDisablingCompilationApiMethod("ctx.fragments.cpp.compiler_options([])");
-  }
-
-  @Test
-  public void testDisablingCxxOptionsFromConfiguration() throws Exception {
-    testDisablingCompilationApiMethod("ctx.fragments.cpp.cxx_options([])");
-  }
-
-  @Test
-  public void testDisablingCOptionsFromConfiguration() throws Exception {
-    testDisablingCompilationApiMethod("ctx.fragments.cpp.c_options");
-  }
-
-  @Test
-  public void testDisablingUnfilteredOptionsFromConfiguration() throws Exception {
-    testDisablingCompilationApiMethod("ctx.fragments.cpp.unfiltered_compiler_options([])");
-  }
-
-  private void testDisablingCompilationApiMethod(String method) throws Exception {
-    useConfiguration("--experimental_disable_legacy_cc_compilation_api");
+  public void testGcovToolDefined() throws Exception {
+    // Crosstool with gcov-tool
     scratch.file(
-        "test/rule.bzl",
-        "def _impl(ctx):",
-        "  provider = ctx.attr._cc_toolchain[cc_common.CcToolchainInfo]",
-        "  return struct(",
-        "    compile_options = " + method + ",",
-        "  )",
-        "",
-        "my_rule = rule(",
-        "  _impl,",
-        "  fragments = [ 'cpp' ],",
-        "  attrs = {'_cc_toolchain': attr.label(default=Label('//test:toolchain')) }",
-        ")");
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(",
+        "   name='empty')",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b' },",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':k8-compiler_config',",
+        ")",
+        CcToolchainConfig.builder()
+            .withToolPaths(
+                Pair.of("gcc", "path-to-gcc-tool"),
+                Pair.of("gcov-tool", "path-to-gcov-tool"),
+                Pair.of("ar", "ar"),
+                Pair.of("cpp", "cpp"),
+                Pair.of("gcov", "gcov"),
+                Pair.of("ld", "ld"),
+                Pair.of("nm", "nm"),
+                Pair.of("objdump", "objdump"),
+                Pair.of("strip", "strip"))
+            .build()
+            .getCcToolchainConfigRule());
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    mockToolsConfig.create(
+        "a/cc_toolchain_config.bzl",
+        ResourceLoader.readFromResources(
+            "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
+    useConfiguration("--cpu=k8", "--host_cpu=k8");
+    CcToolchainProvider ccToolchainProvider =
+        (CcToolchainProvider) getConfiguredTarget("//a:a").get(ToolchainInfo.PROVIDER);
+    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
+    ccToolchainProvider.addGlobalMakeVariables(builder);
+    assertThat(builder.build().get("GCOVTOOL")).isNotNull();
+  }
+
+  @Test
+  public void testUnsupportedSysrootErrorMessage() throws Exception {
     scratch.file(
-        "test/BUILD",
-        "load(':rule.bzl', 'my_rule')",
-        "cc_toolchain_alias(name = 'toolchain')",
-        "my_rule(name = 'target')");
-    AssertionError e =
-        assertThrows(AssertionError.class, () -> getConfiguredTarget("//test:target"));
-    assertThat(e)
-        .hasMessageThat()
-        .contains(
-            "Skylark APIs accessing compilation flags has been removed. "
-                + "Use the new API on cc_common.");
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(name='empty')",
+        "filegroup(name='everything')",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b' },",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':k8-compiler_config',",
+        ")",
+        // Not specifying `builtin_sysroot` means the toolchain doesn't support --grte_top.
+        CcToolchainConfig.builder().withSysroot("").build().getCcToolchainConfigRule());
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    mockToolsConfig.create(
+        "a/cc_toolchain_config.bzl",
+        ResourceLoader.readFromResources(
+            "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
+    reporter.removeHandler(failFastHandler);
+    useConfiguration("--grte_top=//a", "--cpu=k8", "--host_cpu=k8");
+    getConfiguredTarget("//a:a");
+    assertContainsEvent("does not support setting --grte_top");
   }
 
   @Test
-  public void testDisablingCompilationModeFlags() throws Exception {
-    AnalysisMock.get()
-        .ccSupport()
-        .setupCrosstool(
-            mockToolsConfig,
-            "compilation_mode_flags { mode: OPT compiler_flag: '-foo_from_compilation_mode' }",
-            "compilation_mode_flags { mode: OPT cxx_flag: '-bar_from_compilation_mode' }",
-            "compilation_mode_flags { mode: OPT linker_flag: '-baz_from_compilation_mode' }");
-    scratch.file("a/BUILD", "cc_library(name='a', srcs=['a.cc'])");
-
-    useConfiguration("-c", "opt");
-    CcToolchainProvider ccToolchainProvider = getCcToolchainProvider();
-    assertThat(ccToolchainProvider.getCompilerOptions()).contains("-foo_from_compilation_mode");
-    assertThat(ccToolchainProvider.getLegacyCxxOptions()).contains("-bar_from_compilation_mode");
-    assertThat(ccToolchainProvider.getLegacyMostlyStaticLinkFlags(CompilationMode.OPT))
-        .contains("-baz_from_compilation_mode");
-
-    useConfiguration("-c", "opt", "--experimental_disable_compilation_mode_flags");
-    ccToolchainProvider = getCcToolchainProvider();
-    assertThat(ccToolchainProvider.getCompilerOptions())
-        .doesNotContain("-foo_from_compilation_mode");
-    assertThat(ccToolchainProvider.getLegacyCxxOptions())
-        .doesNotContain("-bar_from_compilation_mode");
-    assertThat(ccToolchainProvider.getLegacyMostlyStaticLinkFlags(CompilationMode.OPT))
-        .doesNotContain("-baz_from_compilation_mode");
-  }
-
-  private CcToolchainProvider getCcToolchainProvider() throws Exception {
-    ConfiguredTarget target = getConfiguredTarget("//a");
-    RuleContext ruleContext = getRuleContext(target);
-    return CppHelper.getToolchainUsingDefaultCcToolchainAttribute(ruleContext);
-  }
-
-  @Test
-  public void testDisablingLinkingModeFlags() throws Exception {
-    AnalysisMock.get()
-        .ccSupport()
-        .setupCrosstool(
-            mockToolsConfig,
-            "linking_mode_flags { mode: MOSTLY_STATIC linker_flag: '-foo_from_linking_mode' }");
-    scratch.file("a/BUILD", "cc_library(name='a', srcs=['a.cc'])");
-
-    useConfiguration();
-    CcToolchainProvider ccToolchainProvider = getCcToolchainProvider();
-    assertThat(ccToolchainProvider.getLegacyMostlyStaticLinkFlags(CompilationMode.OPT))
-        .contains("-foo_from_linking_mode");
-
-    useConfiguration("--experimental_disable_linking_mode_flags");
-    ccToolchainProvider = getCcToolchainProvider();
-    assertThat(ccToolchainProvider.getLegacyMostlyStaticLinkFlags(CompilationMode.OPT))
-        .doesNotContain("-foo_from_linking_mode");
+  public void testConfigWithMissingToolDefs() throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(",
+        "   name='empty')",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b' },",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':k8-compiler_config',",
+        ")",
+        CcToolchainConfig.builder()
+            .withToolPaths(
+                Pair.of("gcc", "path-to-gcc-tool"),
+                Pair.of("ar", "ar"),
+                Pair.of("cpp", "cpp"),
+                Pair.of("gcov", "gcov"),
+                Pair.of("ld", "ld"),
+                Pair.of("nm", "nm"),
+                Pair.of("objdump", "objdump")
+                // Pair.of("strip", "strip")
+                )
+            .build()
+            .getCcToolchainConfigRule());
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    mockToolsConfig.create(
+        "a/cc_toolchain_config.bzl",
+        ResourceLoader.readFromResources(
+            "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
+    reporter.removeHandler(failFastHandler);
+    useConfiguration("--cpu=k8", "--host_cpu=k8");
+    getConfiguredTarget("//a:a");
+    assertContainsEvent("Tool path for 'strip' is missing");
   }
 
   @Test
-  public void testDisablingLegacyCrosstoolFields() throws Exception {
-    AnalysisMock.get()
-        .ccSupport()
-        .setupCrosstool(
-            mockToolsConfig,
-            "compiler_flag: '-foo_compiler_flag'",
-            "cxx_flag: '-foo_cxx_flag'",
-            "unfiltered_cxx_flag: '-foo_unfiltered_cxx_flag'",
-            "linker_flag: '-foo_linker_flag'",
-            "dynamic_library_linker_flag: '-foo_dynamic_library_linker_flag'",
-            "test_only_linker_flag: '-foo_test_only_linker_flag'");
-    scratch.file("a/BUILD", "cc_library(name='a', srcs=['a.cc'])");
+  public void testRuntimeLibsAttributesAreNotObligatory() throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(name='empty') ",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b' },",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':banana_config',",
+        ")",
+        "cc_toolchain_config(name = 'banana_config')");
+    scratch.file("a/cc_toolchain_config.bzl", MockCcSupport.EMPTY_CC_TOOLCHAIN);
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    reporter.removeHandler(failFastHandler);
+    useConfiguration("--cpu=k8", "--host_cpu=k8");
+    getConfiguredTarget("//a:a");
+    assertNoEvents();
+  }
 
-    useConfiguration();
-    CcToolchainProvider ccToolchainProvider = getCcToolchainProvider();
-    assertThat(ccToolchainProvider.getLegacyCompileOptions()).contains("-foo_compiler_flag");
-    assertThat(ccToolchainProvider.getLegacyCxxOptions()).contains("-foo_cxx_flag");
-    assertThat(ccToolchainProvider.getUnfilteredCompilerOptions())
-        .contains("-foo_unfiltered_cxx_flag");
-    assertThat(ccToolchainProvider.getLegacyLinkOptions()).contains("-foo_linker_flag");
-    assertThat(ccToolchainProvider.getSharedLibraryLinkOptions(/* flags= */ ImmutableList.of()))
-        .contains("-foo_dynamic_library_linker_flag");
-    assertThat(ccToolchainProvider.getTestOnlyLinkOptions()).contains("-foo_test_only_linker_flag");
+  @Test
+  public void testWhenStaticRuntimeLibAttributeMandatoryWhenSupportsEmbeddedRuntimes()
+      throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(name = 'empty')",
+        "cc_binary(name = 'main', srcs = [ 'main.cc' ],)",
+        "cc_binary(name = 'test', linkstatic = 0, srcs = [ 'test.cc' ],)",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b'},",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':k8-compiler_config',",
+        ")",
+        CcToolchainConfig.builder()
+            .withFeatures(CppRuleClasses.STATIC_LINK_CPP_RUNTIMES)
+            .build()
+            .getCcToolchainConfigRule());
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    mockToolsConfig.create(
+        "a/cc_toolchain_config.bzl",
+        ResourceLoader.readFromResources(
+            "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
+    reporter.removeHandler(failFastHandler);
+    useConfiguration("--crosstool_top=//a:a", "--cpu=k8", "--host_cpu=k8");
+    assertThat(getConfiguredTarget("//a:main")).isNull();
+    assertContainsEvent(
+        "Toolchain supports embedded runtimes, but didn't provide static_runtime_lib attribute.");
+  }
 
-    useConfiguration("--experimental_disable_legacy_crosstool_fields");
-    ccToolchainProvider = getCcToolchainProvider();
-    assertThat(ccToolchainProvider.getLegacyCompileOptions()).doesNotContain("-foo_compiler_flag");
-    assertThat(ccToolchainProvider.getLegacyCxxOptions()).doesNotContain("-foo_cxx_flag");
-    assertThat(ccToolchainProvider.getUnfilteredCompilerOptions())
-        .doesNotContain("-foo_unfiltered_cxx_flag");
-    assertThat(ccToolchainProvider.getLegacyLinkOptions()).doesNotContain("-foo_linker_flag");
-    assertThat(ccToolchainProvider.getSharedLibraryLinkOptions(/* flags= */ ImmutableList.of()))
-        .doesNotContain("-foo_dynamic_library_linker_flag");
-    assertThat(ccToolchainProvider.getTestOnlyLinkOptions())
-        .doesNotContain("-foo_test_only_linker_flag");
+  @Test
+  public void testWhenDynamicRuntimeLibAttributeMandatoryWhenSupportsEmbeddedRuntimes()
+      throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "load(':cc_toolchain_config.bzl', 'cc_toolchain_config')",
+        "filegroup(name = 'empty')",
+        "cc_binary(name = 'main', srcs = [ 'main.cc' ],)",
+        "cc_binary(name = 'test', linkstatic = 0, srcs = [ 'test.cc' ],)",
+        "cc_toolchain_suite(",
+        "    name = 'a',",
+        "    toolchains = { 'k8': ':b'},",
+        ")",
+        "cc_toolchain(",
+        "    name = 'b',",
+        "    all_files = ':empty',",
+        "    ar_files = ':empty',",
+        "    as_files = ':empty',",
+        "    compiler_files = ':empty',",
+        "    dwp_files = ':empty',",
+        "    linker_files = ':empty',",
+        "    strip_files = ':empty',",
+        "    objcopy_files = ':empty',",
+        "    static_runtime_lib = ':empty',",
+        "    toolchain_identifier = 'banana',",
+        "    toolchain_config = ':k8-compiler_config',",
+        ")",
+        CcToolchainConfig.builder()
+            .withFeatures(
+                CppRuleClasses.STATIC_LINK_CPP_RUNTIMES, CppRuleClasses.SUPPORTS_DYNAMIC_LINKER)
+            .build()
+            .getCcToolchainConfigRule());
+    analysisMock.ccSupport().setupCcToolchainConfig(mockToolsConfig, CcToolchainConfig.builder());
+    mockToolsConfig.create(
+        "a/cc_toolchain_config.bzl",
+        ResourceLoader.readFromResources(
+            "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
+    reporter.removeHandler(failFastHandler);
+    useConfiguration("--crosstool_top=//a:a", "--cpu=k8", "--host_cpu=k8", "--dynamic_mode=fully");
+    assertThat(getConfiguredTarget("//a:test")).isNull();
+    assertContainsEvent(
+        "Toolchain supports embedded runtimes, but didn't provide dynamic_runtime_lib attribute.");
   }
 }

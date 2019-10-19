@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 filegroup(
@@ -22,7 +24,6 @@ java_library(
     name = "pathfragment",
     srcs = PATH_FRAGMENT_SOURCES,
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:base-util",
         "//src/main/java/com/google/devtools/build/lib:filetype",
         "//src/main/java/com/google/devtools/build/lib:os_util",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
@@ -35,7 +36,6 @@ java_library(
     ],
 )
 
-# Virtual file system; do not use externally!
 java_library(
     name = "vfs",
     srcs = glob(
@@ -50,7 +50,6 @@ java_library(
     ],
     deps = [
         ":pathfragment",
-        "//src/main/java/com/google/devtools/build/lib:base-util",
         "//src/main/java/com/google/devtools/build/lib:filetype",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
         "//src/main/java/com/google/devtools/build/lib/clock",

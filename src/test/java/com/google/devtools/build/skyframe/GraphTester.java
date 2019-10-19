@@ -384,6 +384,18 @@ public class GraphTester {
     }
   }
 
+  /** An unshareable version of {@link StringValue}. */
+  public static final class UnshareableStringValue extends StringValue {
+    public UnshareableStringValue(String value) {
+      super(value);
+    }
+
+    @Override
+    public boolean dataIsShareable() {
+      return false;
+    }
+  }
+
   /**
    * A callback interface to provide the value computation.
    */

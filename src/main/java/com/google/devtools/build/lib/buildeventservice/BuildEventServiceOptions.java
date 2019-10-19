@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.buildeventservice;
 
 import com.google.devtools.common.options.Converters;
+import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
@@ -26,14 +27,15 @@ import java.util.List;
 public class BuildEventServiceOptions extends OptionsBase {
 
   @Option(
-    name = "bes_backend",
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Specifies the build event service (BES) backend endpoint as HOST or HOST:PORT. "
-            + "Disabled by default."
-  )
+      name = "bes_backend",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Specifies the build event service (BES) backend endpoint as HOST or HOST:PORT. Disabled"
+              + " by default.The supported schemas are grpc and grpcs (grpc with TLS enabled). If"
+              + " no schema is provided bazel'll default to grpcs. Specify grpc:// schema to"
+              + " disable TLS.")
   public String besBackend;
 
   @Option(
@@ -45,8 +47,7 @@ public class BuildEventServiceOptions extends OptionsBase {
         "Specifies how long bazel should wait for the BES/BEP upload to complete after the "
             + "build and tests have finished. A valid timeout is a natural number followed by a "
             + "unit: Days (d), hours (h), minutes (m), seconds (s), and milliseconds (ms). The "
-            + "default value is '0' which means that there is no timeout and that the upload will "
-            + "continue in the background after a build has finished."
+            + "default value is '0' which means that there is no timeout."
   )
   public Duration besTimeout;
 
@@ -96,16 +97,24 @@ public class BuildEventServiceOptions extends OptionsBase {
   public List<String> besKeywords;
 
   @Option(
-    name = "bes_outerr_buffer_size",
-    defaultValue = "10240",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Specifies the maximal size of stdout or stderr to be buffered in BEP, before it is "
-            + "reported as a progress event. Individual writes are still reported in a single "
-            + "event, even if larger than the specified value."
-  )
-  public long besOuterrBufferSize;
+      name = "bes_outerr_buffer_size",
+      defaultValue = "10240",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Specifies the maximal size of stdout or stderr to be buffered in BEP, before it is "
+              + "reported as a progress event. Individual writes are still reported in a single "
+              + "event, even if larger than the specified value up to --bes_outerr_chunk_size.")
+  public int besOuterrBufferSize;
+
+  @Option(
+      name = "bes_outerr_chunk_size",
+      defaultValue = "1048576", // 2^20 = 1MB
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Specifies the maximal size of stdout or stderr to be sent to BEP in a single message.")
+  public int besOuterrChunkSize;
 
   @Option(
       name = "bes_results_url",
@@ -117,4 +126,45 @@ public class BuildEventServiceOptions extends OptionsBase {
               + " backend. Bazel will output the URL appended by the invocation id to the"
               + " terminal.")
   public String besResultsUrl;
+
+  @Option(
+      name = "bes_upload_mode",
+      defaultValue = "wait_for_upload_complete",
+      converter = BesUploadModeConverter.class,
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.EAGERNESS_TO_EXIT},
+      help =
+          "Specifies whether the Build Event Service upload should block the build completion "
+              + "or should end the invocation immediately and finish the upload in the background.")
+  public BesUploadMode besUploadMode;
+
+  @Option(
+      name = "bes_proxy",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "Connect to the Build Event Service through a proxy. Currently this flag can only be"
+              + " used to configure a Unix domain socket (unix:/path/to/socket).")
+  public String besProxy;
+
+  /** Determines the mode that will be used to upload data to the Build Event Service. */
+  public enum BesUploadMode {
+    /** Block at the end of the build waiting for the upload to complete */
+    WAIT_FOR_UPLOAD_COMPLETE,
+    /** Block at the beginning of the next build waiting for upload completion */
+    NOWAIT_FOR_UPLOAD_COMPLETE,
+    /**
+     * Block at the beginning of the next build waiting for the client to finish uploading the data,
+     * but possibly not blocking on the server acknowledgement.
+     */
+    FULLY_ASYNC,
+  }
+
+  /** Converter for {@link BesUploadMode} */
+  public static class BesUploadModeConverter extends EnumConverter<BesUploadMode> {
+    public BesUploadModeConverter() {
+      super(BesUploadMode.class, "Mode for uploading to the Build Event Service");
+    }
+  }
 }

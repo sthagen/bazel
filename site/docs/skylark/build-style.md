@@ -117,15 +117,15 @@ reference (`:x` instead of `//x`).
 
 ## Visibility
 
-Do not set the default visibility of a package to `//visibility:public`.
-`//visibility:public` should be individually set for targets in the
-project's public API. These could be libraries which are designed to be
-depended on by external projects or binaries that could be used by an
-external project's build process.
+Visibility should be scoped as tightly as possible, while still allowing access
+by tests and reverse dependencies. Use `__pkg__` and `__subpackages__` as
+appropriate.
 
-Otherwise, visibility should be scoped as tightly as possible, while still
-allowing access by tests and reverse dependencies. Prefer using `__pkg__` to
-`__subpackages__`.
+Avoid setting package `default_visibility` to `//visibility:public`.
+`//visibility:public` should be individually set only for targets in the
+project's public API. These could be libraries that are designed to be depended
+on by external projects or binaries that could be used by an external project's
+build process.
 
 ## Dependencies
 
@@ -150,14 +150,15 @@ is more error-prone and less obvious than an empty list.
 
 ### Recursive
 
-Do not use recursive globs (for example, `glob(["**/*.java"])`).
+Do not use recursive globs to match source files (for example,
+`glob(["**/*.java"])`).
 
 Recursive globs make BUILD files difficult to reason about because they skip
 subdirectories containing BUILD files.
 
 Recursive globs are generally less efficient than having a BUILD file per
 directory with a dependency graph defined between them as this enables better
-forge caching and parallelism.
+remote caching and parallelism.
 
 We recommend authoring a BUILD file per directory and defining a dependency
 graph between them instead.

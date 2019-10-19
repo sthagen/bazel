@@ -25,28 +25,12 @@ This document uses the requirement levels described in
 
 ## Contents
 
-- [General structure](#general-structure)
-   - [Running builds and tests](#running-builds-and-tests)
-   - [Third party dependencies](#third-party-dependencies)
-   - [Depending on binaries](#depending-on-binaries)
-   - [Versioning](#versioning)
-   - [.bazelrc](#bazelrc)
-   - [Packages](#packages)
-- [BUILD files](#build-files)
-- [.bzl files](#bzl-files)
-   - [.bzl files style guide](#bzl-files-style-guide)
-   - [Packaging rules](#packaging-rules)
-   - [Rule choice](#rule-choice)
-- [WORKSPACE files](#workspace-files)
-   - [Repository rules](#repository-rules)
-   - [Custom BUILD files](#custom-build-files)
-   - [Repository rules](#repository-rules)
-- [Programming languages](#programming-languages)
-   - [C++ and Bazel](#c-and-bazel)
-   - [Java and Bazel](#java-and-bazel)
-   - [Protos and Bazel](#protos-and-bazel)
-
-# General structure
+- [Running builds and tests](#running-builds-and-tests)
+- [Third party dependencies](#third-party-dependencies)
+- [Depending on binaries](#depending-on-binaries)
+- [Versioning](#versioning)
+- [.bazelrc](#bazelrc)
+- [Packages](#packages)
 
 ## Running builds and tests
 
@@ -59,11 +43,10 @@ inspecting the BUILD file to understand what a target's restrictions are.
 
 ## Third party dependencies
 
-Prefer declaring third party dependencies as remote repositories in the WORKSPACE file. If it's
-necessary to check third party dependencies into your repository, put them in a directory called
-`third_party/` under your workspace directory.   Note that all BUILD files in `third_party/` must
-include [license](https://docs.bazel.build/be/functions.html#licenses)
-declarations.
+You may declare third party dependencies:
+
+*   Either declare them as remote repositories in the WORKSPACE file.
+*   Or put them in a directory called `third_party/` under your workspace directory.
 
 ## Depending on binaries
 
@@ -86,12 +69,17 @@ misleading alias to point both targets to one guava library, then the BUILD file
 
 ## `.bazelrc`
 
-For project-specific options, use the configuration file `_your-workspace_/tools/bazel.rc` (see
-[bazelrc format](https://docs.bazel.build/user-manual.html#bazelrc)).
+For project-specific options, use the configuration file your
+`<workspace>/.bazelrc` (see
+[bazelrc format](https://docs.bazel.build/guide.html#bazelrc)).
 
-For options that you **do not** want to check into source control, create the configuration file
-`_your-workspace_/.bazelrc` and add `.bazelrc` to your `.gitignore`.  Note that this file has a
-different name than the file above (`bazel.rc` vs `.bazelrc`).
+If you want to support per-user options for your project that you **do not** want to check
+into source control, include the line
+```
+try-import user.bazelrc
+```
+(or any other file name) in your `<workspace>/.bazelrc` and
+add `user.bazelrc` to your `.gitignore`.
 
 ## Packages
 
@@ -100,85 +88,3 @@ in subdirectories (e.g., `srcs = ["a/b/C.java"]`) it is a sign that a BUILD file
 that subdirectory.  The longer this structure exists, the more likely circular dependencies will be
 inadvertently created, a target's scope will creep, and an increasing number of reverse
 dependencies will have to be updated.
-
-# BUILD files
-
-See the [BUILD file style
-guide](https://docs.bazel.build/skylark/build-style.html).
-
-# .bzl files
-
-## .bzl files style guide
-
-See the [Style guide for .bzl files](https://docs.bazel.build/skylark/bzl-style.html)
-for guidelines.
-
-## Packaging rules
-
-See [Packaging rules](https://docs.bazel.build/skylark/deploying.html) for advice
-on how to structure and where to put new rules.
-
-## Rule choice
-
-When using a language for which Bazel has built-in rules (e.g., C++), prefer using these rules to
-writing your own. These rules are documented in the
-[build encyclopedia](https://docs.bazel.build/be/overview.html).
-
-# WORKSPACE files
-
-## Repository rules
-
-Prefer `http_archive` and `new_http_archive` to `git_repository`, `new_git_repository`, and
-`maven_jar`.
-
-`git_repository` depends on jGit, which has several unpleasant bugs, and `maven_jar` uses Maven's
-internal API, which generally works but is less optimized for Bazel than `http_archive`'s
-downloader logic. Track the following issues filed to remediate these problems:
-
--  [Use `http_archive` as `git_repository`'s
-   backend.](https://github.com/bazelbuild/bazel/issues/2147)
--  [Improve `maven_jar`'s backend.](https://github.com/bazelbuild/bazel/issues/1752)
-
-Do not use `bind()`.  See "[Consider removing
-bind](https://github.com/bazelbuild/bazel/issues/1952)" for a long discussion of its issues and
-alternatives.
-
-## Custom BUILD files
-
-When using a `new_` repository rule, prefer to specify `build_file_content`, not `build_file`.
-
-## Repository rules
-
-A repository rule should generally be responsible for:
-
--  Detecting system settings and writing them to files.
--  Finding resources elsewhere on the system.
--  Downloading resources from URLs.
--  Generating or symlinking BUILD files into the external repository directory.
-
-Avoid using `repository_ctx.execute` when possible.  For example, when using a non-Bazel C++
-library that has a build using Make, it is preferable to use `repository_ctx.download()` and then
-write a BUILD file that builds it, instead of running `ctx.execute(["make"])`.
-
-
-# Programming languages
-
-This section describes best practices for specific programming languages.
-
-## C++ and Bazel
-
-For best practices for C++ projects, see [C++ and Bazel](bazel-and-cpp.md).
-
-## Java and Bazel
-
-For best practices for Java projects, see [Java and Bazel](bazel-and-java.md).
-
-## Protos and Bazel
-
-Recommended code organization:
-
--  One `proto_library` rule per `.proto` file.
--  A file named `foo.proto` will be in a rule named `foo_proto`, which is located in the same
-   package.
--  A `[language]_proto_library` that wraps a `proto_library` named `foo_proto` should be called
-   `foo_[language]_proto`, and be located in the same package.

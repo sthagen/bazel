@@ -28,7 +28,7 @@ add_to_bazelrc "build --experimental_build_event_upload_strategy=local"
 set -e
 
 function set_up() {
-  create_new_workspace
+  setup_skylib_support
 
   mkdir -p pkg
   touch pkg/somesourcefile
@@ -125,7 +125,7 @@ simple_aspect = aspect(implementation=_simple_aspect_impl)
 EOF
 cat > failingaspect.bzl <<'EOF'
 def _failing_aspect_impl(target, ctx):
-    for orig_out in ctx.rule.attr.outs:
+    for orig_out in ctx.rule.attr.outs.to_list():
         aspect_out = ctx.actions.declare_file(orig_out.name + ".aspect")
         ctx.actions.run_shell(
             inputs = [],
@@ -232,7 +232,7 @@ done
 
 function test_basic() {
   # Basic properties of the event stream
-  # - a completed target explicity requested should be reported
+  # - a completed target explicitly requested should be reported
   # - after success the stream should close naturally, without any
   #   reports about aborted events
   # - the command line is reported in structured and unstructured form
@@ -584,25 +584,6 @@ function test_build_only() {
   expect_log_once '^build_tool_logs'
 }
 
-function test_query() {
-  # Verify that at least a minimally meaningful event stream is generated
-  # for non-build. In particular, we expect bazel not to crash.
-  bazel query --build_event_text_file=$TEST_log 'tests(//...)' \
-    || fail "bazel query failed"
-  expect_log '^started'
-  expect_log 'command: "query"'
-  expect_log 'args: "--build_event_text_file='
-  expect_log 'build_finished'
-  expect_not_log 'aborted'
-  # For query, we also expect the full output to be contained in the protocol,
-  # as well as a proper finished event.
-  expect_log '//pkg:true'
-  expect_log '//pkg:slow'
-  expect_log '^finished'
-  expect_log 'name: "SUCCESS"'
-  expect_log 'last_message: true'
-}
-
 function test_command_whitelisting() {
   # We expect the "help" command to not generate a build-event stream,
   # but the "build" command to do.
@@ -680,7 +661,7 @@ function test_loading_failure() {
          //does/not/exist && fail "build failure expected") || true
   expect_log_once 'aborted'
   expect_log_once 'reason: LOADING_FAILURE'
-  expect_log 'description.*BUILD file not found on package path'
+  expect_log 'description.*BUILD file not found'
   expect_not_log 'expanded'
   expect_log 'last_message: true'
   expect_log_once '^build_tool_logs'
@@ -735,7 +716,7 @@ function test_loading_failure_keep_going() {
   expect_log_once 'aborted'
   expect_log_once 'reason: LOADING_FAILURE'
   # We don't expect an expanded message in this case, since all patterns failed.
-  expect_log 'description.*BUILD file not found on package path'
+  expect_log 'description.*BUILD file not found'
   expect_log 'last_message: true'
   expect_log_once '^build_tool_logs'
 }
@@ -746,7 +727,7 @@ function test_loading_failure_keep_going_two_targets() {
   expect_log_once 'aborted'
   expect_log_once 'reason: LOADING_FAILURE'
   expect_log_once '^expanded'
-  expect_log 'description.*BUILD file not found on package path'
+  expect_log 'description.*BUILD file not found'
   expect_log 'last_message: true'
   expect_log_once '^build_tool_logs'
 }
@@ -798,7 +779,7 @@ function test_srcfiles() {
     bazel build --build_event_text_file=$TEST_log \
           pkg:somesourcefile || fail "build failed"
   expect_log 'SUCCESS'
-  expect_log_once '^configuration'
+  expect_log_n '^configuration' 2
   expect_not_log 'aborted'
   expect_log 'last_message: true'
   expect_log_once '^build_tool_logs'
@@ -945,6 +926,22 @@ function test_nobuild() {
     || fail "build failed"
   expect_log_once '^aborted'
   expect_log 'reason: NO_BUILD'
+}
+
+function test_server_pid() {
+  bazel build --test_output=all --build_event_text_file=bep.txt \
+    || fail "Build failed but should have succeeded"
+  cat bep.txt | grep server_pid >> "$TEST_log"
+  expect_log_once "server_pid:.*$(bazel info server_pid)$"
+  rm bep.txt
+}
+
+function test_bep_report_only_important_artifacts() {
+  bazel build --test_output=all --build_event_text_file=bep.txt \
+    //pkg:true || fail "Build failed but should have succeeded"
+  cat bep.txt >> "$TEST_log"
+  expect_not_log "_hidden_top_level_INTERNAL_"
+  rm bep.txt
 }
 
 run_suite "Integration tests for the build event stream"

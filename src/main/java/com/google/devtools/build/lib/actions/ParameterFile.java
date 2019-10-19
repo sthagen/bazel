@@ -16,8 +16,10 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.lib.unsafe.StringUnsafe;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.GccParamFileEscaper;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
@@ -41,10 +43,8 @@ import java.nio.charset.StandardCharsets;
  */
 public class ParameterFile {
 
-  /**
-   * Different styles of parameter files.
-   */
-  public static enum ParameterFileType {
+  /** Different styles of parameter files. */
+  public enum ParameterFileType {
     /**
      * A parameter file with every parameter on a separate line. This format
      * cannot handle newlines in parameters. It is currently used for most
@@ -55,13 +55,18 @@ public class ParameterFile {
     UNQUOTED,
 
     /**
-     * A parameter file where each parameter is correctly quoted for shell
-     * use, and separated by white space (space, tab, newline). This format is
-     * safe for all characters, but must be specially supported by the tool. In
-     * particular, it must not be used with gcc and related tools, which do not
-     * support this format as it is.
+     * A parameter file where each parameter is correctly quoted for shell use, and separated by
+     * white space (space, tab, newline). This format is safe for all characters, but must be
+     * specially supported by the tool. In particular, it must not be used with gcc and related
+     * tools, which do not support this format as it is.
      */
-    SHELL_QUOTED;
+    SHELL_QUOTED,
+
+    /**
+     * A parameter file where each parameter is correctly quoted for gcc or clang use, and separated
+     * by white space (space, tab, newline).
+     */
+    GCC_QUOTED;
   }
 
   @VisibleForTesting
@@ -90,13 +95,16 @@ public class ParameterFile {
   public static void writeParameterFile(
       OutputStream out, Iterable<String> arguments, ParameterFileType type, Charset charset)
       throws IOException {
+    OutputStream bufferedOut = new BufferedOutputStream(out);
     switch (type) {
       case SHELL_QUOTED:
-        Iterable<String> quotedContent = ShellEscaper.escapeAll(arguments);
-        writeContent(out, quotedContent, charset);
+        writeContent(bufferedOut, ShellEscaper.escapeAll(arguments), charset);
+        break;
+      case GCC_QUOTED:
+        writeContent(bufferedOut, GccParamFileEscaper.escapeAll(arguments), charset);
         break;
       case UNQUOTED:
-        writeContent(out, arguments, charset);
+        writeContent(bufferedOut, arguments, charset);
         break;
     }
   }

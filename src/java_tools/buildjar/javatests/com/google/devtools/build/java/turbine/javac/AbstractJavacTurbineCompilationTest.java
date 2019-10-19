@@ -20,7 +20,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.io.ByteStreams;
 import com.google.devtools.build.buildjar.jarhelper.JarCreator;
-import com.google.devtools.build.java.bazel.JavacBootclasspath;
 import com.google.devtools.build.java.turbine.javac.JavacTurbine.Result;
 import com.google.turbine.options.TurbineOptions;
 import java.io.BufferedWriter;
@@ -56,7 +55,6 @@ public abstract class AbstractJavacTurbineCompilationTest {
 
   Path sourcedir;
   List<Path> sources;
-  Path tempdir;
   Path output;
   Path outputDeps;
 
@@ -65,7 +63,6 @@ public abstract class AbstractJavacTurbineCompilationTest {
   @Before
   public void setUp() throws IOException {
     sourcedir = temp.newFolder().toPath();
-    tempdir = temp.newFolder("_temp").toPath();
     output = temp.newFile("out.jar").toPath();
     outputDeps = temp.newFile("out.jdeps").toPath();
 
@@ -73,9 +70,6 @@ public abstract class AbstractJavacTurbineCompilationTest {
 
     optionsBuilder
         .setOutput(output.toString())
-        .setTempDir(tempdir.toString())
-        .addBootClassPathEntries(
-            JavacBootclasspath.asPaths().stream().map(Path::toString).collect(toImmutableList()))
         .setOutputDeps(outputDeps.toString())
         .addAllJavacOpts(Arrays.asList("-source", "8", "-target", "8"))
         .setTargetLabel("//test");
@@ -93,7 +87,8 @@ public abstract class AbstractJavacTurbineCompilationTest {
         new JavacTurbine(
             new PrintWriter(new BufferedWriter(new OutputStreamWriter(System.err, UTF_8))),
             optionsBuilder.build())) {
-      assertThat(turbine.compile()).isEqualTo(Result.OK_WITH_REDUCED_CLASSPATH);
+      assertThat(turbine.compile())
+          .isAnyOf(Result.OK_WITH_FULL_CLASSPATH, Result.OK_WITH_REDUCED_CLASSPATH);
     }
   }
 

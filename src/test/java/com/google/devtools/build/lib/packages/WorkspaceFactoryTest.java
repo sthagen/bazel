@@ -17,6 +17,9 @@ package com.google.devtools.build.lib.packages;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.testutil.Scratch;
+import com.google.devtools.build.lib.vfs.Root;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -26,16 +29,14 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class WorkspaceFactoryTest {
+  private Scratch scratch = new Scratch();
+  private WorkspaceFactoryTestHelper helper;
+  private Root root;
 
-  private WorkspaceFactoryTestHelper helper = new WorkspaceFactoryTestHelper();
-
-  @Test
-  public void testLoadError() throws Exception {
-    // WS with a syntax error: '//a' should end with .bzl.
-    helper.parse("load('//a', 'a')");
-    helper.assertLexingExceptionThrown();
-    assertThat(helper.getLexerError())
-        .contains("The label must reference a file with extension '.bzl'");
+  @Before
+  public void setUp() throws Exception {
+    root = Root.fromPath(scratch.dir(""));
+    helper = new WorkspaceFactoryTestHelper(root);
   }
 
   @Test
@@ -65,7 +66,7 @@ public class WorkspaceFactoryTest {
 
   @Test
   public void testIllegalWorkspaceFunctionPosition() throws Exception {
-    helper = new WorkspaceFactoryTestHelper(/*allowOverride=*/ false);
+    helper = new WorkspaceFactoryTestHelper(/*allowOverride=*/ false, root);
     helper.parse("workspace(name = 'foo')");
     assertThat(helper.getParserError()).contains(
         "workspace() function should be used only at the top of the WORKSPACE file");
@@ -120,7 +121,6 @@ public class WorkspaceFactoryTest {
 
   @Test
   public void testWorkspaceMappings() throws Exception {
-    helper.setSkylarkSemantics("--experimental_enable_repo_mapping");
     helper.parse(
         "workspace(name = 'bar')",
         "local_repository(",
@@ -130,10 +130,9 @@ public class WorkspaceFactoryTest {
         ")");
     assertMapping(helper, "@foo", "@x", "@y");
   }
-  
+
   @Test
   public void testMultipleRepositoriesWithMappings() throws Exception {
-    helper.setSkylarkSemantics("--experimental_enable_repo_mapping");
     helper.parse(
         "local_repository(",
         "    name = 'foo',",
@@ -151,7 +150,6 @@ public class WorkspaceFactoryTest {
 
   @Test
   public void testMultipleMappings() throws Exception {
-    helper.setSkylarkSemantics("--experimental_enable_repo_mapping");
     helper.parse(
         "local_repository(",
         "    name = 'foo',",
@@ -165,19 +163,17 @@ public class WorkspaceFactoryTest {
 
   @Test
   public void testEmptyMappings() throws Exception {
-    helper.setSkylarkSemantics("--experimental_enable_repo_mapping");
     helper.parse(
         "local_repository(",
         "    name = 'foo',",
         "    path = '/foo',",
         "    repo_mapping = {},",
         ")");
-    assertThat(helper.getPackage().getRepositoryMapping("@foo")).isEmpty();
+    assertThat(helper.getPackage().getRepositoryMapping(RepositoryName.create("@foo"))).isEmpty();
   }
 
   @Test
   public void testMappingsNotAMap() throws Exception {
-    helper.setSkylarkSemantics("--experimental_enable_repo_mapping");
     helper.parse(
         "local_repository(",
         "    name = 'foo',",
@@ -185,7 +181,7 @@ public class WorkspaceFactoryTest {
         "    repo_mapping = 1",
         ")");
     assertThat(helper.getParserError())
-        .contains("Invalid value for 'repo_mapping': '1'. Value must be a map.");
+        .contains("Invalid value for 'repo_mapping': '1'. Value must be a dict.");
 
     helper.parse(
         "local_repository(",
@@ -194,12 +190,12 @@ public class WorkspaceFactoryTest {
         "    repo_mapping = 'hello'",
         ")");
     assertThat(helper.getParserError())
-        .contains("Invalid value for 'repo_mapping': 'hello'. Value must be a map.");
+        .contains("Invalid value for 'repo_mapping': 'hello'. Value must be a dict.");
   }
 
   @Test
   public void testImplicitMainRepoRename() throws Exception {
-    helper.setSkylarkSemantics("--experimental_remap_main_repo");
+    helper.setSkylarkSemantics("--incompatible_remap_main_repo");
     helper.parse("workspace(name = 'foo')");
     assertMapping(helper, "@", "@foo", "@");
   }
@@ -208,19 +204,18 @@ public class WorkspaceFactoryTest {
   public void testNoImplicitMainRepoRenameWithoutFlag() throws Exception {
     helper.parse("workspace(name = 'foo')");
     RepositoryName foo = RepositoryName.create("@foo");
-    assertThat(helper.getPackage().getRepositoryMapping("@"))
+    assertThat(helper.getPackage().getRepositoryMapping(RepositoryName.create("@")))
         .doesNotContainEntry(foo, RepositoryName.MAIN);
   }
 
   @Test
   public void testEmptyRepositoryHasEmptyMap() throws Exception {
     helper.parse("");
-    assertThat(helper.getPackage().getRepositoryMapping("@")).isEmpty();
+    assertThat(helper.getPackage().getRepositoryMapping(RepositoryName.create("@"))).isEmpty();
   }
 
   @Test
   public void testOverrideImplicitMainRepoRename() throws Exception {
-    helper.setSkylarkSemantics("--experimental_enable_repo_mapping");
     helper.parse(
         "workspace(name = 'bar')",
         "local_repository(",
@@ -237,7 +232,7 @@ public class WorkspaceFactoryTest {
       throws Exception {
     RepositoryName localRepoName = RepositoryName.create(local);
     RepositoryName globalRepoName = RepositoryName.create(global);
-    assertThat(helper.getPackage().getRepositoryMapping(repo))
+    assertThat(helper.getPackage().getRepositoryMapping(RepositoryName.create(repo)))
         .containsEntry(localRepoName, globalRepoName);
   }
 

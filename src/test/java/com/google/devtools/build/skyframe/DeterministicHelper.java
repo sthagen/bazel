@@ -69,8 +69,8 @@ public class DeterministicHelper extends NotifyingHelper {
 
   @Nullable
   @Override
-  protected DeterministicValueEntry wrapEntry(SkyKey key, @Nullable ThinNodeEntry entry) {
-    return entry == null ? null : new DeterministicValueEntry(key, entry);
+  protected DeterministicNodeEntry wrapEntry(SkyKey key, @Nullable ThinNodeEntry entry) {
+    return entry == null ? null : new DeterministicNodeEntry(key, entry);
   }
 
   private static Map<SkyKey, ? extends NodeEntry> makeDeterministic(
@@ -126,8 +126,8 @@ public class DeterministicHelper extends NotifyingHelper {
    * This class uses TreeSet to store reverse dependencies of NodeEntry. As a result all values are
    * lexicographically sorted.
    */
-  private class DeterministicValueEntry extends NotifyingNodeEntry {
-    private DeterministicValueEntry(SkyKey myKey, ThinNodeEntry delegate) {
+  private class DeterministicNodeEntry extends NotifyingNodeEntry {
+    private DeterministicNodeEntry(SkyKey myKey, ThinNodeEntry delegate) {
       super(myKey, delegate);
     }
 
@@ -147,10 +147,20 @@ public class DeterministicHelper extends NotifyingHelper {
     }
 
     @Override
-    public Set<SkyKey> setValue(SkyValue value, Version version) throws InterruptedException {
+    public Set<SkyKey> setValue(
+        SkyValue value, Version version, DepFingerprintList depFingerprintList)
+        throws InterruptedException {
       TreeSet<SkyKey> result = new TreeSet<>(ALPHABETICAL_SKYKEY_COMPARATOR);
-      result.addAll(super.setValue(value, version));
+      result.addAll(super.setValue(value, version, depFingerprintList));
       return result;
+    }
+
+    @Override
+    public NodeValueAndRdepsToSignal markClean() throws InterruptedException {
+      TreeSet<SkyKey> result = new TreeSet<>(ALPHABETICAL_SKYKEY_COMPARATOR);
+      NodeValueAndRdepsToSignal nodeValueAndRdepsToSignal = super.markClean();
+      result.addAll(nodeValueAndRdepsToSignal.getRdepsToSignal());
+      return new NodeValueAndRdepsToSignal(nodeValueAndRdepsToSignal.getValue(), result);
     }
   }
 }

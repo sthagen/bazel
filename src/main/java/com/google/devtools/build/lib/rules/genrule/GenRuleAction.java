@@ -14,23 +14,21 @@
 
 package com.google.devtools.build.lib.rules.genrule;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.AbstractAction;
 import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CommandLines;
 import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
-import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.skyframe.TrackSourceDirectoriesFlag;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -41,9 +39,6 @@ import java.util.List;
 public class GenRuleAction extends SpawnAction {
 
   public static final String MNEMONIC = "Genrule";
-  private static final ResourceSet GENRULE_RESOURCES =
-      // Not chosen scientifically/carefully.  300MB memory, 100% CPU, no I/O.
-      ResourceSet.createWithRamCpuIo(300, 1.0, 0.0);
 
   public GenRuleAction(
       ActionOwner owner,
@@ -61,7 +56,7 @@ public class GenRuleAction extends SpawnAction {
         inputs,
         outputs,
         Iterables.getFirst(outputs, null),
-        GENRULE_RESOURCES,
+        AbstractAction.DEFAULT_RESOURCE_SET,
         commandLines,
         CommandLineLimits.UNLIMITED,
         false,
@@ -71,21 +66,21 @@ public class GenRuleAction extends SpawnAction {
         runfilesSupplier,
         MNEMONIC,
         false,
+        null,
         null);
   }
 
   @Override
-  protected List<SpawnResult> internalExecute(ActionExecutionContext actionExecutionContext)
-      throws ExecException, InterruptedException {
-    EventHandler reporter = actionExecutionContext.getEventHandler();
-    checkInputsForDirectories(reporter, actionExecutionContext.getMetadataProvider());
-    List<SpawnResult> spawnResults = ImmutableList.of();
-    try {
-      spawnResults = super.internalExecute(actionExecutionContext);
-    } catch (CommandLineExpansionException e) {
-      throw new AssertionError("GenRuleAction command line expansion cannot fail");
+  protected void beforeExecute(ActionExecutionContext actionExecutionContext) throws IOException {
+    if (!TrackSourceDirectoriesFlag.trackSourceDirectories()) {
+      checkInputsForDirectories(
+          actionExecutionContext.getEventHandler(), actionExecutionContext.getMetadataProvider());
     }
+  }
+
+  @Override
+  protected void afterExecute(
+      ActionExecutionContext actionExecutionContext, List<SpawnResult> spawnResults) {
     checkOutputsForDirectories(actionExecutionContext);
-    return spawnResults;
   }
 }

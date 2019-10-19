@@ -18,25 +18,22 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.common.collect.MoreCollectors;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.OptionsDiffPredicate;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
+import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.PerLabelOptions;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.TestTimeout;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDefinition;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
+import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.TriState;
@@ -44,41 +41,27 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /** Test-related options. */
-@AutoCodec
 public class TestConfiguration extends Fragment {
-  public static final OptionsDiffPredicate HAVE_OPTIONS_AFFECTING_NON_TEST_TARGETS_CHANGED =
-      (diff, options) -> {
-          if (!options.contains(TestOptions.class)) {
-            // if there's a diff and there are no test options, a non-test option definitely changed
-            return true;
-          }
-          if (!options.get(TestOptions.class).trimTestConfiguration) {
-            // if trimTestConfiguration is off, test options affect all targets
-            return true;
-          }
-          for (OptionDefinition changedOption : diff.getFirst().keySet()) {
-            if (TestOptions.TRIM_TEST_CONFIGURATION.equals(changedOption)) {
-              // toggling trimTestConfiguration affects all non-test targets
-              return true;
-            }
-            if (!changedOption.getField().getDeclaringClass().equals(TestOptions.class)) {
-              // only TestOptions are trimmed; options from other classes affect all targets
-              return true;
-            }
-          }
-          return false;
+  public static final OptionsDiffPredicate SHOULD_INVALIDATE_FOR_OPTION_DIFF =
+      (options, changedOption, oldValue, newValue) -> {
+        if (TestOptions.TRIM_TEST_CONFIGURATION.equals(changedOption)) {
+          // changes in --trim_test_configuration itself always prompt invalidation
+          return true;
+        }
+        if (!changedOption.getField().getDeclaringClass().equals(TestOptions.class)) {
+          // options outside of TestOptions always prompt invalidation
+          return true;
+        }
+        // other options in TestOptions require invalidation when --trim_test_configuration is off
+        return !options.get(TestOptions.class).trimTestConfiguration;
       };
 
   /** Command-line options. */
   public static class TestOptions extends FragmentOptions {
     private static final OptionDefinition TRIM_TEST_CONFIGURATION =
-        OptionsParser.getOptionDefinitions(TestOptions.class)
-            .stream()
-            .filter(definition -> definition.getOptionName().equals("trim_test_configuration"))
-            .collect(MoreCollectors.onlyElement());
+        OptionsParser.getOptionDefinitionByName(TestOptions.class, "trim_test_configuration");
 
     @Option(
         name = "test_timeout",
@@ -125,12 +108,11 @@ public class TestConfiguration extends Fragment {
 
     @Deprecated
     @Option(
-      name = "test_result_expiration",
-      defaultValue = "-1", // No expiration by defualt.
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help = "This option is deprecated and has no effect."
-    )
+        name = "test_result_expiration",
+        defaultValue = "-1", // No expiration by default.
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help = "This option is deprecated and has no effect.")
     public int testResultExpiration;
 
     @Option(
@@ -162,19 +144,15 @@ public class TestConfiguration extends Fragment {
     public List<String> testArguments;
 
     @Option(
-      name = "test_sharding_strategy",
-      defaultValue = "explicit",
-      converter = TestActionBuilder.ShardingStrategyConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "Specify strategy for test sharding: "
-              + "'explicit' to only use sharding if the 'shard_count' BUILD attribute is present. "
-              + "'disabled' to never use test sharding. "
-              + "'experimental_heuristic' to enable sharding on remotely executed tests without an "
-              + "explicit  'shard_count' attribute which link in a supported framework. Considered "
-              + "experimental."
-    )
+        name = "test_sharding_strategy",
+        defaultValue = "explicit",
+        converter = TestActionBuilder.ShardingStrategyConverter.class,
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "Specify strategy for test sharding: "
+                + "'explicit' to only use sharding if the 'shard_count' BUILD attribute is "
+                + "present. 'disabled' to never use test sharding.")
     public TestActionBuilder.TestShardingStrategy testShardingStrategy;
 
     @Option(
@@ -182,7 +160,7 @@ public class TestConfiguration extends Fragment {
       allowMultiple = true,
       defaultValue = "1",
       converter = RunsPerTestConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      documentationCategory = OptionDocumentationCategory.TESTING,
       effectTags = {OptionEffectTag.UNKNOWN},
       help =
           "Specifies number of times to run each test. If any of those attempts "
@@ -198,6 +176,26 @@ public class TestConfiguration extends Fragment {
               + "This option can be passed multiple times. "
     )
     public List<PerLabelOptions> runsPerTest;
+
+    @Option(
+        name = "runs_per_test_detects_flakes",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "If true, any shard in which at least one run/attempt passes and at least one "
+                + "run/attempt fails gets a FLAKY status.")
+    public boolean runsPerTestDetectsFlakes;
+
+    @Option(
+        name = "experimental_cancel_concurrent_tests",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
+        help =
+            "If true, then Blaze will cancel concurrently running tests on the first successful "
+                + "run. This is only useful in combination with --runs_per_test_detects_flakes.")
+    public boolean cancelConcurrentTests;
 
     @Option(
         name = "coverage_support",
@@ -233,28 +231,25 @@ public class TestConfiguration extends Fragment {
     public Label coverageReportGenerator;
 
     @Option(
-        name = "windows_native_test_wrapper",
-        // Undocumented: this features is under development and not yet ready for production use.
-        // We define the flag to be able to test the feature.
+        name = "incompatible_windows_native_test_wrapper",
         // Design:
         // https://github.com/laszlocsomor/proposals/blob/win-test-runner/designs/2018-07-18-windows-native-test-runner.md
-        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        documentationCategory = OptionDocumentationCategory.TESTING,
         // Affects loading and analysis: this flag affects which target Bazel loads and creates test
         // actions with on Windows.
-        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-        defaultValue = "false",
+        effectTags = {
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.TEST_RUNNER,
+        },
+        metadataTags = {
+          OptionMetadataTag.INCOMPATIBLE_CHANGE,
+          OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES,
+        },
+        defaultValue = "true",
         help =
-            "Do not use yet, this flag's functionality is not yet implemented. "
-                + "(On Windows: if true, uses the C++ test wrapper to run tests, otherwise uses "
-                + "tools/test/test-setup.sh as on other platforms. On other platforms: no-op.)")
+            "On Windows: if true, uses the C++ test wrapper to run tests, otherwise uses "
+                + "tools/test/test-setup.sh as on other platforms. On other platforms: no-op.")
     public boolean windowsNativeTestWrapper;
-
-    @Override
-    public Map<String, Set<Label>> getDefaultsLabels() {
-      return ImmutableMap.<String, Set<Label>>of(
-          "coverage_support", ImmutableSet.of(coverageSupport),
-          "coverage_report_generator", ImmutableSet.of(coverageReportGenerator));
-    }
 
     @Override
     public FragmentOptions getHost() {
@@ -292,21 +287,9 @@ public class TestConfiguration extends Fragment {
   private final TestOptions options;
   private final ImmutableMap<TestTimeout, Duration> testTimeout;
 
-  TestConfiguration(TestOptions options) {
+  private TestConfiguration(TestOptions options) {
     this.options = options;
     this.testTimeout = ImmutableMap.copyOf(options.testTimeout);
-  }
-
-  @Override
-  public void reportInvalidOptions(EventHandler reporter, BuildOptions buildOptions) {
-    if (options.testShardingStrategy
-        == TestActionBuilder.TestShardingStrategy.EXPERIMENTAL_HEURISTIC) {
-      reporter.handle(
-          Event.warn(
-              "Heuristic sharding is intended as a one-off experimentation tool for determing the "
-                  + "benefit from sharding certain tests. Please don't keep this option in your "
-                  + ".blazerc or continuous build"));
-    }
   }
 
   /** Returns test timeout mapping as set by --test_timeout options. */
@@ -353,6 +336,14 @@ public class TestConfiguration extends Fragment {
       }
     }
     return 1;
+  }
+
+  public boolean runsPerTestDetectsFlakes() {
+    return options.runsPerTestDetectsFlakes;
+  }
+
+  public boolean cancelConcurrentTests() {
+    return options.cancelConcurrentTests;
   }
 
   /**

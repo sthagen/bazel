@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
-import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 import javax.annotation.Nullable;
 
@@ -58,7 +57,7 @@ public interface Spawn {
    * Map of the execpath at which we expect the Fileset symlink trees, to a list of
    * FilesetOutputSymlinks which contains the details of the Symlink trees.
    */
-  ImmutableMap<PathFragment, ImmutableList<FilesetOutputSymlink>> getFilesetMappings();
+  ImmutableMap<Artifact, ImmutableList<FilesetOutputSymlink>> getFilesetMappings();
 
   /**
    * Returns the list of files that are required to execute this spawn (e.g. the compiler binary),
@@ -111,6 +110,14 @@ public interface Spawn {
    * Returns a mnemonic (string constant) for this kind of spawn.
    */
   String getMnemonic();
+
+  /**
+   * Returns execution properties related to this spawn.
+   *
+   * <p>Note that this includes data from the execution platform's exec_properties as well as
+   * target-level exec_properties.
+   */
+  ImmutableMap<String, String> getCombinedExecProperties();
 
   @Nullable
   PlatformInfo getExecutionPlatform();

@@ -36,6 +36,7 @@ import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.Whitelist;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.Substitution;
@@ -43,12 +44,11 @@ import com.google.devtools.build.lib.analysis.actions.Template;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.test.ExecutionInfo;
-import com.google.devtools.build.lib.analysis.whitelisting.Whitelist;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.TargetUtils;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -82,9 +82,16 @@ public class AndroidDevice implements RuleConfiguredTargetFactory {
   private static final Predicate<Artifact> SOURCE_PROPERTIES_FILTER =
       Predicates.not(SOURCE_PROPERTIES_SELECTOR);
 
+  private final AndroidSemantics androidSemantics;
+
+  protected AndroidDevice(AndroidSemantics androidSemantics) {
+    this.androidSemantics = androidSemantics;
+  }
+
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
+    androidSemantics.checkForMigrationTag(ruleContext);
     checkWhitelist(ruleContext);
     Artifact executable = ruleContext.createOutputArtifact();
     Artifact metadata =
@@ -336,13 +343,11 @@ public class AndroidDevice implements RuleConfiguredTargetFactory {
               .setExecutionInfo(constraints)
               .setExecutable(unifiedLauncher)
               // Boot resource estimation:
-              // CPU: 100% - the emulator will peg a single cpu during boot because it's a very
-              //   computation intensive part of the lifecycle.
               // RAM: the emulator will use as much ram as has been requested in the device rule
               //   (there is a slight overhead for qemu's internals, but this is miniscule).
-              // IO: 15% Process is IO light until the very end when the booted files are flushed to
-              //   disk.
-              .setResources(ResourceSet.createWithRamCpuIo(ram, 1, .0))
+              // CPU: 100% - the emulator will peg a single cpu during boot because it's a very
+              //   computation intensive part of the lifecycle.
+              .setResources(ResourceSet.createWithRamCpu(ram, 1))
               .addExecutableArguments(
                   "--action=boot",
                   "--density=" + density,

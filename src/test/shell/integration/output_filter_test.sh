@@ -61,7 +61,7 @@ function test_output_filter_cc() {
   # "test warning filter for C compilation"
   local -r pkg=$FUNCNAME
 
-  if is_windows; then
+  if $is_windows; then
     local -r copts=\"/W3\"
   else
     local -r copts=""
@@ -94,11 +94,13 @@ int main(void)
 }
 EOF
 
-  bazel build --output_filter="dummy" $pkg/cc/main:cc >&"$TEST_log" || fail "build failed"
+  bazel build --output_filter="dummy" --noincompatible_disable_nocopts \
+      $pkg/cc/main:cc >&"$TEST_log" || fail "build failed"
   expect_not_log "triggers_a_warning"
 
   echo "/* adding a comment forces recompilation */" >> $pkg/cc/main/main.c
-  bazel build $pkg/cc/main:cc >&"$TEST_log" || fail "build failed"
+  bazel build --noincompatible_disable_nocopts $pkg/cc/main:cc >&"$TEST_log" \
+      || fail "build failed"
   expect_log "triggers_a_warning"
 }
 
@@ -181,9 +183,9 @@ EOF
 
   chmod +x $pkg/foo/bar/test.sh
 
-  # TODO(b/37617303): make tests UI-independent
-  bazel test --noexperimental_ui --output_filter="dummy" $pkg/foo/bar:test >&"$TEST_log" || fail
-  expect_log "PASS: //$pkg/foo/bar:test"
+  bazel test --experimental_ui_debug_all_events --output_filter="dummy" \
+      $pkg/foo/bar:test >&"$TEST_log" || fail
+  expect_log "PASS.*: //$pkg/foo/bar:test"
 }
 
 function test_output_filter_build() {

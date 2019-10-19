@@ -26,8 +26,10 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.Executor;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
+import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
@@ -85,9 +87,9 @@ public class TemplateExpansionActionTest extends FoundationTestCase {
     outputRoot =
         ArtifactRoot.asDerivedRoot(scratch.dir("/workspace"), scratch.dir("/workspace/out"));
     Path input = scratch.overwriteFile("/workspace/input.txt", StandardCharsets.UTF_8, template);
-    inputArtifact = new Artifact(input, workspace);
+    inputArtifact = ActionsTestUtil.createArtifact(workspace, input);
     output = scratch.resolve("/workspace/out/destination.txt");
-    outputArtifact = new Artifact(output, outputRoot);
+    outputArtifact = ActionsTestUtil.createArtifact(outputRoot, output);
   }
 
   private TemplateExpansionAction create() {
@@ -117,8 +119,9 @@ public class TemplateExpansionActionTest extends FoundationTestCase {
 
   @Test
   public void testKeySameIfSame() throws Exception {
-    Artifact outputArtifact2 = new Artifact(scratch.resolve("/workspace/out/destination.txt"),
-        outputRoot);
+    Artifact outputArtifact2 =
+        ActionsTestUtil.createArtifact(
+            outputRoot, scratch.resolve("/workspace/out/destination.txt"));
     TemplateExpansionAction a = new TemplateExpansionAction(NULL_ACTION_OWNER,
          outputArtifact, Template.forString(TEMPLATE),
          ImmutableList.of(Substitution.of("%key%", "foo")), false);
@@ -131,8 +134,9 @@ public class TemplateExpansionActionTest extends FoundationTestCase {
 
   @Test
   public void testKeyDiffersForSubstitution() throws Exception {
-    Artifact outputArtifact2 = new Artifact(scratch.resolve("/workspace/out/destination.txt"),
-        outputRoot);
+    Artifact outputArtifact2 =
+        ActionsTestUtil.createArtifact(
+            outputRoot, scratch.resolve("/workspace/out/destination.txt"));
     TemplateExpansionAction a = new TemplateExpansionAction(NULL_ACTION_OWNER,
          outputArtifact, Template.forString(TEMPLATE),
          ImmutableList.of(Substitution.of("%key%", "foo")), false);
@@ -145,8 +149,9 @@ public class TemplateExpansionActionTest extends FoundationTestCase {
 
   @Test
   public void testKeyDiffersForExecutable() throws Exception {
-    Artifact outputArtifact2 = new Artifact(scratch.resolve("/workspace/out/destination.txt"),
-        outputRoot);
+    Artifact outputArtifact2 =
+        ActionsTestUtil.createArtifact(
+            outputRoot, scratch.resolve("/workspace/out/destination.txt"));
     TemplateExpansionAction a = new TemplateExpansionAction(NULL_ACTION_OWNER,
          outputArtifact, Template.forString(TEMPLATE),
          ImmutableList.of(Substitution.of("%key%", "foo")), false);
@@ -159,8 +164,9 @@ public class TemplateExpansionActionTest extends FoundationTestCase {
 
   @Test
   public void testKeyDiffersForTemplates() throws Exception {
-    Artifact outputArtifact2 = new Artifact(scratch.resolve("/workspace/out/destination.txt"),
-        outputRoot);
+    Artifact outputArtifact2 =
+        ActionsTestUtil.createArtifact(
+            outputRoot, scratch.resolve("/workspace/out/destination.txt"));
     TemplateExpansionAction a = new TemplateExpansionAction(NULL_ACTION_OWNER,
          outputArtifact, Template.forString(TEMPLATE),
          ImmutableList.of(Substitution.of("%key%", "foo")), false);
@@ -189,7 +195,8 @@ public class TemplateExpansionActionTest extends FoundationTestCase {
         actionKeyContext,
         null,
         new FileOutErr(),
-        ImmutableMap.<String, String>of(),
+        new StoredEventHandler(),
+        ImmutableMap.of(),
         ImmutableMap.of(),
         null,
         /*actionFileSystem=*/ null,

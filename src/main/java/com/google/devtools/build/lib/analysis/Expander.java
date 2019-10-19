@@ -21,8 +21,8 @@ import com.google.devtools.build.lib.analysis.stringtemplate.ExpansionException;
 import com.google.devtools.build.lib.analysis.stringtemplate.TemplateContext;
 import com.google.devtools.build.lib.analysis.stringtemplate.TemplateExpander;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.shell.ShellUtils;
-import com.google.devtools.build.lib.syntax.Type;
 import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.Nullable;
@@ -34,10 +34,19 @@ public final class Expander {
 
   private final RuleContext ruleContext;
   private final TemplateContext templateContext;
+  @Nullable ImmutableMap<Label, ImmutableCollection<Artifact>> labelMap;
 
   Expander(RuleContext ruleContext, TemplateContext templateContext) {
+    this(ruleContext, templateContext, /* labelMap= */ null);
+  }
+
+  Expander(
+      RuleContext ruleContext,
+      TemplateContext templateContext,
+      @Nullable ImmutableMap<Label, ImmutableCollection<Artifact>> labelMap) {
     this.ruleContext = ruleContext;
     this.templateContext = templateContext;
+    this.labelMap = labelMap;
   }
 
   /**
@@ -46,8 +55,9 @@ public final class Expander {
    */
   private Expander withLocations(boolean execPaths, boolean allowData) {
     TemplateContext newTemplateContext =
-        new LocationTemplateContext(templateContext, ruleContext, null, execPaths, allowData);
-    return new Expander(ruleContext, newTemplateContext);
+        new LocationTemplateContext(
+            templateContext, ruleContext, labelMap, execPaths, allowData, false);
+    return new Expander(ruleContext, newTemplateContext, labelMap);
   }
 
   /**
@@ -70,10 +80,16 @@ public final class Expander {
    * Returns a new instance that also expands locations, passing the given location map, as well as
    * {@code execPaths} to the underlying {@link LocationTemplateContext}.
    */
-  public Expander withExecLocations(ImmutableMap<Label, ImmutableCollection<Artifact>> locations) {
+  public Expander withExecLocations(
+      ImmutableMap<Label, ImmutableCollection<Artifact>> locations, boolean windowsPath) {
     TemplateContext newTemplateContext =
-        new LocationTemplateContext(templateContext, ruleContext, locations, true, false);
+        new LocationTemplateContext(
+            templateContext, ruleContext, locations, true, false, windowsPath);
     return new Expander(ruleContext, newTemplateContext);
+  }
+
+  public Expander withExecLocations(ImmutableMap<Label, ImmutableCollection<Artifact>> locations) {
+    return withExecLocations(locations, false);
   }
 
   /**

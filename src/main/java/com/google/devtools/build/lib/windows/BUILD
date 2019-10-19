@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 filegroup(
@@ -13,10 +15,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs:__pkg__",
         "//src/test/java/com/google/devtools/build/lib:__pkg__",
     ],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib/windows/jni",
-        "//third_party:jsr305",
-    ],
+    deps = ["//src/main/java/com/google/devtools/build/lib/windows/jni"],
 )
 
 java_library(
@@ -28,10 +27,6 @@ java_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":windows_short_path",
-        "//src/main/java/com/google/devtools/build/lib:base-util",
-        "//src/main/java/com/google/devtools/build/lib:os_util",
-        "//src/main/java/com/google/devtools/build/lib/clock",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/shell",
@@ -39,6 +34,5 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/windows/jni",
         "//src/main/java/com/google/devtools/common/options",
         "//third_party:guava",
-        "//third_party:jsr305",
     ],
 )

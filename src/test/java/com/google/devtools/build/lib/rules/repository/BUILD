@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_test")
+
 package(
     default_testonly = 1,
     default_visibility = ["//src:__subpackages__"],
@@ -12,11 +14,7 @@ filegroup(
 
 java_test(
     name = "RepositoryTests",
-    srcs = select({
-        "//src/conditions:windows": [":RepositoryTests_windows_srcs"],
-        "//conditions:default": glob(["*.java"]),
-    }),
-    data = ["test_decompress_archive.tar.gz"],
+    srcs = glob(["*.java"]),
     tags = ["rules"],
     test_class = "com.google.devtools.build.lib.AllTests",
     deps = [
@@ -27,11 +25,14 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:io",
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
         "//src/main/java/com/google/devtools/build/lib:runtime",
+        "//src/main/java/com/google/devtools/build/lib:syntax",
         "//src/main/java/com/google/devtools/build/lib:unix",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
+        "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/repository",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
@@ -46,14 +47,6 @@ java_test(
         "//third_party:truth",
         "//third_party/protobuf:protobuf_java",
     ],
-)
-
-filegroup(
-    name = "RepositoryTests_windows_srcs",
-    srcs = glob(
-        ["*.java"],
-        exclude = ["CompressedTarFunctionTest.java"],
-    ),
 )
 
 test_suite(

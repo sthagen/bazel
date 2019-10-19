@@ -16,18 +16,14 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.analysis.util.ScratchAttributeWriter;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.packages.util.MockCcSupport;
 import com.google.devtools.build.lib.packages.util.MockPlatformSupport;
 import com.google.devtools.build.lib.testutil.TestConstants;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.ToolPath;
-import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -39,17 +35,8 @@ public class CcToolchainSelectionTest extends BuildViewTestCase {
 
   @Before
   public void setup() throws Exception {
-    MockPlatformSupport.addMockPiiiPlatform(
+    MockPlatformSupport.addMockK8Platform(
         mockToolsConfig, analysisMock.ccSupport().getMockCrosstoolLabel());
-  }
-
-  private CppCompileAction getCppCompileAction(String label) throws Exception {
-    ConfiguredTarget target = getConfiguredTarget(label);
-    List<CppCompileAction> compilationSteps =
-        actionsTestUtil()
-            .findTransitivePrerequisitesOf(
-                getFilesToBuild(target).iterator().next(), CppCompileAction.class);
-    return compilationSteps.get(0);
   }
 
   private static final String CPP_TOOLCHAIN_TYPE =
@@ -58,8 +45,9 @@ public class CcToolchainSelectionTest extends BuildViewTestCase {
   @Test
   public void testResolvedCcToolchain() throws Exception {
     useConfiguration(
-        "--experimental_platforms=//mock_platform:mock-piii-platform",
-        "--extra_toolchains=//mock_platform:toolchain_cc-compiler-piii");
+        "--incompatible_enable_cc_toolchain_resolution",
+        "--experimental_platforms=//mock_platform:mock-k8-platform",
+        "--extra_toolchains=//mock_platform:toolchain_cc-compiler-k8");
     ConfiguredTarget target =
         ScratchAttributeWriter.fromLabelString(this, "cc_library", "//lib")
             .setList("srcs", "a.cc")
@@ -69,33 +57,16 @@ public class CcToolchainSelectionTest extends BuildViewTestCase {
             getRuleContext(target)
                 .getToolchainContext()
                 .forToolchainType(Label.parseAbsolute(CPP_TOOLCHAIN_TYPE, ImmutableMap.of()));
-    assertThat(Iterables.getOnlyElement(toolchain.getCompile()).getExecPathString())
-        .endsWith("piii");
+    assertThat(Iterables.getOnlyElement(toolchain.getCompilerFiles()).getExecPathString())
+        .endsWith("k8");
   }
 
   @Test
   public void testToolchainSelectionWithPlatforms() throws Exception {
     useConfiguration(
-        "--enabled_toolchain_types=" + CPP_TOOLCHAIN_TYPE,
-        "--experimental_platforms=//mock_platform:mock-piii-platform",
-        "--extra_toolchains=//mock_platform:toolchain_cc-compiler-piii");
-    ScratchAttributeWriter.fromLabelString(this, "cc_library", "//lib")
-        .setList("srcs", "a.cc")
-        .write();
-    CppCompileAction compileAction = getCppCompileAction("//lib");
-    boolean isPiii =
-        ImmutableList.copyOf(compileAction.getInputs())
-            .stream()
-            .anyMatch(artifact -> artifact.getExecPathString().endsWith("piii"));
-    assertThat(isPiii).isTrue();
-  }
-
-  @Test
-  public void testCToolchainSelectionFromCcToolchainAttrs() throws Exception {
-    useConfiguration(
-        "--enabled_toolchain_types=" + CPP_TOOLCHAIN_TYPE,
-        "--experimental_platforms=//mock_platform:mock-piii-platform",
-        "--extra_toolchains=//mock_platform:toolchain_cc-compiler-piii");
+        "--incompatible_enable_cc_toolchain_resolution",
+        "--experimental_platforms=//mock_platform:mock-k8-platform",
+        "--extra_toolchains=//mock_platform:toolchain_cc-compiler-k8");
     ConfiguredTarget target =
         ScratchAttributeWriter.fromLabelString(this, "cc_library", "//lib")
             .setList("srcs", "a.cc")
@@ -105,7 +76,7 @@ public class CcToolchainSelectionTest extends BuildViewTestCase {
             getRuleContext(target)
                 .getToolchainContext()
                 .forToolchainType(Label.parseAbsolute(CPP_TOOLCHAIN_TYPE, ImmutableMap.of()));
-    assertThat(toolchain.getToolchainIdentifier()).endsWith("piii");
+    assertThat(toolchain.getToolchainIdentifier()).endsWith("k8");
   }
 
   @Test
@@ -129,44 +100,14 @@ public class CcToolchainSelectionTest extends BuildViewTestCase {
         "   strip_files = ':dummy_filegroup',",
         "   objcopy_files = 'objcopy-piii',",
         "   all_files = ':dummy_filegroup',",
-        "   static_runtime_libs = ['static-runtime-libs-piii'],",
-        "   dynamic_runtime_libs = ['dynamic-runtime-libs-piii'],",
         ")",
         "filegroup(name = 'dummy_filegroup')");
 
     useConfiguration(
-        "--enabled_toolchain_types=" + CPP_TOOLCHAIN_TYPE,
+        "--incompatible_enable_cc_toolchain_resolution",
         "--experimental_platforms=//mock_platform:mock-piii-platform",
         "--extra_toolchains=//incomplete_toolchain:incomplete_toolchain_cc-compiler-piii");
 
     // should not throw.
-  }
-
-  @Test
-  public void testToolPaths() throws Exception {
-    String originalCrosstool = analysisMock.ccSupport().readCrosstoolFile();
-    String crosstoolWithPiiiLd =
-        MockCcSupport.applyToToolchain(
-            originalCrosstool,
-            "piii",
-            t -> t.addToolPath(ToolPath.newBuilder().setName("ld").setPath("piii-ld").build()));
-
-    getAnalysisMock().ccSupport().setupCrosstoolWithRelease(mockToolsConfig, crosstoolWithPiiiLd);
-
-    useConfiguration(
-        "--enabled_toolchain_types=" + CPP_TOOLCHAIN_TYPE,
-        "--experimental_platforms=//mock_platform:mock-piii-platform",
-        "--extra_toolchains=//mock_platform:toolchain_cc-compiler-piii");
-    ConfiguredTarget target =
-        ScratchAttributeWriter.fromLabelString(this, "cc_library", "//lib")
-            .setList("srcs", "a.cc")
-            .write();
-    CcToolchainProvider toolchain =
-        (CcToolchainProvider)
-            getRuleContext(target)
-                .getToolchainContext()
-                .forToolchainType(Label.parseAbsolute(CPP_TOOLCHAIN_TYPE, ImmutableMap.of()));
-    assertThat(toolchain.getToolPathFragment(CppConfiguration.Tool.LD).toString())
-        .contains("piii-ld");
   }
 }

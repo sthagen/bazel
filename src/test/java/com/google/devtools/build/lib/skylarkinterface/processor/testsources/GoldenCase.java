@@ -18,11 +18,11 @@ import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.ParamType;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /**
  * Test source file verifying various proper uses of SkylarkCallable.
@@ -38,12 +38,11 @@ public class GoldenCase {
   }
 
   @SkylarkCallable(
-    name = "struct_field_method_with_info",
-    documented = false,
-    structField = true,
-    useSkylarkSemantics = true
-  )
-  public String structFieldMethodWithInfo(SkylarkSemantics semantics) {
+      name = "struct_field_method_with_info",
+      documented = false,
+      structField = true,
+      useStarlarkSemantics = true)
+  public String structFieldMethodWithInfo(StarlarkSemantics semantics) {
     return "foo";
   }
 
@@ -54,25 +53,26 @@ public class GoldenCase {
     return 0;
   }
 
-  @SkylarkCallable(name = "zero_arg_method_with_environment", documented = false,
-      useEnvironment = true)
-  public Integer zeroArgMethod(Environment environment) {
+  @SkylarkCallable(
+      name = "zero_arg_method_with_environment",
+      documented = false,
+      useStarlarkThread = true)
+  public Integer zeroArgMethod(StarlarkThread thread) {
     return 0;
   }
 
   @SkylarkCallable(
-    name = "zero_arg_method_with_skylark_info",
-    documented = false,
-    useAst = true,
-    useLocation = true,
-    useEnvironment = true,
-    useSkylarkSemantics = true
-  )
+      name = "zero_arg_method_with_skylark_info",
+      documented = false,
+      useAst = true,
+      useLocation = true,
+      useStarlarkThread = true,
+      useStarlarkSemantics = true)
   public Integer zeroArgMethod(
       Location location,
       FuncallExpression ast,
-      Environment environment,
-      SkylarkSemantics semantics) {
+      StarlarkThread thread,
+      StarlarkSemantics semantics) {
     return 0;
   }
 
@@ -107,26 +107,25 @@ public class GoldenCase {
   }
 
   @SkylarkCallable(
-    name = "three_arg_method_with_params_and_info",
-    documented = false,
-    parameters = {
-      @Param(name = "one", type = String.class, named = true),
-      @Param(name = "two", type = Integer.class, named = true),
-      @Param(name = "three", type = String.class, named = true),
-    },
-    useAst = true,
-    useLocation = true,
-    useEnvironment = true,
-    useSkylarkSemantics = true
-  )
+      name = "three_arg_method_with_params_and_info",
+      documented = false,
+      parameters = {
+        @Param(name = "one", type = String.class, named = true),
+        @Param(name = "two", type = Integer.class, named = true),
+        @Param(name = "three", type = String.class, named = true),
+      },
+      useAst = true,
+      useLocation = true,
+      useStarlarkThread = true,
+      useStarlarkSemantics = true)
   public String threeArgMethodWithParams(
       String one,
       Integer two,
       String three,
       Location location,
       FuncallExpression ast,
-      Environment environment,
-      SkylarkSemantics skylarkSemantics) {
+      StarlarkThread thread,
+      StarlarkSemantics starlarkSemantics) {
     return "baz";
   }
 
@@ -157,46 +156,44 @@ public class GoldenCase {
   }
 
   @SkylarkCallable(
-    name = "two_arg_method_with_params_and_info_and_kwargs",
-    documented = false,
-    parameters = {
-      @Param(name = "one", type = String.class, named = true),
-      @Param(name = "two", type = Integer.class, named = true),
-    },
-    extraKeywords = @Param(name = "kwargs"),
-    useAst = true,
-    useLocation = true,
-    useEnvironment = true,
-    useSkylarkSemantics = true
-  )
+      name = "two_arg_method_with_params_and_info_and_kwargs",
+      documented = false,
+      parameters = {
+        @Param(name = "one", type = String.class, named = true),
+        @Param(name = "two", type = Integer.class, named = true),
+      },
+      extraKeywords = @Param(name = "kwargs"),
+      useAst = true,
+      useLocation = true,
+      useStarlarkThread = true,
+      useStarlarkSemantics = true)
   public String twoArgMethodWithParamsAndInfoAndKwargs(
       String one,
       Integer two,
       SkylarkDict<?, ?> kwargs,
       Location location,
       FuncallExpression ast,
-      Environment environment,
-      SkylarkSemantics skylarkSemantics) {
+      StarlarkThread thread,
+      StarlarkSemantics starlarkSemantics) {
     return "blep";
   }
 
   @SkylarkCallable(
-    name = "two_arg_method_with_env_and_args_and_kwargs",
-    documented = false,
-    parameters = {
-      @Param(name = "one", type = String.class, named = true),
-      @Param(name = "two", type = Integer.class, named = true),
-    },
-    extraPositionals = @Param(name = "args"),
-    extraKeywords = @Param(name = "kwargs"),
-    useEnvironment = true
-  )
+      name = "two_arg_method_with_env_and_args_and_kwargs",
+      documented = false,
+      parameters = {
+        @Param(name = "one", type = String.class, named = true),
+        @Param(name = "two", type = Integer.class, named = true),
+      },
+      extraPositionals = @Param(name = "args"),
+      extraKeywords = @Param(name = "kwargs"),
+      useStarlarkThread = true)
   public String twoArgMethodWithParamsAndInfoAndKwargs(
       String one,
       Integer two,
       SkylarkList<?> args,
       SkylarkDict<?, ?> kwargs,
-      Environment environment) {
+      StarlarkThread thread) {
     return "yar";
   }
 
@@ -218,12 +215,10 @@ public class GoldenCase {
       documented = false,
       structField = true,
       useLocation = true,
-      useEnvironment = true,
-      useSkylarkSemantics = true
-  )
-  public String structFieldMethodWithInfo(Location location,
-      Environment environment,
-      SkylarkSemantics skylarkSemantics) {
+      useStarlarkThread = true,
+      useStarlarkSemantics = true)
+  public String structFieldMethodWithInfo(
+      Location location, StarlarkThread thread, StarlarkSemantics starlarkSemantics) {
     return "dragon";
   }
 }

@@ -41,13 +41,21 @@ public interface XmlResourceValue {
   XmlResourceValue combineWith(XmlResourceValue value);
 
   /**
+   * Returns 1 if the xml value is higher priority than the given value, -1 if lower priority, and 0
+   * if equal priority.
+   */
+  int compareMergePriorityTo(XmlResourceValue value);
+
+  /**
    * Queue up writing the resource to the given {@link AndroidResourceClassWriter}. Each resource
    * can generate one or more (in the case of styleable) fields and inner classes in the R class.
    *
+   * @param dependencyInfo The provenance (in terms of Bazel relationship) of the resource
    * @param key The FullyQualifiedName of the resource
    * @param sink the symbol sink for producing source and classes
    */
-  void writeResourceToClass(FullyQualifiedName key, AndroidResourceSymbolSink sink);
+  void writeResourceToClass(
+      DependencyInfo dependencyInfo, FullyQualifiedName key, AndroidResourceSymbolSink sink);
 
   /** Returns a representation of the xml value as a string suitable for conflict messages. */
   String asConflictStringWith(DataSource source);

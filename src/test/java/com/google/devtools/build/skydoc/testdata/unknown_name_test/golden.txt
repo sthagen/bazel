@@ -1,13 +1,16 @@
-<a name="#<unknown name>"></a>
-## <unknown name>
+<!-- Generated with Stardoc: http://skydoc.bazel.build -->
+
+<a name="#my_rule_impl"></a>
+
+## my_rule_impl
 
 <pre>
-<unknown name>(name, first, fourth, second, third)
+my_rule_impl(<a href="#my_rule_impl-ctx">ctx</a>)
 </pre>
 
 
 
-### Attributes
+### Parameters
 
 <table class="params-table">
   <colgroup>
@@ -15,37 +18,10 @@
     <col class="col-description" />
   </colgroup>
   <tbody>
-    <tr id="#<unknown name>_name">
-      <td><code>name</code></td>
+    <tr id="my_rule_impl-ctx">
+      <td><code>ctx</code></td>
       <td>
-        String; required
-        <p>
-          A unique name for this rule.
-        </p>
-      </td>
-    </tr>
-    <tr id="#<unknown name>_first">
-      <td><code>first</code></td>
-      <td>
-        Label; required
-      </td>
-    </tr>
-    <tr id="#<unknown name>_fourth">
-      <td><code>fourth</code></td>
-      <td>
-        Boolean; optional
-      </td>
-    </tr>
-    <tr id="#<unknown name>_second">
-      <td><code>second</code></td>
-      <td>
-        Dictionary: String -> String; required
-      </td>
-    </tr>
-    <tr id="#<unknown name>_third">
-      <td><code>third</code></td>
-      <td>
-        Label; required
+        required.
       </td>
     </tr>
   </tbody>

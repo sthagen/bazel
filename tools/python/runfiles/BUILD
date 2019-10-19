@@ -1,14 +1,10 @@
+load("//tools/python:private/defs.bzl", "py_library", "py_test")
+
 package(default_visibility = ["//visibility:private"])
 
 filegroup(
     name = "srcs",
-    srcs = glob(
-        ["**"],
-        exclude = [
-            ".*",
-            "*~",
-        ],
-    ),
+    srcs = glob(["**"]),
     visibility = ["//tools/python:__pkg__"],
 )
 

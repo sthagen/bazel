@@ -15,7 +15,7 @@ package com.google.devtools.build.android.dexer;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
-import static org.mockito.Matchers.any;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -107,7 +107,7 @@ public class DexFileAggregatorTest {
     try {
       dexer.close();
     } catch (IllegalStateException e) {
-      assertThat(e).hasMessage("--forceJumbo flag not supported");
+      assertThat(e).hasMessageThat().isEqualTo("--forceJumbo flag not supported");
       System.err.println("Skipping this test due to missing --forceJumbo support in Android SDK.");
       e.printStackTrace();
       return;
@@ -156,7 +156,7 @@ public class DexFileAggregatorTest {
     dexer.add(dex2);  // this should start a new shard
     // Make sure there was one file written and that file is dex
     verify(dest).addFile(any(ZipEntry.class), written.capture());
-    assertThat(written.getValue()).isSameAs(dex);
+    assertThat(written.getValue()).isSameInstanceAs(dex);
     dexer.close();
     verify(dest).addFile(any(ZipEntry.class), eq(dex2));
   }

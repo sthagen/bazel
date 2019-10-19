@@ -15,15 +15,18 @@ package com.google.devtools.build.lib.skyframe.packages;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertNoEvents;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
+import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.Root;
 import java.io.IOException;
 import org.junit.Before;
 import org.junit.Test;
@@ -75,11 +78,24 @@ public final class BazelPackageLoaderTest extends AbstractPackageLoaderTest {
         tools.getRelative("tools/sh/sh_configure.bzl"),
         "def sh_configure(*args, **kwargs):",
         "    pass");
+    FileSystemUtils.writeIsoLatin1(tools.getRelative("tools/build_defs/repo/BUILD"));
+    FileSystemUtils.writeIsoLatin1(
+        tools.getRelative("tools/build_defs/repo/http.bzl"),
+        "def http_archive(**kwargs):",
+        "  pass",
+        "",
+        "def http_file(**kwargs):",
+        "  pass");
+    FileSystemUtils.writeIsoLatin1(
+        tools.getRelative("tools/build_defs/repo/utils.bzl"),
+        "def maybe(repo_rule, name, **kwargs):",
+        "  if name not in native.existing_rules():",
+        "    repo_rule(name = name, **kwargs)");
   }
 
   private void fetchExternalRepo(RepositoryName externalRepo) {
     PackageLoader pkgLoaderForFetch =
-        newPackageLoaderBuilder(workspaceDir)
+        newPackageLoaderBuilder(root)
             .setFetchForTesting()
             .useDefaultSkylarkSemantics()
             .build();
@@ -94,7 +110,7 @@ public final class BazelPackageLoaderTest extends AbstractPackageLoaderTest {
   }
 
   @Override
-  protected BazelPackageLoader.Builder newPackageLoaderBuilder(Path workspaceDir) {
+  protected BazelPackageLoader.Builder newPackageLoaderBuilder(Root workspaceDir) {
     return BazelPackageLoader.builder(workspaceDir, installBase, outputBase);
   }
 
@@ -134,6 +150,21 @@ public final class BazelPackageLoaderTest extends AbstractPackageLoaderTest {
     assertThat(goodPkg.getTarget("good").getAssociatedRule().getRuleClass())
         .isEqualTo("sh_library");
     assertNoEvents(goodPkg.getEvents());
+    assertNoEvents(handler.getEvents());
+  }
+
+  @Test
+  public void buildDotBazelForSubpackageCheckDuringGlobbing() throws Exception {
+    file("a/BUILD", "filegroup(name = 'fg', srcs = glob(['sub/a.txt']))");
+    file("a/sub/a.txt");
+    file("a/sub/BUILD.bazel");
+
+    PackageLoader pkgLoader = newPackageLoader();
+    PackageIdentifier pkgId = PackageIdentifier.createInMainRepo(PathFragment.create("a"));
+    Package aPkg = pkgLoader.loadPackage(pkgId);
+    assertThat(aPkg.containsErrors()).isFalse();
+    assertThrows(NoSuchTargetException.class, () -> aPkg.getTarget("sub/a.txt"));
+    assertNoEvents(aPkg.getEvents());
     assertNoEvents(handler.getEvents());
   }
 }

@@ -33,10 +33,11 @@ import javax.annotation.Nullable;
  * merged into the main aar manifest.
  */
 @Immutable
-public class AndroidLibraryAarInfo extends NativeInfo implements AndroidLibraryAarInfoApi {
-  private static final String SKYLARK_NAME = "AndroidLibraryAarInfo";
+public class AndroidLibraryAarInfo extends NativeInfo
+    implements AndroidLibraryAarInfoApi<Artifact> {
+
   public static final NativeProvider<AndroidLibraryAarInfo> PROVIDER =
-      new NativeProvider<AndroidLibraryAarInfo>(AndroidLibraryAarInfo.class, SKYLARK_NAME) {};
+      new NativeProvider<AndroidLibraryAarInfo>(AndroidLibraryAarInfo.class, NAME) {};
 
   @Nullable private final Aar aar;
   private final NestedSet<Aar> transitiveAars;
@@ -64,10 +65,20 @@ public class AndroidLibraryAarInfo extends NativeInfo implements AndroidLibraryA
     return aar;
   }
 
+  @Nullable
+  @Override
+  public Artifact getAarArtifact() {
+    if (aar == null) {
+      return null;
+    }
+    return aar.getAar();
+  }
+
   public NestedSet<Aar> getTransitiveAars() {
     return transitiveAars;
   }
 
+  @Override
   public NestedSet<Artifact> getTransitiveAarArtifacts() {
     return transitiveAarArtifacts;
   }
@@ -134,7 +145,7 @@ public class AndroidLibraryAarInfo extends NativeInfo implements AndroidLibraryA
           .withClasses(libraryClassJar)
           .setAAROut(aarOut)
           .setProguardSpecs(localProguardSpecs)
-          .setThrowOnResourceConflict(dataContext.getAndroidConfig().throwOnResourceConflict())
+          .setThrowOnResourceConflict(dataContext.throwOnResourceConflict())
           .build(dataContext);
 
       return Aar.create(aarOut, manifest.getManifest());

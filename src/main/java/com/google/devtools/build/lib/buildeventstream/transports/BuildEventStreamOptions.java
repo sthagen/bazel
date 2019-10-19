@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.buildeventstream.transports;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
+import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 
 /** Options used to configure BuildEventStreamer and its BuildEventTransports. */
@@ -31,6 +32,15 @@ public class BuildEventStreamOptions extends OptionsBase {
       help =
           "If non-empty, write a textual representation of the build event protocol to that file")
   public String buildEventTextFile;
+
+  @Option(
+      name = "keep_backend_build_event_connections_alive",
+      defaultValue = "true",
+      metadataTags = {OptionMetadataTag.HIDDEN},
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "If enabled, keep connections to build event backend connections alive across builds.")
+  public boolean keepBackendConnections;
 
   @Option(
       name = "build_event_binary_file",
@@ -75,14 +85,15 @@ public class BuildEventStreamOptions extends OptionsBase {
   public boolean buildEventBinaryFilePathConversion;
 
   @Option(
-      name = "experimental_build_event_json_file_path_conversion",
-      oldName = "build_event_json_file_path_conversion",
+      name = "build_event_json_file_path_conversion",
+      oldName = "experimental_build_event_json_file_path_conversion",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.LOGGING,
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-      help = "Convert paths in the json file representation of the build event protocol to more "
-          + "globally valid URIs whenever possible; if disabled, the file:// uri scheme will "
-          + "always be used")
+      help =
+          "Convert paths in the json file representation of the build event protocol to more "
+              + "globally valid URIs whenever possible; if disabled, the file:// uri scheme will "
+              + "always be used")
   public boolean buildEventJsonFilePathConversion;
 
   @Option(
@@ -106,29 +117,4 @@ public class BuildEventStreamOptions extends OptionsBase {
               + "of the set as well as the file and uri lengths, which may in turn depend on the "
               + "hash function.")
   public int maxNamedSetEntries;
-
-  // TODO(ruperts): Remove these public getter methods for consistency with other options classes?
-  public String getBuildEventTextFile() {
-    return buildEventTextFile;
-  }
-
-  public String getBuildEventBinaryFile() {
-    return buildEventBinaryFile;
-  }
-
-  public String getBuildEventJsonFile() {
-    return buildEventJsonFile;
-  }
-
-  public boolean getBuildEventTextFilePathConversion() {
-    return buildEventTextFilePathConversion;
-  }
-
-  public boolean getBuildEventBinaryFilePathConversion() {
-    return buildEventBinaryFilePathConversion;
-  }
-
-  public boolean getBuildEventJsonFilePathConversion() {
-    return buildEventJsonFilePathConversion;
-  }
 }

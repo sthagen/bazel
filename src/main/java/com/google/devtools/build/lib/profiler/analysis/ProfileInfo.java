@@ -293,15 +293,15 @@ public class ProfileInfo {
      * <p>Example:
      *
      * <pre>
-     * 636779 SKYLARK_USER_FN (259.593 ms) /path/file.bzl:42#function [
-     *   636810 SKYLARK_USER_FN (257.768 ms) /path/file.bzl:133#_other_function [
-     *     636974 SKYLARK_BUILTIN_FN (254.596 ms) some.package.PackageFactory$9#genrule []
+     * 636779 STARLARK_USER_FN (259.593 ms) /path/file.bzl:42#function [
+     *   636810 STARLARK_USER_FN (257.768 ms) /path/file.bzl:133#_other_function [
+     *     636974 STARLARK_BUILTIN_FN (254.596 ms) some.package.PackageFactory$9#genrule []
      *   2 subtree(s) omitted]
      * ]
      * </pre>
      *
      * @param durationThresholdMillis Tasks with a shorter duration than this threshold will be
-     *  skipped
+     *     skipped
      * @return whether this task took longer than the threshold and was thus printed
      */
     public boolean printTaskTree(PrintStream out, long durationThresholdMillis) {
@@ -450,7 +450,6 @@ public class ProfileInfo {
   // TODO(bazel-team): (2010) In one case, this list took 277MB of heap. Ideally it should be
   // replaced with a trie.
   private final List<String> descriptionList;
-  public final Map<Long, Task[]> tasksByThread;
   public final List<Task> allTasksById;
   public List<Task> rootTasksById;  // Not final due to the late initialization.
   public final List<Task> phaseTasks;
@@ -459,16 +458,11 @@ public class ProfileInfo {
   private ListMultimap<String, Task> builtinFunctions;
 
   public final Map<Task, Task[]> actionDependencyMap;
-  // Used to create fake Action tasks if ACTIONG_GRAPH task does not have
-  // corresponding ACTION task. For action dependency calculations we will
-  // create fake ACTION tasks and assign them negative ids.
-  private int fakeActionId = 0;
 
   private ProfileInfo(String comment) {
     this.comment = comment;
 
     descriptionList = Lists.newArrayListWithExpectedSize(10000);
-    tasksByThread = Maps.newHashMap();
     allTasksById = Lists.newArrayListWithExpectedSize(50000);
     phaseTasks = Lists.newArrayList();
     actionDependencyMap = Maps.newHashMapWithExpectedSize(10000);
@@ -485,14 +479,6 @@ public class ProfileInfo {
    */
   public boolean isCorruptedOrIncomplete() {
     return corruptedOrIncomplete;
-  }
-
-  /**
-   * Returns number of missing actions which were faked in order to complete
-   * action graph.
-   */
-  public int getMissingActionsCount() {
-    return -fakeActionId;
   }
 
   /**
@@ -543,11 +529,11 @@ public class ProfileInfo {
     builtinFunctions = ListMultimapBuilder.treeKeys().arrayListValues().build();
 
     for (Task task : allTasksById) {
-      if (task.type == ProfilerTask.SKYLARK_BUILTIN_FN) {
+      if (task.type == ProfilerTask.STARLARK_BUILTIN_FN) {
         builtinFunctions.put(task.getDescription(), task);
-      } else if (task.type == ProfilerTask.SKYLARK_USER_FN) {
+      } else if (task.type == ProfilerTask.STARLARK_USER_FN) {
         userFunctions.put(task.getDescription(), task);
-      } else if (task.type == ProfilerTask.SKYLARK_USER_COMPILED_FN) {
+      } else if (task.type == ProfilerTask.STARLARK_USER_COMPILED_FN) {
         compiledUserFunctions.put(task.getDescription(), task);
       }
     }
@@ -584,23 +570,6 @@ public class ProfileInfo {
       calculateSkylarkStatistics();
     }
     return builtinFunctions;
-  }
-
-  /**
-   * Analyzes task relationships and dependencies. Used for the detailed profile
-   * analysis.
-   */
-  public void analyzeRelationships() {
-    tasksByThread.putAll(new TaskMapCreator<Long>() {
-      @Override
-      public int compare(Task a, Task b) {
-        return a.threadId != b.threadId ? (a.threadId < b.threadId ? -1 : 1) : a.compareTo(b);
-      }
-      @Override
-      public Long getKey(Task task) { return task.threadId; }
-    }.createTaskMap(rootTasksById));
-
-    buildDependencyMap();
   }
 
   /**
@@ -690,33 +659,6 @@ public class ProfileInfo {
     }
     Preconditions.checkState(duration >= 0);
     return duration;
-  }
-
-  /**
-   * Builds map of dependencies between ACTION tasks based on dependencies
-   * between ACTION_GRAPH tasks. Root of that dependency tree would be
-   * getBuildPhaseTask().
-   *
-   * <p> Also marks related ACTION and ACTION_SUBMIT tasks.
-   */
-  private void buildDependencyMap() {
-    Task analysisPhaseTask = getPhaseTask(ProfilePhase.ANALYZE);
-    Task executionPhaseTask = getPhaseTask(ProfilePhase.EXECUTE);
-    if ((executionPhaseTask == null) || (analysisPhaseTask == null)) {
-      return;
-    }
-    // Association between ACTION_GRAPH tasks and ACTION tasks can be established through
-    // description id. So we create appropriate xref list.
-    List<Task> actionTasksByDescription = Lists.newArrayList(new Task[descriptionList.size()]);
-    for (Task task : getTasksForPhase(executionPhaseTask)) {
-      if (task.type == ProfilerTask.ACTION) {
-        actionTasksByDescription.set(task.descIndex, task);
-      }
-    }
-    List<Task> list = new ArrayList<>();
-    Task[] actionPrerequisites = list.toArray(new Task[list.size()]);
-    Arrays.sort(actionPrerequisites);
-    actionDependencyMap.put(executionPhaseTask, actionPrerequisites);
   }
 
   /**

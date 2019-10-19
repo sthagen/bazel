@@ -23,10 +23,24 @@ import java.util.List;
 public interface OptionsParsingResult extends OptionsProvider {
 
   /**
+   * Returns a description of the option value.
+   *
+   * @return value for the option or null if the value has not been set
+   * @throws IllegalArgumentException if there is no option by the given name
+   */
+  OptionValueDescription getOptionValueDescription(String name);
+
+  /**
    * Returns an immutable copy of the residue, that is, the arguments that
    * have not been parsed.
    */
   List<String> getResidue();
+
+  /**
+   * Returns an immutable copy of the residue before the " -- " signals the remainder of the
+   * arguments are not options.
+   */
+  List<String> getPreDoubleDashResidue();
 
   /**
    * Returns if the named option was specified explicitly in a call to parse.

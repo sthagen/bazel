@@ -14,10 +14,11 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.rules.cpp.IncludeScanner.IncludeScannerSupplier;
+import com.google.devtools.build.lib.rules.cpp.IncludeScanner.IncludeScanningHeaderData;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import javax.annotation.Nullable;
 
@@ -26,11 +27,11 @@ public class NoProcessing implements IncludeProcessing {
   @AutoCodec public static final NoProcessing INSTANCE = new NoProcessing();
 
   @Override
-  public Iterable<Artifact> determineAdditionalInputs(
+  public ListenableFuture<Iterable<Artifact>> determineAdditionalInputs(
       @Nullable IncludeScannerSupplier includeScannerSupplier,
       CppCompileAction action,
-      ActionExecutionContext actionExecutionContext)
-      throws ExecException, InterruptedException {
+      ActionExecutionContext actionExecutionContext,
+      IncludeScanningHeaderData includeScanningHeaderData) {
     return null;
   }
 }

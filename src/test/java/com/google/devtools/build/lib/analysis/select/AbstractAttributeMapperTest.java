@@ -14,19 +14,18 @@
 package com.google.devtools.build.lib.analysis.select;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.AbstractAttributeMapper;
-import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeContainer;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.junit.Before;
@@ -81,20 +80,16 @@ public class AbstractAttributeMapperTest extends BuildViewTestCase {
     mapper.get("srcs", BuildType.LABEL_LIST);
 
     // Bad typing:
-    try {
-      mapper.get("srcs", Type.BOOLEAN);
-      fail("Expected type mismatch to trigger an exception");
-    } catch (IllegalArgumentException e) {
-      // Expected.
-    }
+    assertThrows(
+        "Expected type mismatch to trigger an exception",
+        IllegalArgumentException.class,
+        () -> mapper.get("srcs", Type.BOOLEAN));
 
     // Unknown attribute:
-    try {
-      mapper.get("nonsense", Type.BOOLEAN);
-      fail("Expected non-existent type to trigger an exception");
-    } catch (IllegalArgumentException e) {
-      // Expected.
-    }
+    assertThrows(
+        "Expected type mismatch to trigger an exception",
+        IllegalArgumentException.class,
+        () -> mapper.get("nonsense", Type.BOOLEAN));
   }
 
   @Test
@@ -130,14 +125,5 @@ public class AbstractAttributeMapperTest extends BuildViewTestCase {
         .map(AttributeMap.DepEdge::getLabel)
         .map(Label::toString)
         .collect(Collectors.toList());
-  }
-
-  @Test
-  public void testComputedDefault() throws Exception {
-    // Should return a valid ComputedDefault instance since this is a computed default:
-    assertThat(mapper.getComputedDefault("$stl_default", BuildType.LABEL))
-        .isInstanceOf(Attribute.ComputedDefault.class);
-    // Should return null since this *isn't* a computed default:
-    assertThat(mapper.getComputedDefault("srcs", BuildType.LABEL_LIST)).isNull();
   }
 }

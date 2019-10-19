@@ -5,40 +5,50 @@ title: Rules
 
 # Rules
 
-A rule defines a series of [actions](#actions) that Bazel should perform on
-inputs to get a set of outputs. For example, a C++ binary rule might take a set
-of `.cpp` files (the inputs), run `g++` on them (the action), and return an
-executable file (the output).
+A **rule** defines a series of [**actions**](#actions) that Bazel performs on
+inputs to produce a set of outputs. For example, a C++ binary rule might:
 
-Note that, from Bazel's perspective, `g++` and the standard C++ libraries are
-also inputs to this rule. As a rule writer, you must consider not only the
-user-provided inputs to a rule, but also all of the tools and libraries required
-to execute the actions.
+1. Take a set of `.cpp` files (the inputs)
+2. Run `g++` on them (the action)
+3. Return an executable file (the output).
 
-Before creating or modifying any rule, make sure you are familiar with the
-[evaluation model](concepts.md). You must understand the three phases of
-execution and the differences between macros and rules.
+From Bazel's perspective, `g++` and the standard C++ libraries are also inputs
+to this rule. As a rule writer, you must consider not only the user-provided
+inputs to a rule, but also all of the tools and libraries required to execute
+the actions.
+
+Before creating or modifying any rule, ensure you are familiar with Bazel's
+[build phases](concepts.md). It will be important to understand the three phases
+of a build (loading, analysis and execution). It will also be useful to learn
+about [macros](macros.md) to understand the difference between rules and macros.
 
 A few rules are built into Bazel itself. These *native rules*, such as
 `cc_library` and `java_binary`, provide some core support for certain languages.
 By defining your own rules, you can add similar support for languages and tools
 that Bazel does not support natively.
 
-Rules defined in .bzl files work just like native rules. For example, their
-targets have labels, can appear in `bazel query`, and get built whenever they
-are needed for a `bazel build` command or similar. When defining your own rule,
-you get to decide what attributes it supports and how it generates its outputs.
+Bazel provides an extensibility model for writing rules using the
+[Starlark](language.md) language. These rules are written in `.bzl` files,
+which can be loaded directly from `BUILD` files.
 
-The exact behavior of a rule during the
-[analysis phase](concepts.md#evaluation-model) is governed by its
-`implementation` function. This function does not run any external commands.
-Rather, it registers [actions](#actions) that will be used later during the
-execution phase to build the rule's outputs, if they are needed. Rules also
-produce and pass along information that may be useful to other rules, in the
-form of [providers](#providers).
+When defining your own rule, you get to decide what attributes it supports and
+how it generates its outputs.
 
+The rule's `implementation` function defines its exact behavior during the
+[analysis phase](concepts.md#evaluation-model). This function does not run any
+external commands. Rather, it registers [actions](#actions) that will be used
+later during the execution phase to build the rule's outputs, if they are
+needed.
 
-<!-- [TOC] -->
+Rules also produce and pass along information that may be useful to other rules
+in the form of [providers](#providers).
+
+## Contents
+{:.no_toc}
+
+* ToC
+{:toc}
+
 
 ## Rule creation
 
@@ -121,7 +131,9 @@ The following attributes are automatically added to every rule: `deprecation`,
 following attributes: `args`, `flaky`, `local`, `shard_count`, `size`,
 `timeout`.
 
-### <a name="private-attributes"></a> Private Attributes and Implicit Dependencies
+<a name="private-attributes"></a>
+
+### Private Attributes and Implicit Dependencies
 
 A dependency attribute with a default value is called an *implicit dependency*.
 The name comes from the fact that it is a part of the target graph that the user
@@ -244,50 +256,45 @@ corresponding `Target`. The `File` object can be obtained from this `Target`'s
 `files` field. This allows the file to be referenced in both the target graph
 and the action graph.
 
-During the analysis phase, a rule's implementation function can create
-additional output files. Since all labels have to be known during the loading
-phase, these additional output files are not associated with labels or
-`Target`s. Generally these are intermediate files needed for a later compilation
-step, or auxiliary outputs that don't need to be referenced in the target graph.
-Even though these files don't have a label, they can still be passed along in a
-[`provider`](#providers) to make them available to other depending targets at
-analysis time.
+### Outputs
 
 A generated file that is addressable by a label is called a *predeclared
-output*. There are multiple ways for a rule to introduce a predeclared output:
+output*. Rules can specify predeclared outputs via
+[`output`](lib/attr.html#output) or [`output_list`](lib/attr.html#output_list)
+attributes. In that case, the user explicitly chooses labels for outputs when
+they instantiate the rule. To obtain file objects for output attributes, use
+the corresponding attribute of [`ctx.outputs`](lib/ctx.html#outputs).
 
-* If the rule declares an [`outputs`](lib/globals.html#rule.outputs) dict in its
-  call to `rule()`, then each entry in this dict becomes an output. The output's
-  label is chosen automatically as specified by the entry, usually by
-  substituting into a string template. This is the most common way to define
-  outputs.
+During the analysis phase, a rule's implementation function can create
+additional outputs. Since all labels have to be known during the loading phase,
+these additional outputs have no labels. Non-predeclared outputs are created
+using [`ctx.actions.declare_file`](lib/actions.html#declare_file),
+[`ctx.actions.write`](lib/actions.html#write), and
+[`ctx.actions.declare_directory`](lib/actions.html#declare_directory).
 
-* The rule can have an attribute of type [`output`](lib/attr.html#output) or
-  [`output_list`](lib/attr.html#output_list). In this case the user explicitly
-  chooses the label for the output when they instantiate the rule.
+All outputs can be passed along in [providers](#providers) to make them
+available to a target's consumers, whether or not they have a label. A target's
+*default outputs* are specified by the `files` parameter of
+[`DefaultInfo`](lib/DefaultInfo.html). If `DefaultInfo` is not returned by a
+rule implementation or the `files` parameter is not specified,
+`DefaultInfo.files` defaults to all *predeclared* outputs.
 
-* **(Deprecated)** If the rule is marked
-  [`executable`](lib/globals.html#rule.executable) or
-  [`test`](lib/globals.html#rule.test), an output is created with the same name
-  as the rule instance itself. (Technically, the file has no label since it
-  would clash with the rule instance's own label, but it is still considered a
-  predeclared output.) By default, this file serves as the binary to run if the
-  target appears on the command line of a `bazel run` or `bazel test` command.
-  See [Executable rules](#executable-rules-and-test-rules) below.
+There are also two **deprecated** ways of using predeclared outputs:
 
-All predeclared outputs can be accessed within the rule's implementation
-function under the [`ctx.outputs`](lib/ctx.html#outputs) struct; see that page
-for details and restrictions. Non-predeclared outputs are created during
-analysis using the [`ctx.actions.declare_file`](lib/actions.html#declare_file)
-and [`ctx.actions.declare_directory`](lib/actions.html#declare_directory)
-functions. Both kinds of outputs may be passed along in providers.
+*   The [`outputs`](lib/globals.html#rule.outputs) parameter of `rule` specifies
+    a mapping between output attribute names and string templates for
+    generating predeclared output labels. Prefer using non-predeclared outputs
+    and explicitly adding outputs to `DefaultInfo.files`. Use the rule target's
+    label as input for rules which consume the output instead of a predeclared
+    output's label.
 
-Although the input files of a target -- those files passed through dependency
-attributes -- can be accessed indirectly via `ctx.attr`, it is more convenient
-to use `ctx.file` and `ctx.files`. For output files that are predeclared using
-output attributes (attributes of type `attr.output` or `attr.output_list`),
-`ctx.attr` will only return the label, and you must use `ctx.outputs` to get the
-actual `File` object.
+*   For [executable rules](#executable-rules-and-test-rules),
+    `ctx.outputs.executable` refers to a predeclared executable output with the
+    same name as the rule target. Prefer declaring the output explicitly, for
+    example with `ctx.actions.declare_file(ctx.label.name)`, and ensure that the
+    command that generates the executable sets its permissions to allow
+    execution. Explicitly pass the executable output to the `executable`
+    parameter of `DefaultInfo`.
 
 [See example of predeclared outputs](https://github.com/bazelbuild/examples/blob/master/rules/predeclared_outputs/hash.bzl)
 
@@ -347,11 +354,11 @@ its outputs are needed for the build.
 
 ## Configurations
 
-Imagine that you want to build a C++ binary and target a different architecture.
-The build can be complex and involve multiple steps. Some of the intermediate
-binaries, like the compilers and code generators, have to run on your machine
-(the host); some of the binaries such the final output must be built for the
-target architecture.
+Imagine that you want to build a C++ binary for a different architecture. The
+build can be complex and involve multiple steps. Some of the intermediate
+binaries, like compilers and code generators, have to run on your machine (the
+host). Some binaries like the final output must be built for the target
+architecture.
 
 For this reason, Bazel has a concept of "configurations" and transitions. The
 topmost targets (the ones requested on the command line) are built in the
@@ -362,17 +369,17 @@ the compiler. In some cases, the same library may be needed for different
 configurations. If this happens, it will be analyzed and potentially built
 multiple times.
 
-By default, Bazel builds the dependencies of a target in the same configuration
-as the target itself, i.e. without transitioning. When a target depends on a
-tool, the label attribute will specify a transition to the host configuration.
-This causes the tool and all of its dependencies to be built for the host
-machine, assuming those dependencies do not themselves have transitions.
+By default, Bazel builds a target's dependencies in the same configuration as
+the target itself, in other words without transitions. When a dependency is a tool
+that's needed to help build the target, the corresponding attribute should
+specify a transition to the host configuration. This causes the tool and all its
+dependencies to build for the host machine.
 
-For each dependency attribute, you can decide whether the dependency target
-should be built in the same configuration, or transition to the host
-configuration (using `cfg`). If a dependency attribute has the flag
-`executable=True`, the configuration must be set explicitly.
-[See example](https://github.com/bazelbuild/examples/blob/master/rules/actions_run/execute.bzl)
+For each dependency attribute, you can use `cfg` to decide if dependencies
+should build in the same configuration or transition to the host configuration.
+If a dependency attribute has the flag `executable=True`, `cfg` must be set
+explicitly. This is to guard against accidentally building a host tool for the
+wrong configuration. [See example](https://github.com/bazelbuild/examples/blob/master/rules/actions_run/execute.bzl)
 
 In general, sources, dependent libraries, and executables that will be needed at
 runtime can use the same configuration.
@@ -385,7 +392,13 @@ Otherwise, executables that are used at runtime (e.g. as part of a test) should
 be built for the target configuration. In this case, specify `cfg="target"` in
 the attribute.
 
-## <a name="fragments"></a> Configuration Fragments
+`cfg="target"` doesn't actually do anything: it's purely a convenience value to
+help rule designers be explicit about their intentions. When `executable=False`,
+which means `cfg` is optional, only set this when it truly helps readability.
+
+<a name="fragments"></a>
+
+## Configuration Fragments
 
 Rules may access [configuration fragments](lib/skylark-configuration-fragment.html)
 such as `cpp`, `java` and `jvm`. However, all required fragments must be
@@ -456,7 +469,7 @@ def dependent_rule_implementation(ctx):
   ...
 ```
 
-All targets have a [`DefaultInfo`](lib/globals.html#DefaultInfo) provider that can be used to access
+All targets have a [`DefaultInfo`](lib/DefaultInfo.html) provider that can be used to access
 some information relevant to all targets.
 
 Providers are only available during the analysis phase. Examples of usage:
@@ -504,46 +517,70 @@ provider).
 
 * The fields `files`, `runfiles`, `data_runfiles`, `default_runfiles`, and
   `executable` correspond to the same-named fields of
-  [`DefaultInfo`](lib/globals.html#DefaultInfo). It is not allowed to specify
+  [`DefaultInfo`](lib/DefaultInfo.html). It is not allowed to specify
   any of these fields while also returning a `DefaultInfo` modern provider.
 
 * The field `output_groups` takes a struct value and corresponds to an
-  [`OutputGroupInfo`](lib/globals.html#OutputGroupInfo).
+  [`OutputGroupInfo`](lib/OutputGroupInfo.html).
 
 * The field `instrumented_files` is for
   [code coverage instrumentation](#code-coverage-instrumentation). It does not
   yet have a modern provider equivalent. If you need it, you cannot yet migrate
   away from legacy providers.
 
+In [`provides`](lib/globals.html#rule.provides) declarations of rules, and in
+[`providers`](lib/attr.html#label_list.providers) declarations of dependency
+attributes, legacy providers are passed in as strings and modern providers are
+passed in by their `*Info` symbol. Be sure to change from strings to symbols
+when migrating. For complex or large rule sets where it is difficult to update
+all rules atomically, you may have an easier time if you follow this sequence of
+steps:
+
+1. Modify the rules that produce the legacy provider to produce both the legacy
+   and modern providers, using the above syntax. For rules that declare they
+   return the legacy provider, update that declaration to include both the
+   legacy and modern providers.
+
+2. Modify the rules that consume the legacy provider to instead consume the
+   modern provider. If any attribute declarations require the legacy provider,
+   also update them to instead require the modern provider. Optionally, you can
+   interleave this work with step 1 by having consumers accept/require either
+   provider: Test for the presence of the legacy provider using
+   `hasattr(target, 'foo')`, or the new provider using `FooInfo in target`.
+
+3. Fully remove the legacy provider from all rules.
+
 ## Runfiles
 
 Runfiles are a set of files used by the (often executable) output of a rule
 during runtime (as opposed to build time, i.e. when the binary itself is
-generated).
-During the [execution phase](concepts.md#evaluation-model), Bazel creates a
-directory tree containing symlinks pointing to the runfiles. This stages the
-environment for the binary so it can access the runfiles during runtime.
+generated). During the
+[execution phase](concepts.md#evaluation-model), Bazel creates a directory tree
+containing symlinks pointing to the runfiles. This stages the environment for
+the binary so it can access the runfiles during runtime.
 
 [See example](https://github.com/bazelbuild/examples/blob/master/rules/runfiles/execute.bzl)
 
 Runfiles can be added manually during rule creation and/or collected
-transitively from the rule's dependencies:
+transitively from the rule's dependencies. [`runfiles`](lib/runfiles.html)
+objects can be created by the `runfiles` method on the rule context,
+[`ctx.runfiles`](lib/ctx.html#runfiles):
 
 ```python
 def _rule_implementation(ctx):
   ...
-  transitive_runfiles = depset(transitive=
-    [dep.transitive_runtime_files for dep in ctx.attr.special_dependencies])
-
   runfiles = ctx.runfiles(
-      # Add some files manually.
+      # Optionally add some files manually.
       files = [ctx.file.some_data_file],
-      # Add transitive files from dependencies manually.
-      transitive_files = transitive_runfiles,
-      # Collect runfiles from the common locations: transitively from srcs,
-      # deps and data attributes.
+      # Optionally add files from some dependencies' providers manually.
+      transitive_files = [ctx.attr.something[SomeProviderInfo].depset_of_files],
+      # Optionally collect default_runfiles from the common locations:
+      # transitively from srcs, deps and data attributes.
       collect_default = True,
   )
+  # Optionally merge in runfiles from specific dependencies.
+  for dep in ctx.attr.special_dependencies:
+    runfiles = runfiles.merge(dep[DefaultInfo].default_runfiles)
   # Add a field named "runfiles" to the DefaultInfo provider in order to actually
   # create the symlink tree.
   return [DefaultInfo(runfiles=runfiles)]
@@ -614,7 +651,7 @@ of output files that may be requested together. For example, if a target
 `//pkg:mytarget` is of a rule type that has a `debug_files` output group, these
 files can be built by running
 `bazel build //pkg:mytarget --output_groups=debug_files`. See the [command line
-reference](https://docs.bazel.build/versions/master/command-line-reference.html#flag--output_groups)
+reference](../command-line-reference.html#flag--output_groups)
 for details on the `--output_groups` argument. Since non-predeclared outputs
 don't have labels, they can only be requested by appearing in the default
 outputs or an output group.
@@ -710,7 +747,8 @@ Test rules (but not necessarily their targets) must have names that end in
 Both kinds of rules must produce an executable output file (which may or may not
 be predeclared) that will be invoked by the `run` or `test` commands. To tell
 Bazel which of a rule's outputs to use as this executable, pass it as the
-`executable` argument of a returned `DefaultInfo` provider.
+`executable` argument of a returned [`DefaultInfo`](lib/DefaultInfo.html)
+provider.
 
 The action that generates this file must set the executable bit on the file. For
 a `ctx.actions.run()` or `ctx.actions.run_shell()` action this should be done by

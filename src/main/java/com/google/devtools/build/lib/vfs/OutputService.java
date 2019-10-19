@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.SourceArtifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
@@ -33,6 +34,7 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 
 /**
@@ -43,6 +45,34 @@ import javax.annotation.Nullable;
  * trees, and out-of-band insertion of metadata into the tree.
  */
 public interface OutputService {
+
+  /** Properties of the action file system implementation provided by this output service. */
+  enum ActionFileSystemType {
+
+    /** Action file system is disabled */
+    DISABLED,
+
+    /**
+     * The action file system implementation does not take over the output base but complements the
+     * file system by being able to stage remote outputs accessed as inputs by local actions, as
+     * used by Bazel.
+     */
+    STAGE_REMOTE_FILES,
+
+    /**
+     * The action file system implementation is fully featured in-memory file system implementation
+     * and takes full control of the output base, as used by Blaze.
+     */
+    IN_MEMORY_FILE_SYSTEM;
+
+    public boolean inMemoryFileSystem() {
+      return this == IN_MEMORY_FILE_SYSTEM;
+    }
+
+    public boolean isEnabled() {
+      return this != DISABLED;
+    }
+  }
 
   /**
    * @return the name of filesystem, akin to what you might see in /proc/mounts
@@ -73,7 +103,7 @@ public interface OutputService {
 
   /** Notify the output service of a completed action. */
   void finalizeAction(Action action, MetadataHandler metadataHandler)
-      throws IOException, EnvironmentalExecException;
+      throws IOException, EnvironmentalExecException, InterruptedException;
 
   /**
    * @return the BatchStat instance or null.
@@ -109,8 +139,8 @@ public interface OutputService {
   /** @return true iff the file actually lives on a remote server */
   boolean isRemoteFile(Artifact file);
 
-  default boolean supportsActionFileSystem() {
-    return false;
+  default ActionFileSystemType actionFileSystemType() {
+    return ActionFileSystemType.DISABLED;
   }
 
   /**
@@ -121,7 +151,8 @@ public interface OutputService {
    *     com.google.devtools.build.lib.pkgcache.PathPackageLocator})
    * @param inputArtifactData information about required inputs to the action
    * @param outputArtifacts required outputs of the action
-   * @return an action-scoped filesystem if {@link #supportsActionFileSystem} is true
+   * @param sourceArtifactFactory obtains source artifacts from source exec paths
+   * @return an action-scoped filesystem if {@link #supportsActionFileSystem} is not {@code NONE}
    */
   @Nullable
   default FileSystem createActionFileSystem(
@@ -130,7 +161,8 @@ public interface OutputService {
       String relativeOutputPath,
       ImmutableList<Root> sourceRoots,
       ActionInputMap inputArtifactData,
-      Iterable<Artifact> outputArtifacts) {
+      Iterable<Artifact> outputArtifacts,
+      Function<PathFragment, SourceArtifact> sourceArtifactFactory) {
     return null;
   }
 
@@ -143,8 +175,10 @@ public interface OutputService {
    * @param filesets The Fileset symlinks known for this action.
    */
   default void updateActionFileSystemContext(
-      FileSystem actionFileSystem, Environment env, MetadataConsumer consumer,
-      ImmutableMap<PathFragment, ImmutableList<FilesetOutputSymlink>> filesets)
+      FileSystem actionFileSystem,
+      Environment env,
+      MetadataConsumer consumer,
+      ImmutableMap<Artifact, ImmutableList<FilesetOutputSymlink>> filesets)
       throws IOException {}
 
   default boolean supportsPathResolverForArtifactValues() {
@@ -153,10 +187,13 @@ public interface OutputService {
 
   default ArtifactPathResolver createPathResolverForArtifactValues(
       PathFragment execRoot,
+      String relativeOutputPath,
       FileSystem fileSystem,
       ImmutableList<Root> pathEntries,
       ActionInputMap actionInputMap,
-      Map<Artifact, Collection<Artifact>> expandedArtifacts) {
+      Map<Artifact, Collection<Artifact>> expandedArtifacts,
+      Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesets)
+      throws IOException {
     throw new IllegalStateException("Path resolver not supported by this class");
   }
 }

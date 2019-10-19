@@ -24,11 +24,13 @@ import com.google.devtools.build.lib.bazel.rules.android.AndroidSdkRepositoryFun
 import com.google.devtools.build.lib.bazel.rules.android.AndroidSdkRepositoryRule;
 import com.google.devtools.build.lib.packages.util.LoadingMock;
 import com.google.devtools.build.lib.packages.util.MockCcSupport;
+import com.google.devtools.build.lib.packages.util.MockPythonSupport;
 import com.google.devtools.build.lib.packages.util.MockToolsConfig;
-import com.google.devtools.build.lib.rules.cpp.FdoSupportFunction;
-import com.google.devtools.build.lib.rules.cpp.FdoSupportValue;
+import com.google.devtools.build.lib.rules.cpp.CcSkyframeFdoSupportFunction;
+import com.google.devtools.build.lib.rules.cpp.CcSkyframeFdoSupportValue;
 import com.google.devtools.build.lib.rules.repository.LocalRepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
+import com.google.devtools.build.lib.rules.repository.ManagedDirectoriesKnowledge;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryLoaderFunction;
@@ -38,10 +40,8 @@ import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
-import com.google.devtools.common.options.InvocationPolicyEnforcer;
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -74,22 +74,17 @@ public abstract class AnalysisMock extends LoadingMock {
         .setExtraSkyFunctions(getSkyFunctions(directories));
   }
 
-  @Override
-  public InvocationPolicyEnforcer getInvocationPolicyEnforcer() {
-    return new InvocationPolicyEnforcer(TestConstants.TEST_INVOCATION_POLICY);
-  }
-
-  @Override
-  public String getDefaultsPackageContent() {
-    return createRuleClassProvider()
-        .getDefaultsPackageContent(getInvocationPolicyEnforcer().getInvocationPolicy());
-  }
-
   /**
    * This is called from test setup to create the mock directory layout needed to create the
    * configuration.
    */
-  public abstract void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException;
+  public void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException {
+    List<String> workspaceContents = getWorkspaceContents(mockToolsConfig);
+    setupMockClient(mockToolsConfig, workspaceContents);
+  }
+
+  public abstract void setupMockClient(
+      MockToolsConfig mockToolsConfig, List<String> getWorkspaceContents) throws IOException;
 
   /**
    * Returns the contents of WORKSPACE.
@@ -102,41 +97,58 @@ public abstract class AnalysisMock extends LoadingMock {
    */
   public abstract void setupMockWorkspaceFiles(Path embeddedBinariesRoot) throws IOException;
 
+  /** Creates a mock tools repository. */
+  public void setupMockToolsRepository(MockToolsConfig config) throws IOException {
+    // Do nothing by default.
+  }
+
   /** Returns the default factories for configuration fragments used in tests. */
   public abstract List<ConfigurationFragmentFactory> getDefaultConfigurationFragmentFactories();
 
   @Override
   public abstract ConfiguredRuleClassProvider createRuleClassProvider();
 
-  public abstract Collection<String> getOptionOverrides();
-
   public abstract boolean isThisBazel();
 
   public abstract MockCcSupport ccSupport();
 
-  public void setupCcSupport(MockToolsConfig config) throws IOException {
-    get().ccSupport().setup(config);
-  }
+  public abstract MockPythonSupport pySupport();
 
   public ImmutableMap<SkyFunctionName, SkyFunction> getSkyFunctions(BlazeDirectories directories) {
     // Some tests require the local_repository rule so we need the appropriate SkyFunctions.
-    RepositoryFunction localRepositoryFunction = new LocalRepositoryFunction();
-    ImmutableMap<String, RepositoryFunction> repositoryHandlers = ImmutableMap.of(
-        LocalRepositoryRule.NAME, localRepositoryFunction,
-        AndroidSdkRepositoryRule.NAME, new AndroidSdkRepositoryFunction(),
-        AndroidNdkRepositoryRule.NAME, new AndroidNdkRepositoryFunction());
+    ImmutableMap.Builder<String, RepositoryFunction> repositoryHandlers =
+        new ImmutableMap.Builder<String, RepositoryFunction>()
+            .put(LocalRepositoryRule.NAME, new LocalRepositoryFunction())
+            .put(AndroidSdkRepositoryRule.NAME, new AndroidSdkRepositoryFunction())
+            .put(AndroidNdkRepositoryRule.NAME, new AndroidNdkRepositoryFunction());
+
+    addExtraRepositoryFunctions(repositoryHandlers);
 
     return ImmutableMap.of(
         SkyFunctions.REPOSITORY_DIRECTORY,
         new RepositoryDelegatorFunction(
-            repositoryHandlers, null, new AtomicBoolean(true), ImmutableMap::of, directories),
+            repositoryHandlers.build(),
+            null,
+            new AtomicBoolean(true),
+            ImmutableMap::of,
+            directories,
+            ManagedDirectoriesKnowledge.NO_MANAGED_DIRECTORIES),
         SkyFunctions.REPOSITORY,
         new RepositoryLoaderFunction(),
-        FdoSupportValue.SKYFUNCTION,
-        new FdoSupportFunction(directories));
+        CcSkyframeFdoSupportValue.SKYFUNCTION,
+        new CcSkyframeFdoSupportFunction(directories));
   }
 
+  // Allow subclasses to add extra repository functions.
+  public abstract void addExtraRepositoryFunctions(
+      ImmutableMap.Builder<String, RepositoryFunction> repositoryHandlers);
+
+  /**
+   * Stub class for tests to extend in order to update a small amount of {@link AnalysisMock}
+   * functionality.
+   */
   public static class Delegate extends AnalysisMock {
+
     private final AnalysisMock delegate;
 
     public Delegate(AnalysisMock delegate) {
@@ -144,8 +156,9 @@ public abstract class AnalysisMock extends LoadingMock {
     }
 
     @Override
-    public void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException {
-      delegate.setupMockClient(mockToolsConfig);
+    public void setupMockClient(MockToolsConfig mockToolsConfig, List<String> workspaceContents)
+        throws IOException {
+      delegate.setupMockClient(mockToolsConfig, workspaceContents);
     }
 
     @Override
@@ -159,6 +172,11 @@ public abstract class AnalysisMock extends LoadingMock {
     }
 
     @Override
+    public void setupMockToolsRepository(MockToolsConfig config) throws IOException {
+      delegate.setupMockToolsRepository(config);
+    }
+
+    @Override
     public List<ConfigurationFragmentFactory> getDefaultConfigurationFragmentFactories() {
       return delegate.getDefaultConfigurationFragmentFactories();
     }
@@ -166,11 +184,6 @@ public abstract class AnalysisMock extends LoadingMock {
     @Override
     public ConfiguredRuleClassProvider createRuleClassProvider() {
       return delegate.createRuleClassProvider();
-    }
-
-    @Override
-    public InvocationPolicyEnforcer getInvocationPolicyEnforcer() {
-      return delegate.getInvocationPolicyEnforcer();
     }
 
     @Override
@@ -184,14 +197,20 @@ public abstract class AnalysisMock extends LoadingMock {
     }
 
     @Override
-    public Collection<String> getOptionOverrides() {
-      return delegate.getOptionOverrides();
+    public MockPythonSupport pySupport() {
+      return delegate.pySupport();
     }
 
     @Override
     public ImmutableMap<SkyFunctionName, SkyFunction> getSkyFunctions(
         BlazeDirectories directories) {
       return delegate.getSkyFunctions(directories);
+    }
+
+    @Override
+    public void addExtraRepositoryFunctions(
+        ImmutableMap.Builder<String, RepositoryFunction> repositoryHandlers) {
+      delegate.addExtraRepositoryFunctions(repositoryHandlers);
     }
   }
 }

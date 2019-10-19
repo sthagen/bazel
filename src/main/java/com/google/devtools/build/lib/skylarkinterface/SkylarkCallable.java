@@ -13,28 +13,30 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skylarkinterface;
 
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Annotates a Java method that can be called from Skylark.
+ * Annotates a Java method that can be called from Starlark.
  *
  * <p>This annotation is only allowed to appear on methods of classes that are directly annotated
  * with {@link SkylarkModule} or {@link SkylarkGlobalLibrary}. Since subtypes can't add new
- * Skylark-accessible methods unless they have their own {@code @SkylarkModule} annotation, this
- * implies that you can always determine the complete set of Skylark entry points for a given {@link
- * SkylarkValue} type by looking at the ancestor class or interface from which it inherits its
- * {@code @SkylarkModule}.
+ * Starlark-accessible methods unless they have their own {@code @SkylarkModule} annotation, this
+ * implies that you can always determine the complete set of Starlark entry points for a given
+ * {@link StarlarkValue} type by looking at the ancestor class or interface from which it inherits
+ * its {@code @SkylarkModule}.
  *
  * <p>If a method is annotated with {@code @SkylarkCallable}, it is not allowed to have any
- * overloads or hide any static or default methods. Overriding is allowed, but the {@code
- * @SkylarkCallable} annotation itself must not be repeated on the override. This ensures that given
- * a method, we can always determine its corresponding {@code @SkylarkCallable} annotation, if it
- * has one, by scanning all methods of the same name in its class hierarchy, without worrying about
- * complications like overloading or generics. The lookup functionality is implemented by {@link
- * SkylarkInterfaceUtils#getSkylarkCallable}.
+ * overloads or hide any static or default methods. Overriding is allowed, but the
+ * {@code @SkylarkCallable} annotation itself must not be repeated on the override. This ensures
+ * that given a method, we can always determine its corresponding {@code @SkylarkCallable}
+ * annotation, if it has one, by scanning all methods of the same name in its class hierarchy,
+ * without worrying about complications like overloading or generics. The lookup functionality is
+ * implemented by {@link SkylarkInterfaceUtils#getSkylarkCallable}.
  *
  * <p>Methods having this annotation are required to satisfy the following (enforced by an
  * annotation processor):
@@ -44,33 +46,33 @@ import java.lang.annotation.Target;
  *   <li>If structField=true, there must be zero user-supplied parameters.
  *   <li>The underlying java method's parameters must be supplied in the following order:
  *       <pre>method([positionals]*[named args]*(extra positionals list)(extra kwargs)
- *       (Location)(FuncallExpression)(Envrionment)(SkylarkSemantics))</pre>
+ *       (Location)(FuncallExpression)(StarlarkThread)(StarlarkSemantics))</pre>
  *       where (extra positionals list) is a SkylarkList if extraPositionals is defined, (extra
  *       kwargs) is a SkylarkDict if extraKeywords is defined, and Location, FuncallExpression,
- *       Environment, and SkylarkSemantics are supplied by the interpreter if and only if
- *       useLocation, useAst, useEnvironment, and useSkylarkSemantics are specified, respectively.
+ *       StarlarkThread, and StarlarkSemantics are supplied by the interpreter if and only if
+ *       useLocation, useAst, useStarlarkThread, and useStarlarkSemantics are specified,
+ *       respectively.
  *   <li>The number of method parameters much match the number of annotation-declared parameters
  *       plus the number of interpreter-supplied parameters.
  * </ul>
  */
+// TODO(adonovan): rename to StarlarkMethod (?)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface SkylarkCallable {
 
-  /**
-   * Name of the method, as exposed to Skylark.
-   */
+  /** Name of the method, as exposed to Starlark. */
   String name();
 
   /**
-   * The documentation text in Skylark. It can contain HTML tags for special formatting.
+   * The documentation text in Starlark. It can contain HTML tags for special formatting.
    *
    * <p>It is allowed to be empty only if {@link #documented()} is false.
    */
   String doc() default "";
 
   /**
-   * If true, the function will appear in the Skylark documentation. Set this to false if the
+   * If true, the function will appear in the Starlark documentation. Set this to false if the
    * function is experimental or an overloading and doesn't need to be documented.
    */
   boolean documented() default true;
@@ -118,13 +120,13 @@ public @interface SkylarkCallable {
 
   /**
    * If true, indicates that the class containing the annotated method has the ability to be called
-   * from skylark (as if it were a function) and that the annotated method should be invoked when
+   * from Starlark (as if it were a function) and that the annotated method should be invoked when
    * this occurs.
    *
-   * <p>A class may only have one method with selfCall set to true.</p>
+   * <p>A class may only have one method with selfCall set to true.
    *
-   * <p>A method with selfCall=true must not be a structField, and must have name specified
-   * (used for descriptive errors if, for example, there are missing arguments).</p>
+   * <p>A method with selfCall=true must not be a structField, and must have name specified (used
+   * for descriptive errors if, for example, there are missing arguments).
    */
   boolean selfCall() default false;
 
@@ -153,18 +155,32 @@ public @interface SkylarkCallable {
   boolean useAst() default false;
 
   /**
-   * If true, the Skylark Environment will be passed as an argument of the annotated function.
-   * (Thus, the annotated method signature must contain Environment as a parameter. See the
-   * interface-level javadoc for details.)
+   * If true, the StarlarkThread will be passed as an argument of the annotated function. (Thus, the
+   * annotated method signature must contain StarlarkThread as a parameter. See the interface-level
+   * javadoc for details.)
    *
    * <p>This is incompatible with structField=true. If structField is true, this must be false.
    */
-  boolean useEnvironment() default false;
+  boolean useStarlarkThread() default false;
 
   /**
-   * If true, the Skylark semantics will be passed as an argument of the annotated function. (Thus,
-   * the annotated method signature must contain SkylarkSemantics as a parameter. See the
+   * If true, the Starlark semantics will be passed as an argument of the annotated function. (Thus,
+   * the annotated method signature must contain StarlarkSemantics as a parameter. See the
    * interface-level javadoc for details.)
    */
-  boolean useSkylarkSemantics() default false;
+  boolean useStarlarkSemantics() default false;
+
+  /**
+   * If not NONE, the annotated method will only be callable if the given semantic flag is true.
+   * Note that at most one of {@link #enableOnlyWithFlag} and {@link #disableWithFlag} can be
+   * non-NONE.
+   */
+  StarlarkSemantics.FlagIdentifier enableOnlyWithFlag() default FlagIdentifier.NONE;
+
+  /**
+   * If not NONE, the annotated method will only be callable if the given semantic flag is false.
+   * Note that at most one of {@link #enableOnlyWithFlag} and {@link #disableWithFlag} can be
+   * non-NONE.
+   */
+  StarlarkSemantics.FlagIdentifier disableWithFlag() default FlagIdentifier.NONE;
 }

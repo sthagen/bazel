@@ -38,14 +38,12 @@ public abstract class AbstractClassCacheTest {
 
   final Path libraryJar = getPathFromSystemProperty("classcache.test.Library");
   final ImmutableList<String> libraryJarPositives =
-      ImmutableList.<String>builder()
-          .add("Library")
+      ImmutableList.<String>builder().add("Library")
           .addAll(
-              IntStream.range(1, 12)
+              IntStream.range(1, 13)
                   .mapToObj(i -> "Library$Class" + i)
                   .collect(ImmutableList.toImmutableList()))
-          .build()
-          .stream()
+          .build().stream()
           .map(s -> PACKAGE_NAME + s)
           .collect(ImmutableList.toImmutableList());
 
@@ -86,6 +84,8 @@ public abstract class AbstractClassCacheTest {
           PACKAGE_NAME + "LibraryInterface$Two",
           PACKAGE_NAME + "LibraryInterface$InterfaceFoo",
           PACKAGE_NAME + "LibraryInterface$InterfaceBar");
+
+  final Path libraryModuleInfoJar = getPathFromSystemProperty("classcache.test.LibraryModuleInfo");
 
   static Path getPathFromSystemProperty(String propertyName) {
     String path =

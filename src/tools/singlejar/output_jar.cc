@@ -35,6 +35,7 @@
 
 #endif  // _WIN32
 
+#include "src/main/cpp/util/path_platform.h"
 #include "src/tools/singlejar/combiners.h"
 #include "src/tools/singlejar/diag.h"
 #include "src/tools/singlejar/input_jar.h"
@@ -76,7 +77,7 @@ OutputJar::OutputJar()
       "Created-By: singlejar\r\n");
 }
 
-static std::string Basename(const std::string& path) {
+static std::string Basename(const std::string &path) {
   size_t pos = path.rfind('/');
   if (pos == std::string::npos) {
     return path;
@@ -99,6 +100,8 @@ int OutputJar::Doit(Options *options) {
                            EntryInfo{&build_properties_});
   }
 
+  // TODO(b/28294322): do we need to resolve the path to be absolute or
+  // canonical?
   build_properties_.AddProperty("build.target", options_->output_jar.c_str());
   if (options_->verbose) {
     fprintf(stderr, "combined_file_name=%s\n", options_->output_jar.c_str());
@@ -192,15 +195,24 @@ int OutputJar::Doit(Options *options) {
 
   for (auto &rdesc : options_->resources) {
     // A resource description is either NAME or PATH:NAME
-    std::size_t colon = rdesc.find_first_of(':');
+    // Find the last ':' instead of the first because Windows uses ':' as volume
+    // separator in absolute path.
+    std::size_t colon = rdesc.find_last_of(':');
     if (0 == colon) {
       diag_errx(1, "%s:%d: Bad resource description %s", __FILE__, __LINE__,
                 rdesc.c_str());
     }
-    if (std::string::npos == colon) {
-      ClasspathResource(rdesc, rdesc);
-    } else {
+    bool shouldSplit = colon != std::string::npos;
+#ifdef _WIN32
+    // If colon points to volume separator, don't split.
+    if (colon == 1 && blaze_util::IsAbsolute(rdesc)) {
+      shouldSplit = false;
+    }
+#endif
+    if (shouldSplit) {
       ClasspathResource(rdesc.substr(colon + 1), rdesc.substr(0, colon));
+    } else {
+      ClasspathResource(rdesc, rdesc);
     }
   }
 
@@ -264,21 +276,43 @@ OutputJar::~OutputJar() {
 
 // Try to perform I/O in units of this size.
 // (128KB is the default max request size for fuse filesystems.)
-static const size_t kBufferSize = 128<<10;
+static constexpr size_t kBufferSize = 128 << 10;
 
 bool OutputJar::Open() {
   if (file_) {
     diag_errx(1, "%s:%d: Cannot open output archive twice", __FILE__, __LINE__);
   }
 
-  // Set execute bits since we may produce an executable output file.
   int mode = O_CREAT | O_WRONLY | O_TRUNC;
+
 #ifdef _WIN32
+  std::wstring wpath;
+  std::string error;
+  if (!blaze_util::AsAbsoluteWindowsPath(path(), &wpath, &error)) {
+    diag_warn("%s:%d: AsAbsoluteWindowsPath failed: %s", __FILE__, __LINE__,
+              error.c_str());
+    return false;
+  }
+
+  HANDLE hFile = CreateFileW(wpath.c_str(), GENERIC_READ | GENERIC_WRITE,
+                             // Must share for reading, otherwise
+                             // symlink-following file existence checks (e.g.
+                             // java.nio.file.Files.exists()) fail.
+                             FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+  if (hFile == INVALID_HANDLE_VALUE) {
+    diag_warn("%s:%d: CreateFileW failed for %S", __FILE__, __LINE__,
+              wpath.c_str());
+    return false;
+  }
+
   // Make sure output file is in binary mode, or \r\n will be converted to \n.
   mode |= _O_BINARY;
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(hFile), mode);
+#else
+  // Set execute bits since we may produce an executable output file.
+  int fd = open(path(), mode, 0777);
 #endif
 
-  int fd = open(path(), mode, 0777);
   if (fd < 0) {
     diag_warn("%s:%d: %s", __FILE__, __LINE__, path());
     return false;
@@ -297,6 +331,9 @@ bool OutputJar::Open() {
   }
   return true;
 }
+
+// January 1, 2010 as a DOS date
+static const uint16_t kDefaultDate = 30 << 9 | 1 << 5 | 1;
 
 bool OutputJar::AddJar(int jar_path_index) {
   const std::string &input_jar_path =
@@ -331,7 +368,7 @@ bool OutputJar::AddJar(int jar_path_index) {
 
     bool include_entry = true;
     if (!options_->include_prefixes.empty()) {
-      for (auto& prefix : options_->include_prefixes) {
+      for (auto &prefix : options_->include_prefixes) {
         if ((include_entry =
                  (prefix.size() <= file_name_length &&
                   0 == strncmp(file_name, prefix.c_str(), prefix.size())))) {
@@ -357,7 +394,7 @@ bool OutputJar::AddJar(int jar_path_index) {
         known_members_.emplace(service_path, EntryInfo{service_handler});
       }
     } else {
-      ExtraHandler(jar_entry, &input_jar_aux_label);
+      ExtraHandler(input_jar_path, jar_entry, &input_jar_aux_label);
     }
 
     if (options_->check_desugar_deps &&
@@ -375,7 +412,7 @@ bool OutputJar::AddJar(int jar_path_index) {
     auto got =
         known_members_.emplace(std::string(file_name, file_name_length),
                                EntryInfo{is_file ? nullptr : &null_combiner_,
-                                         is_file ? jar_path_index: -1});
+                                         is_file ? jar_path_index : -1});
     if (!got.second) {
       auto &entry_info = got.first->second;
       // Handle special entries (the ones that have a combiner).
@@ -399,6 +436,20 @@ bool OutputJar::AddJar(int jar_path_index) {
       } else {
         duplicate_entries_++;
         continue;
+      }
+    }
+
+    // Add any missing parent directory entries (first) if requested.
+    if (options_->add_missing_directories) {
+      // Ignore very last character in case this entry is a directory itself.
+      for (size_t pos = 0; pos < static_cast<size_t>(file_name_length - 1);
+           ++pos) {
+        if (file_name[pos] == '/') {
+          std::string dir(file_name, 0, pos + 1);
+          if (NewEntry(dir)) {
+            WriteDirEntry(dir, nullptr, 0);
+          }
+        }
       }
     }
 
@@ -450,7 +501,7 @@ bool OutputJar::AddJar(int jar_path_index) {
     off64_t local_header_offset = Position();
 
     // When normalize_timestamps is set, entry's timestamp is to be set to
-    // 01/01/1980 00:00:00 (or to 01/01/1980 00:00:02, if an entry is a .class
+    // 01/01/2010 00:00:00 (or to 01/01/2010 00:00:02, if an entry is a .class
     // file). This is somewhat expensive because we have to copy the local
     // header to memory as input jar is memory mapped as read-only. Try to copy
     // as little as possible.
@@ -462,7 +513,7 @@ bool OutputJar::AddJar(int jar_path_index) {
         normalized_time = 1;
       }
       lh_field_to_remove = lh->unix_time_extra_field();
-      fix_timestamp = jar_entry->last_mod_file_date() != 33 ||
+      fix_timestamp = jar_entry->last_mod_file_date() != kDefaultDate ||
                       jar_entry->last_mod_file_time() != normalized_time ||
                       lh_field_to_remove != nullptr;
     }
@@ -489,7 +540,7 @@ bool OutputJar::AddJar(int jar_path_index) {
       } else {
         memcpy(lh_new, lh, lh_size);
       }
-      lh_new->last_mod_file_date(33);
+      lh_new->last_mod_file_date(kDefaultDate);
       lh_new->last_mod_file_time(normalized_time);
       // Now write these few bytes and adjust read/write positions accordingly.
       if (!WriteBytes(lh_new, lh_new->size())) {
@@ -549,9 +600,9 @@ void OutputJar::WriteEntry(void *buffer) {
   // https://msdn.microsoft.com/en-us/library/9kkf9tah.aspx
   // ("32-Bit Windows Time/Date Formats")
   if (options_->normalize_timestamps) {
-    // Regular "normalized" timestamp is 01/01/1980 00:00:00, while for the
-    // .class file it is 01/01/1980 00:00:02
-    entry->last_mod_file_date(33);
+    // Regular "normalized" timestamp is 01/01/2010 00:00:00, while for the
+    // .class file it is 01/01/2010 00:00:02
+    entry->last_mod_file_date(kDefaultDate);
     entry->last_mod_file_time(
         ends_with(entry->file_name(), entry->file_name_length(), ".class") ? 1
                                                                            : 0);
@@ -757,7 +808,7 @@ void OutputJar::AppendToDirectoryBuffer(const CDH *cdh, off64_t lh_pos,
   out_cdh->local_header_offset32(lh_pos_needs64 ? 0xFFFFFFFF : lh_pos);
   if (fix_timestamp) {
     out_cdh->last_mod_file_time(normalized_time);
-    out_cdh->last_mod_file_date(33);
+    out_cdh->last_mod_file_date(kDefaultDate);
   }
 }
 
@@ -814,7 +865,7 @@ bool OutputJar::Close() {
     }
     {
       ECD64Locator *ecd64_locator =
-        reinterpret_cast<ECD64Locator *>(ReserveCdh(sizeof(ECD64Locator)));
+          reinterpret_cast<ECD64Locator *>(ReserveCdh(sizeof(ECD64Locator)));
       ecd64_locator->signature();
       ecd64_locator->ecd64_offset(output_position + cen_size);
       ecd64_locator->total_disks(1);
@@ -912,7 +963,7 @@ ssize_t OutputJar::AppendFile(int in_fd, off64_t offset, size_t count) {
   if (count == 0) {
     return 0;
   }
-  std::unique_ptr<void, decltype(free)*> buffer(malloc(kBufferSize), free);
+  std::unique_ptr<void, decltype(free) *> buffer(malloc(kBufferSize), free);
   if (buffer == nullptr) {
     diag_err(1, "%s:%d: malloc", __FILE__, __LINE__);
   }
@@ -966,4 +1017,5 @@ bool OutputJar::WriteBytes(const void *buffer, size_t count) {
   return written == count;
 }
 
-void OutputJar::ExtraHandler(const CDH *, const std::string *) {}
+void OutputJar::ExtraHandler(const std::string &input_jar_path, const CDH *,
+                             const std::string *) {}

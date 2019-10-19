@@ -38,7 +38,6 @@ import com.google.devtools.build.android.Converters.PathConverter;
 import com.google.devtools.build.android.Converters.SerializedAndroidDataListConverter;
 import com.google.devtools.build.android.Converters.UnvalidatedAndroidDataConverter;
 import com.google.devtools.build.android.Converters.VariantTypeConverter;
-import com.google.devtools.build.android.SplitConfigurationFilter.UnrecognizedSplitsException;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Option;
@@ -264,7 +263,7 @@ public class AndroidResourceProcessingAction {
         effectTags = {OptionEffectTag.UNKNOWN},
         help =
             "Variant configuration type for packaging the resources."
-                + " Acceptible values DEFAULT, LIBRARY, ANDROID_TEST, UNIT_TEST")
+                + " Acceptable values DEFAULT, LIBRARY, ANDROID_TEST, UNIT_TEST")
     public VariantType packageType;
 
     @Option(
@@ -362,9 +361,10 @@ public class AndroidResourceProcessingAction {
   public static void main(String[] args) throws Exception {
     final Stopwatch timer = Stopwatch.createStarted();
     OptionsParser optionsParser =
-        OptionsParser.newOptionsParser(Options.class, AaptConfigOptions.class);
-    optionsParser.enableParamsFileSupport(
-        new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()));
+        OptionsParser.builder()
+            .optionsClasses(Options.class, AaptConfigOptions.class)
+            .argsPreProcessor(new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()))
+            .build();
     optionsParser.parseAndExitUponError(args);
     aaptConfigOptions = optionsParser.getOptions(AaptConfigOptions.class);
     options = optionsParser.getOptions(Options.class);
@@ -475,7 +475,6 @@ public class AndroidResourceProcessingAction {
               options.packageForR,
               new FlagAaptOptions(aaptConfigOptions),
               aaptConfigOptions.resourceConfigs,
-              aaptConfigOptions.splits,
               processedData,
               resourceData,
               generatedSources,
@@ -523,10 +522,7 @@ public class AndroidResourceProcessingAction {
     } catch (MergingException e) {
       logger.log(java.util.logging.Level.SEVERE, "Error during merging resources", e);
       throw e;
-    } catch (IOException
-        | InterruptedException
-        | LoggedErrorException
-        | UnrecognizedSplitsException e) {
+    } catch (IOException | InterruptedException | LoggedErrorException e) {
       logger.log(java.util.logging.Level.SEVERE, "Error during processing resources", e);
       throw e;
     } catch (AndroidManifestProcessor.ManifestProcessingException e) {

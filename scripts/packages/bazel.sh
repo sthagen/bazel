@@ -61,7 +61,8 @@ function get_realpath() {
     fi
 }
 
-export BAZEL_REAL="$(dirname "$(get_realpath "${BASH_SOURCE[0]}")")/bazel-real"
+BAZEL_REAL="$(dirname "$(get_realpath "${BASH_SOURCE[0]}")")/bazel-real"
+export BAZEL_REAL
 
 WORKSPACE_DIR="${PWD}"
 while [[ "${WORKSPACE_DIR}" != / ]]; do
@@ -75,7 +76,7 @@ readonly WORKSPACE_DIR
 if [[ -e "${WORKSPACE_DIR}/WORKSPACE" ]]; then
   readonly WRAPPER="${WORKSPACE_DIR}/tools/bazel"
 
-  if [[ -x "${WRAPPER}" ]]; then
+  if [[ -x "${WRAPPER}" && ! -d "${WRAPPER}" ]]; then
     exec -a "$0" "${WRAPPER}" "$@"
   fi
 fi

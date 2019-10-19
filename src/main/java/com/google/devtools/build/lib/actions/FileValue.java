@@ -15,7 +15,9 @@ package com.google.devtools.build.lib.actions;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Interner;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
@@ -49,18 +51,9 @@ import javax.annotation.Nullable;
 @Immutable
 @ThreadSafe
 public abstract class FileValue implements SkyValue {
-  // Depends non-hermetically on package path.
-  public static final SkyFunctionName FILE = SkyFunctionName.createNonHermetic("FILE");
-
-  /**
-   * Exists to accommodate the control flow of {@link ActionMetadataHandler#getMetadata}.
-   *
-   * <p>{@link ActionMetadataHandler#getMetadata} always checks {@link
-   * ActionMetadataHandler#outputArtifactData} before checking {@link
-   * ActionMetadataHandler#additionalOutputData} so some placeholder value is needed to allow an
-   * injected {@link FileArtifactValue} to be returned.
-   */
-  @AutoCodec public static final FileValue PLACEHOLDER = new PlaceholderFileValue();
+  // Depends non-hermetically on package path, but that is under the control of a flag, so use
+  // semi-hermetic.
+  public static final SkyFunctionName FILE = SkyFunctionName.createSemiHermetic("FILE");
 
   public boolean exists() {
     return realFileStateValue().getType() != FileStateType.NONEXISTENT;
@@ -81,7 +74,7 @@ public abstract class FileValue implements SkyValue {
   }
 
   /**
-   * Returns true if this value corresponds to a file or symlink to an existing special file. If so,
+   * Returns true if this value corresponds to a special file or symlink to a special file. If so,
    * its parent directory is guaranteed to exist.
    */
   public boolean isSpecialFile() {
@@ -95,6 +88,18 @@ public abstract class FileValue implements SkyValue {
   public boolean isDirectory() {
     return realFileStateValue().getType() == FileStateType.DIRECTORY;
   }
+
+  /**
+   * If {@code !isFile() && exists()}, returns an ordered list of the {@link RootedPath}s that were
+   * considered when determining {@code realRootedPath()}.
+   *
+   * <p>This information is used to detect unbounded symlink expansions.
+   *
+   * <p>As a memory optimization, we don't store this information when {@code isFile() || !exists()}
+   * -- this information is only needed for resolving ancestors, and an existing file or a
+   * non-existent directory has no descendants, by definition.
+   */
+  public abstract ImmutableList<RootedPath> logicalChainDuringResolution();
 
   /**
    * Returns the real rooted path of the file, taking ancestor symlinks into account. For example,
@@ -154,30 +159,67 @@ public abstract class FileValue implements SkyValue {
     }
   }
 
-  /** Only intended to be used by {@link FileFunction}. Should not be used for symlink cycles. */
+  /**
+   * Only intended to be used by {@link com.google.devtools.build.lib.skyframe.FileFunction}. Should
+   * not be used for symlink cycles.
+   */
   public static FileValue value(
-      RootedPath rootedPath,
-      FileStateValue fileStateValue,
+      ImmutableList<RootedPath> logicalChainDuringResolution,
+      RootedPath originalRootedPath,
+      FileStateValue fileStateValueFromAncestors,
       RootedPath realRootedPath,
       FileStateValue realFileStateValue) {
-    if (rootedPath.equals(realRootedPath)) {
-      Preconditions.checkState(fileStateValue.getType() != FileStateType.SYMLINK,
-          "rootedPath: %s, fileStateValue: %s, realRootedPath: %s, realFileStateValue: %s",
-          rootedPath, fileStateValue, realRootedPath, realFileStateValue);
-      return new RegularFileValue(rootedPath, fileStateValue);
-    } else {
-      if (fileStateValue.getType() == FileStateType.SYMLINK) {
-        return new SymlinkFileValue(realRootedPath, realFileStateValue,
-            fileStateValue.getSymlinkTarget());
-      } else {
-        return new DifferentRealPathFileValue(
-            realRootedPath, realFileStateValue);
-      }
+    if (originalRootedPath.equals(realRootedPath)) {
+      Preconditions.checkState(
+          fileStateValueFromAncestors.getType() != FileStateType.SYMLINK,
+          "originalRootedPath: %s, fileStateValueFromAncestors: %s, "
+              + "realRootedPath: %s, fileStateValueFromAncestors: %s",
+          originalRootedPath,
+          fileStateValueFromAncestors,
+          realRootedPath,
+          realFileStateValue);
+      Preconditions.checkState(
+          !realFileStateValue.getType().exists()
+              || realFileStateValue.getType().isFile()
+              || Iterables.getOnlyElement(logicalChainDuringResolution).equals(originalRootedPath),
+          "logicalChainDuringResolution: %s, originalRootedPath: %s",
+          logicalChainDuringResolution,
+          originalRootedPath);
+      return new RegularFileValue(originalRootedPath, fileStateValueFromAncestors);
     }
+
+    boolean shouldStoreChain;
+    switch (realFileStateValue.getType()) {
+      case REGULAR_FILE:
+      case SPECIAL_FILE:
+      case NONEXISTENT:
+        shouldStoreChain = false;
+        break;
+      case SYMLINK:
+      case DIRECTORY:
+        shouldStoreChain = true;
+        break;
+      default:
+        throw new IllegalStateException(realFileStateValue.getType().toString());
+    }
+
+    if (fileStateValueFromAncestors.getType() == FileStateType.SYMLINK) {
+      PathFragment symlinkTarget = fileStateValueFromAncestors.getSymlinkTarget();
+      return shouldStoreChain
+          ? new SymlinkFileValueWithStoredChain(
+              realRootedPath, realFileStateValue, logicalChainDuringResolution, symlinkTarget)
+          : new SymlinkFileValueWithoutStoredChain(
+              realRootedPath, realFileStateValue, symlinkTarget);
+    }
+
+    return shouldStoreChain
+        ? new DifferentRealPathFileValueWithStoredChain(
+            realRootedPath, realFileStateValue, logicalChainDuringResolution)
+        : new DifferentRealPathFileValueWithoutStoredChain(realRootedPath, realFileStateValue);
   }
 
   /**
-   * Implementation of {@link FileValue} for files whose fully resolved path is the same as the
+   * Implementation of {@link FileValue} for paths whose fully resolved path is the same as the
    * requested path. For example, this is the case for the path "foo/bar/baz" if neither 'foo' nor
    * 'foo/bar' nor 'foo/bar/baz' are symlinks.
    */
@@ -191,6 +233,11 @@ public abstract class FileValue implements SkyValue {
     public RegularFileValue(RootedPath rootedPath, FileStateValue fileStateValue) {
       this.rootedPath = Preconditions.checkNotNull(rootedPath);
       this.fileStateValue = Preconditions.checkNotNull(fileStateValue);
+    }
+
+    @Override
+    public ImmutableList<RootedPath> logicalChainDuringResolution() {
+      return ImmutableList.of(rootedPath);
     }
 
     @Override
@@ -208,7 +255,7 @@ public abstract class FileValue implements SkyValue {
       if (obj == null) {
         return false;
       }
-      if (obj.getClass() != RegularFileValue.class) {
+      if (!(obj instanceof RegularFileValue)) {
         return false;
       }
       RegularFileValue other = (RegularFileValue) obj;
@@ -222,23 +269,86 @@ public abstract class FileValue implements SkyValue {
 
     @Override
     public String toString() {
-      return rootedPath + ", " + fileStateValue;
+      return String.format("non-symlink (path=%s, state=%s)", rootedPath, fileStateValue);
     }
   }
 
   /**
-   * Base class for {@link FileValue}s for files whose fully resolved path is different than the
-   * requested path. For example, this is the case for the path "foo/bar/baz" if at least one of
-   * 'foo', 'foo/bar', or 'foo/bar/baz' is a symlink.
+   * Implementation of {@link FileValue} for paths whose fully resolved path is different than the
+   * requested path, but the path itself is not a symlink. For example, this is the case for the
+   * path "foo/bar/baz" if at least one of {'foo', 'foo/bar'} is a symlink but 'foo/bar/baz' not.
    */
   @AutoCodec.VisibleForSerialization
   @AutoCodec
-  public static class DifferentRealPathFileValue extends FileValue {
+  public static class DifferentRealPathFileValueWithStoredChain extends FileValue {
+    protected final RootedPath realRootedPath;
+    protected final FileStateValue realFileStateValue;
+    protected final ImmutableList<RootedPath> logicalChainDuringResolution;
 
+    public DifferentRealPathFileValueWithStoredChain(
+        RootedPath realRootedPath,
+        FileStateValue realFileStateValue,
+        ImmutableList<RootedPath> logicalChainDuringResolution) {
+      this.realRootedPath = Preconditions.checkNotNull(realRootedPath);
+      this.realFileStateValue = Preconditions.checkNotNull(realFileStateValue);
+      this.logicalChainDuringResolution = logicalChainDuringResolution;
+    }
+
+    @Override
+    public RootedPath realRootedPath() {
+      return realRootedPath;
+    }
+
+    @Override
+    public FileStateValue realFileStateValue() {
+      return realFileStateValue;
+    }
+
+    @Override
+    public ImmutableList<RootedPath> logicalChainDuringResolution() {
+      return logicalChainDuringResolution;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (obj == null) {
+        return false;
+      }
+      // Note that we can't use 'instanceof' because this class has a subclass.
+      if (obj.getClass() != DifferentRealPathFileValueWithStoredChain.class) {
+        return false;
+      }
+      DifferentRealPathFileValueWithStoredChain other =
+          (DifferentRealPathFileValueWithStoredChain) obj;
+      return realRootedPath.equals(other.realRootedPath)
+          && realFileStateValue.equals(other.realFileStateValue)
+          && logicalChainDuringResolution.equals(other.logicalChainDuringResolution);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(realRootedPath, realFileStateValue, logicalChainDuringResolution);
+    }
+
+    @Override
+    public String toString() {
+      return String.format(
+          "symlink ancestor (real_path=%s, real_state=%s, chain=%s)",
+          realRootedPath, realFileStateValue, logicalChainDuringResolution);
+    }
+  }
+
+  /**
+   * Same as {@link DifferentRealPathFileValueWithStoredChain}, except without {@link
+   * #logicalChainDuringResolution}.
+   */
+  @AutoCodec.VisibleForSerialization
+  @AutoCodec
+  public static class DifferentRealPathFileValueWithoutStoredChain extends FileValue {
     protected final RootedPath realRootedPath;
     protected final FileStateValue realFileStateValue;
 
-    public DifferentRealPathFileValue(
+    public DifferentRealPathFileValueWithoutStoredChain(
         RootedPath realRootedPath, FileStateValue realFileStateValue) {
       this.realRootedPath = Preconditions.checkNotNull(realRootedPath);
       this.realFileStateValue = Preconditions.checkNotNull(realFileStateValue);
@@ -255,14 +365,21 @@ public abstract class FileValue implements SkyValue {
     }
 
     @Override
+    public ImmutableList<RootedPath> logicalChainDuringResolution() {
+      throw new IllegalStateException(this.toString());
+    }
+
+    @Override
     public boolean equals(Object obj) {
       if (obj == null) {
         return false;
       }
-      if (obj.getClass() != DifferentRealPathFileValue.class) {
+      // Note that we can't use 'instanceof' because this class has a subclass.
+      if (obj.getClass() != DifferentRealPathFileValueWithoutStoredChain.class) {
         return false;
       }
-      DifferentRealPathFileValue other = (DifferentRealPathFileValue) obj;
+      DifferentRealPathFileValueWithoutStoredChain other =
+          (DifferentRealPathFileValueWithoutStoredChain) obj;
       return realRootedPath.equals(other.realRootedPath)
           && realFileStateValue.equals(other.realFileStateValue);
     }
@@ -274,18 +391,79 @@ public abstract class FileValue implements SkyValue {
 
     @Override
     public String toString() {
-      return realRootedPath + ", " + realFileStateValue + " (symlink ancestor)";
+      return String.format(
+          "symlink ancestor (real_path=%s, real_state=%s)", realRootedPath, realFileStateValue);
     }
   }
 
-  /** Implementation of {@link FileValue} for files that are symlinks. */
-  @VisibleForTesting
+  /** Implementation of {@link FileValue} for paths that are themselves symlinks. */
+  @AutoCodec.VisibleForSerialization
   @AutoCodec
-  public static final class SymlinkFileValue extends DifferentRealPathFileValue {
+  public static final class SymlinkFileValueWithStoredChain
+      extends DifferentRealPathFileValueWithStoredChain {
     private final PathFragment linkTarget;
 
     @VisibleForTesting
-    public SymlinkFileValue(
+    public SymlinkFileValueWithStoredChain(
+        RootedPath realRootedPath,
+        FileStateValue realFileStateValue,
+        ImmutableList<RootedPath> logicalChainDuringResolution,
+        PathFragment linkTarget) {
+      super(realRootedPath, realFileStateValue, logicalChainDuringResolution);
+      this.linkTarget = linkTarget;
+    }
+
+    @Override
+    public boolean isSymlink() {
+      return true;
+    }
+
+    @Override
+    public PathFragment getUnresolvedLinkTarget() {
+      return linkTarget;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (obj == null) {
+        return false;
+      }
+      if (!(obj instanceof SymlinkFileValueWithStoredChain)) {
+        return false;
+      }
+      SymlinkFileValueWithStoredChain other = (SymlinkFileValueWithStoredChain) obj;
+      return realRootedPath.equals(other.realRootedPath)
+          && realFileStateValue.equals(other.realFileStateValue)
+          && logicalChainDuringResolution.equals(other.logicalChainDuringResolution)
+          && linkTarget.equals(other.linkTarget);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(
+          realRootedPath, realFileStateValue, logicalChainDuringResolution, linkTarget);
+    }
+
+    @Override
+    public String toString() {
+      return String.format(
+          "symlink (real_path=%s, real_state=%s, link_value=%s, chain=%s)",
+          realRootedPath, realFileStateValue, linkTarget, logicalChainDuringResolution);
+    }
+  }
+
+  /**
+   * Same as {@link SymlinkFileValueWithStoredChain}, except without {@link
+   * #logicalChainDuringResolution}.
+   */
+  @VisibleForTesting
+  @AutoCodec
+  public static final class SymlinkFileValueWithoutStoredChain
+      extends DifferentRealPathFileValueWithoutStoredChain {
+    private final PathFragment linkTarget;
+
+    @VisibleForTesting
+    public SymlinkFileValueWithoutStoredChain(
         RootedPath realRootedPath, FileStateValue realFileStateValue, PathFragment linkTarget) {
       super(realRootedPath, realFileStateValue);
       this.linkTarget = linkTarget;
@@ -306,10 +484,10 @@ public abstract class FileValue implements SkyValue {
       if (obj == null) {
         return false;
       }
-      if (obj.getClass() != SymlinkFileValue.class) {
+      if (!(obj instanceof SymlinkFileValueWithoutStoredChain)) {
         return false;
       }
-      SymlinkFileValue other = (SymlinkFileValue) obj;
+      SymlinkFileValueWithoutStoredChain other = (SymlinkFileValueWithoutStoredChain) obj;
       return realRootedPath.equals(other.realRootedPath)
           && realFileStateValue.equals(other.realFileStateValue)
           && linkTarget.equals(other.linkTarget);
@@ -317,7 +495,7 @@ public abstract class FileValue implements SkyValue {
 
     @Override
     public int hashCode() {
-      return Objects.hash(realRootedPath, realFileStateValue, linkTarget, Boolean.TRUE);
+      return Objects.hash(realRootedPath, realFileStateValue, linkTarget);
     }
 
     @Override
@@ -325,20 +503,6 @@ public abstract class FileValue implements SkyValue {
       return String.format(
           "symlink (real_path=%s, real_state=%s, link_value=%s)",
           realRootedPath, realFileStateValue, linkTarget);
-    }
-  }
-
-  private static final class PlaceholderFileValue extends FileValue {
-    private PlaceholderFileValue() {}
-
-    @Override
-    public RootedPath realRootedPath() {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public FileStateValue realFileStateValue() {
-      throw new UnsupportedOperationException();
     }
   }
 }

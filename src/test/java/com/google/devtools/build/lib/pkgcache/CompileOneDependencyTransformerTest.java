@@ -14,22 +14,27 @@
 package com.google.devtools.build.lib.pkgcache;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
+import com.google.common.base.Optional;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
-import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.util.PackageLoadingTestCase;
+import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.RootedPath;
 import java.io.IOException;
-import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashSet;
-import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.Before;
 import org.junit.Test;
@@ -46,19 +51,40 @@ public class CompileOneDependencyTransformerTest extends PackageLoadingTestCase 
     return AbstractTargetPatternEvaluatorTest.targetsToLabels(targets);
   }
 
-  private TargetPatternEvaluator parser;
+  private TargetPatternPreloader parser;
   private CompileOneDependencyTransformer transformer;
 
   @Before
   public final void createTransformer() throws Exception {
-    parser = skyframeExecutor.newTargetPatternEvaluator();
+    parser = skyframeExecutor.newTargetPatternPreloader();
+    skyframeExecutor.injectExtraPrecomputedValues(
+        ImmutableList.of(
+            PrecomputedValue.injected(
+                RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE,
+                Optional.<RootedPath>absent())));
     transformer = new CompileOneDependencyTransformer(getPackageManager());
   }
 
   private void writeSimpleExample() throws IOException {
-    scratch.file("foo/BUILD",
-                "cc_library(name = 'foo1', srcs = [ 'foo1.cc' ], hdrs = [ 'foo1.h' ])",
-                "exports_files(['baz/bang'])");
+    scratch.file(
+        "foo/rule.bzl",
+        "def _impl(ctx):",
+        "  ctx.actions.do_nothing(mnemonic='Mnemonic')",
+        "  return []",
+        "crule_without_srcs = rule(",
+        "  _impl,",
+        "  attrs = { ",
+        "    'hdrs': attr.label_list(flags = ['DIRECT_COMPILE_TIME_INPUT']),",
+        "  },",
+        "  fragments = ['cpp'],",
+        ");");
+
+    scratch.file(
+        "foo/BUILD",
+        "load(':rule.bzl', 'crule_without_srcs')",
+        "cc_library(name = 'foo1', srcs = [ 'foo1.cc' ], hdrs = [ 'foo1.h' ])",
+        "crule_without_srcs(name = 'foo2', hdrs = [ 'foo2.h' ])",
+        "exports_files(['baz/bang'])");
     scratch.file("foo/bar/BUILD",
                 "cc_library(name = 'bar1', alwayslink = 1)",
                 "cc_library(name = 'bar2')",
@@ -73,18 +99,8 @@ public class CompileOneDependencyTransformerTest extends PackageLoadingTestCase 
     return labels;
   }
 
-  private static ResolvedTargets<Target> parseTargetPatternList(
-      TargetPatternEvaluator parser, Reporter reporter,
-      List<String> targetPatterns, FilteringPolicy policy,
-      boolean keepGoing) throws Exception {
-    return parser.parseTargetPatternList(
-        PathFragment.EMPTY_FRAGMENT, reporter, targetPatterns, policy, keepGoing);
-  }
-
   private ResolvedTargets<Target> parseCompileOneDep(String... patterns) throws Exception {
-    ResolvedTargets<Target> result = parseTargetPatternList(parser, reporter,
-        Arrays.asList(patterns), FilteringPolicies.NO_FILTER, false);
-    return transformer.transformCompileOneDependency(reporter, result);
+    return parseListCompileOneDepWithOffset(PathFragment.EMPTY_FRAGMENT, patterns);
   }
 
   private Set<Label> parseListCompileOneDep(String... patterns) throws Exception {
@@ -94,19 +110,20 @@ public class CompileOneDependencyTransformerTest extends PackageLoadingTestCase 
   private Set<Label> parseListCompileOneDepRelative(String... patterns)
       throws TargetParsingException, IOException, InterruptedException {
     Path foo = scratch.dir("foo");
-    TargetPatternEvaluator fooOffsetParser = skyframeExecutor.newTargetPatternEvaluator();
-    ResolvedTargets<Target> result;
-    try {
-      result = fooOffsetParser.parseTargetPatternList(
-          foo.relativeTo(rootDirectory),
-          reporter,
-          Arrays.asList(patterns),
-          FilteringPolicies.NO_FILTER, false);
-    } catch (InterruptedException e) {
-      throw new RuntimeException(e);
-    }
-    result = transformer.transformCompileOneDependency(reporter, result);
+    ResolvedTargets<Target> result =
+        parseListCompileOneDepWithOffset(foo.relativeTo(rootDirectory), patterns);
     return targetsToLabels(getFailFast(result));
+  }
+
+  private ResolvedTargets<Target> parseListCompileOneDepWithOffset(
+      PathFragment offset, String... patterns) throws TargetParsingException, InterruptedException {
+    Map<String, Collection<Target>> resolvedTargetsMap =
+        parser.preloadTargetPatterns(reporter, offset, ImmutableSet.copyOf(patterns), false);
+    ResolvedTargets.Builder<Target> result = ResolvedTargets.builder();
+    for (String pattern : patterns) {
+      result.addAll(resolvedTargetsMap.get(pattern));
+    }
+    return transformer.transformCompileOneDependency(reporter, result.build());
   }
 
   private static Set<Target> getFailFast(ResolvedTargets<Target> result) {
@@ -131,6 +148,8 @@ public class CompileOneDependencyTransformerTest extends PackageLoadingTestCase 
         .containsExactlyElementsIn(labels("@//foo:foo1"));
     assertThat(parseListCompileOneDepRelative("foo1.cc"))
         .containsExactlyElementsIn(labels("@//foo:foo1"));
+    assertThat(parseListCompileOneDep("foo/foo2.h"))
+        .containsExactlyElementsIn(labels("@//foo:foo2"));
   }
 
   /**
@@ -140,42 +159,35 @@ public class CompileOneDependencyTransformerTest extends PackageLoadingTestCase 
   @Test
   public void testCompileOneDepOnMissingFile() throws Exception {
     writeSimpleExample();
-    try {
-      parseCompileOneDep("//foo:missing.cc");
-      fail();
-    } catch (TargetParsingException e) {
-      assertThat(e).hasMessage(
-          "no such target '//foo:missing.cc': target 'missing.cc' not declared in package 'foo' "
-          + "defined by /workspace/foo/BUILD");
-    }
+    TargetParsingException e =
+        assertThrows(TargetParsingException.class, () -> parseCompileOneDep("//foo:missing.cc"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "no such target '//foo:missing.cc': target 'missing.cc' not declared in package "
+                + "'foo' defined by /workspace/foo/BUILD");
 
     // Also, try a valid input file which has no dependent rules in its package.
-    try {
-      parseCompileOneDep("//foo:baz/bang");
-      fail();
-    } catch (TargetParsingException e) {
-      assertThat(e).hasMessage("Couldn't find dependency on target '//foo:baz/bang'");
-    }
+    e = assertThrows(TargetParsingException.class, () -> parseCompileOneDep("//foo:baz/bang"));
+    assertThat(e).hasMessageThat().isEqualTo("Couldn't find dependency on target '//foo:baz/bang'");
 
     // Try a header that is in a package but where no cc_library explicitly lists it.
-    try {
-      parseCompileOneDep("//foo/bar:undeclared.h");
-      fail();
-    } catch (TargetParsingException e) {
-      assertThat(e).hasMessage("Couldn't find dependency on target '//foo/bar:undeclared.h'");
-    }
-
+    e =
+        assertThrows(
+            TargetParsingException.class, () -> parseCompileOneDep("//foo/bar:undeclared.h"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo("Couldn't find dependency on target '//foo/bar:undeclared.h'");
   }
 
   @Test
   public void testCompileOneDepOnNonSourceTarget() throws Exception {
     writeSimpleExample();
-    try {
-      parseCompileOneDep("//foo:foo1");
-      fail();
-    } catch (TargetParsingException e) {
-      assertThat(e).hasMessage("--compile_one_dependency target '//foo:foo1' must be a file");
-    }
+    TargetParsingException e =
+        assertThrows(TargetParsingException.class, () -> parseCompileOneDep("//foo:foo1"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo("--compile_one_dependency target '//foo:foo1' must be a file");
   }
 
   @Test
@@ -211,12 +223,11 @@ public class CompileOneDependencyTransformerTest extends PackageLoadingTestCase 
         "filegroup(name = 'y', srcs = [':x'])",
         "exports_files(['foo'])");
 
-    try {
-      parseCompileOneDep("//recursive:foo");
-      fail();
-    } catch (TargetParsingException e) {
-      assertThat(e).hasMessage("Couldn't find dependency on target '//recursive:foo'");
-    }
+    TargetParsingException e =
+        assertThrows(TargetParsingException.class, () -> parseCompileOneDep("//recursive:foo"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo("Couldn't find dependency on target '//recursive:foo'");
   }
 
   @Test

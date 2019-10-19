@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(default_visibility = ["//src:__subpackages__"])
 
 filegroup(
@@ -14,11 +16,23 @@ filegroup(
 # code.
 java_library(
     name = "cmdline",
-    srcs = glob(["*.java"]),
+    srcs = [
+        "Label.java",
+        "LabelConstants.java",
+        "LabelSerializationProxy.java",
+        "LabelSyntaxException.java",
+        "LabelValidator.java",
+        "PackageIdentifier.java",
+        "RepositoryName.java",
+        "ResolvedTargets.java",
+        "TargetParsingException.java",
+        "TargetPattern.java",
+        "TargetPatternResolver.java",
+    ],
     visibility = ["//src:__subpackages__"],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:base-util",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
+        "//src/main/java/com/google/devtools/build/lib:syntax",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/actions:commandline_item",
         "//src/main/java/com/google/devtools/build/lib/concurrent",

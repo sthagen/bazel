@@ -27,7 +27,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.TestSize;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import java.util.Collection;
 
 /** Event reporting about the configurations associated with a given target */
@@ -92,7 +92,9 @@ public class TargetConfiguredEvent implements BuildEventWithConfiguration {
     BuildEventStreamProtos.TargetConfigured.Builder builder =
         BuildEventStreamProtos.TargetConfigured.newBuilder().setTargetKind(target.getTargetKind());
     Rule rule = target.getAssociatedRule();
-    if (rule != null) {
+    if (rule != null && RawAttributeMapper.of(rule).has("tags")) {
+      // Not every rule has tags, as, due to the "external" package we also have to expect
+      // repository rules at this place.
       builder.addAllTag(RawAttributeMapper.of(rule).getMergedValues("tags", Type.STRING_LIST));
     }
     if (TargetUtils.isTestRule(target)) {

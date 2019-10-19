@@ -99,13 +99,13 @@ public class AndroidDataConverterTest {
             .build();
 
     assertThat(
-        CustomCommandLine.builder()
-            .addAll(
-                "somekey",
-                converter.getVectorArg(
-                    NestedSetBuilder.create(Order.NAIVE_LINK_ORDER, "a", "b")))
-            .build()
-            .toString())
+            CustomCommandLine.builder()
+                .addAll(
+                    "somekey",
+                    converter.getVectorArg(
+                        NestedSetBuilder.create(Order.NAIVE_LINK_ORDER, "a", "b")))
+                .build()
+                .toString())
         .isEqualTo("somekey a1;a2&b1;b2");
   }
 
@@ -115,7 +115,7 @@ public class AndroidDataConverterTest {
 
   private static <T> Function<String, T> getFunction(T t) {
     return x -> {
-      assertThat(x).isSameAs(TO_MAP);
+      assertThat(x).isSameInstanceAs(TO_MAP);
       return t;
     };
   }

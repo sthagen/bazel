@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library", "java_test")
+
 package(
     default_testonly = 1,
     default_visibility = ["//src:__subpackages__"],
@@ -26,6 +28,7 @@ java_library(
         ),
         "//conditions:default": ["NoAndroidSdkStubTest.java"],
     }),
+    javacopts = ["-source 7 -target 7"],  # we run this through dx for testing, so no lambdas!
     resources = ["testresource.txt"],
     deps = [
         "//src/test/java/com/google/devtools/build/lib:testutil",
@@ -34,6 +37,7 @@ java_library(
         "//third_party:junit4",
         "//third_party:mockito",
         "//third_party:truth",
+        "@bazel_tools//tools/java/runfiles",
     ] + select({
         "//external:has_androidsdk": ["//external:android/dx_jar_import"],
         "//conditions:default": [],
@@ -50,17 +54,40 @@ java_test(
     size = "small",
     data = [
         "test_main_dex_list.txt",
+        ":mixed_testinput",
         ":testdata",
         ":tests",
     ],
     jvm_flags = [
-        "-Dtestmaindexlist=$(location :test_main_dex_list.txt)",
-        "-Dtestinputjar=$(location :tests)",
-        "-Dtestinputjar2=$(location :testdata)",
+        "-Dtestmaindexlist=io_bazel/$(location :test_main_dex_list.txt)",
+        "-Dtestinputjar=io_bazel/$(location :tests)",
+        "-Dtestinputjar2=io_bazel/$(location :testdata)",
+        "-Dmixedinputjar=io_bazel/$(location :mixed_testinput)",
     ],
     runtime_deps = [
         ":tests",
     ],
+)
+
+genrule(
+    name = "mixed_srcjar_gen",
+    outs = ["mixed.srcjar"],
+    cmd = """set -eu
+        readonly tmpdir="$$(mktemp -d)"
+        echo "package j$$.test; public class Foo {}" > "$${tmpdir}/Foo.java"
+        echo "package zzz; public class Bar {}" > "$${tmpdir}/Bar.java"
+        echo "package aaa; public class Baz {}" > "$${tmpdir}/Baz.java"
+        $(location //tools/zip:zipper) c $@ \\
+            "j$$/test/Foo.java=$${tmpdir}/Foo.java" \\
+            "zzz/Bar.java=$${tmpdir}/Bar.java" \\
+            "aaa/Baz.java=$${tmpdir}/Baz.java"
+        rm -rf "$${tmpdir}" """,
+    tools = ["//tools/zip:zipper"],
+)
+
+java_library(
+    name = "mixed_testinput",
+    srcs = [":mixed_srcjar_gen"],
 )
 
 test_suite(

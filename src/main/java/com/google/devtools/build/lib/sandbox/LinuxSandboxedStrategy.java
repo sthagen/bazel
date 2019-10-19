@@ -18,6 +18,7 @@ import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.exec.AbstractSpawnStrategy;
 import com.google.devtools.build.lib.exec.SpawnRunner;
+import com.google.devtools.build.lib.exec.TreeDeleter;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -49,10 +50,16 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
    * @param timeoutKillDelay additional grace period before killing timing out commands
    * @param sandboxfsProcess instance of the sandboxfs process to use; may be null for none, in
    *     which case the runner uses a symlinked sandbox
+   * @param sandboxfsMapSymlinkTargets map the targets of symlinks within the sandbox if true
    */
   static LinuxSandboxedSpawnRunner create(
-      CommandEnvironment cmdEnv, Path sandboxBase, Duration timeoutKillDelay,
-      @Nullable SandboxfsProcess sandboxfsProcess) throws IOException {
+      CommandEnvironment cmdEnv,
+      Path sandboxBase,
+      Duration timeoutKillDelay,
+      @Nullable SandboxfsProcess sandboxfsProcess,
+      boolean sandboxfsMapSymlinkTargets,
+      TreeDeleter treeDeleter)
+      throws IOException {
     Path inaccessibleHelperFile = sandboxBase.getRelative("inaccessibleHelperFile");
     FileSystemUtils.touchFile(inaccessibleHelperFile);
     inaccessibleHelperFile.setReadable(false);
@@ -71,6 +78,8 @@ public final class LinuxSandboxedStrategy extends AbstractSpawnStrategy {
         inaccessibleHelperFile,
         inaccessibleHelperDir,
         timeoutKillDelay,
-        sandboxfsProcess);
+        sandboxfsProcess,
+        sandboxfsMapSymlinkTargets,
+        treeDeleter);
   }
 }

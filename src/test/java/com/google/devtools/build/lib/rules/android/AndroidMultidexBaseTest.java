@@ -27,35 +27,33 @@ import com.google.devtools.build.lib.rules.android.AndroidRuleClasses.MultidexMo
 import java.util.Set;
 import org.junit.Before;
 
-/**
- * Base class for testing the multidex code of android_binary and android_test.
- */
+/** Base class for testing the multidex code of android_binary and android_test. */
 public class AndroidMultidexBaseTest extends BuildViewTestCase {
 
   @Before
   public final void createFiles() throws Exception {
-    scratch.file("java/android/BUILD",
+    scratch.file(
+        "java/android/BUILD",
         "android_binary(name = 'app',",
         "               srcs = ['A.java'],",
         "               manifest = 'AndroidManifest.xml',",
         "               resource_files = glob(['res/**']),",
         "              )");
-    scratch.file("java/android/res/values/strings.xml",
+    scratch.file(
+        "java/android/res/values/strings.xml",
         "<resources><string name = 'hello'>Hello Android!</string></resources>");
-    scratch.file("java/android/A.java",
-        "package android; public class A {};");
+    scratch.file("java/android/A.java", "package android; public class A {};");
   }
 
   /**
-   * Internal helper method: given an android_binary rule label, check that it builds in
-   * multidex mode. Three multidex variations are possible: "legacy", "manual_main_dex" and
-   * "native".
+   * Internal helper method: given an android_binary rule label, check that it builds in multidex
+   * mode. Three multidex variations are possible: "legacy", "manual_main_dex" and "native".
    *
    * @param ruleLabel the android_binary rule label to test against
    * @param multidexMode the multidex mode used in the rule
    */
-  protected void internalTestMultidexBuildStructure(
-      String ruleLabel, MultidexMode multidexMode) throws Exception {
+  protected void internalTestMultidexBuildStructure(String ruleLabel, MultidexMode multidexMode)
+      throws Exception {
 
     ConfiguredTarget binary = getConfiguredTarget(ruleLabel);
     Set<Artifact> artifacts = actionsTestUtil().artifactClosureOf(getFilesToBuild(binary));
@@ -67,8 +65,8 @@ public class AndroidMultidexBaseTest extends BuildViewTestCase {
     Artifact strippedJar = getFirstArtifactEndingWith(artifacts, "main_dex_intermediate.jar");
     Artifact mainDexList = getFirstArtifactEndingWith(artifacts, "main_dex_list.txt");
     String ruleName = Label.parseAbsolute(ruleLabel, ImmutableMap.of()).getName();
-    Artifact mainDexProguardSpec = getFirstArtifactEndingWith(
-        artifacts, "main_dex_" + ruleName + "_proguard.cfg");
+    Artifact mainDexProguardSpec =
+        getFirstArtifactEndingWith(artifacts, "main_dex_" + ruleName + "_proguard.cfg");
 
     if (multidexMode == MultidexMode.LEGACY) {
       // First action: check that the stripped jar is generated through Proguard.
@@ -83,9 +81,9 @@ public class AndroidMultidexBaseTest extends BuildViewTestCase {
       // Second action: The dexer consumes the stripped jar to create the main dex class list.
       assertThat(mainDexList).isNotNull();
       SpawnAction mainDexAction = getGeneratingSpawnAction(mainDexList);
-      assertThat(mainDexAction.getArguments()).containsAllOf(
-          mainDexList.getExecPathString(),
-          strippedJar.getExecPathString()).inOrder();
+      assertThat(mainDexAction.getArguments())
+          .containsAtLeast(mainDexList.getExecPathString(), strippedJar.getExecPathString())
+          .inOrder();
     } else if (multidexMode == MultidexMode.MANUAL_MAIN_DEX) {
       // Manual main dex mode: strippedJar shouldn't exist and mainDexList should be provided.
       assertThat(strippedJar).isNull();
@@ -98,12 +96,13 @@ public class AndroidMultidexBaseTest extends BuildViewTestCase {
 
     Artifact dexMergerInput = getFirstArtifactEndingWith(artifacts, "classes.jar");
     SpawnAction dexMergerAction = getGeneratingSpawnAction(finalDexOutput);
-    ImmutableList.Builder<String> argsBuilder = ImmutableList.<String>builder()
-        .add(
-            "--input",
-            dexMergerInput.getExecPathString(),
-            "--output",
-            finalDexOutput.getExecPathString());
+    ImmutableList.Builder<String> argsBuilder =
+        ImmutableList.<String>builder()
+            .add(
+                "--input",
+                dexMergerInput.getExecPathString(),
+                "--output",
+                finalDexOutput.getExecPathString());
     if (multidexMode != MultidexMode.OFF) {
       argsBuilder.add("--multidex=minimal");
     }
@@ -116,8 +115,8 @@ public class AndroidMultidexBaseTest extends BuildViewTestCase {
   }
 
   /**
-   * Internal helper method: given an android_binary rule label, check that the dex merger
-   * runs is invoked with {@code --multidex=off}.
+   * Internal helper method: given an android_binary rule label, check that the dex merger runs is
+   * invoked with {@code --multidex=off}.
    */
   protected void internalTestNonMultidexBuildStructure(String ruleLabel) throws Exception {
     ConfiguredTarget binary = getConfiguredTarget(ruleLabel);
@@ -127,7 +126,7 @@ public class AndroidMultidexBaseTest extends BuildViewTestCase {
     SpawnAction dexAction = getGeneratingSpawnAction(dexOutput);
 
     assertThat(dexAction.getRemainingArguments())
-        .containsAllOf(
+        .containsAtLeast(
             "--input",
             dexInput.getExecPathString(),
             "--output",
@@ -136,4 +135,3 @@ public class AndroidMultidexBaseTest extends BuildViewTestCase {
         .inOrder();
   }
 }
-

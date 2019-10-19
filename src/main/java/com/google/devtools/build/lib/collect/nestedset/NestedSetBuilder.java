@@ -17,6 +17,7 @@ import static com.google.common.collect.Iterables.getOnlyElement;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.MapMaker;
 import com.google.devtools.build.lib.collect.compacthashset.CompactHashSet;
@@ -34,16 +35,26 @@ import java.util.concurrent.ConcurrentMap;
 public final class NestedSetBuilder<E> {
 
   private final Order order;
-  private final CompactHashSet<E> items = CompactHashSet.create();
-  private final CompactHashSet<NestedSet<? extends E>> transitiveSets = CompactHashSet.create();
+  private CompactHashSet<E> items;
+  private CompactHashSet<NestedSet<? extends E>> transitiveSets;
 
   public NestedSetBuilder(Order order) {
     this.order = order;
   }
 
+  /**
+   * Returns the order used by this builder.
+   *
+   * <p>This is useful for testing for incompatibilities (via {@link Order#isCompatible}) without
+   * catching an unchecked exception from {@link #addTransitive}.
+   */
+  public Order getOrder() {
+    return order;
+  }
+
   /** Returns whether the set to be built is empty. */
   public boolean isEmpty() {
-    return items.isEmpty() && transitiveSets.isEmpty();
+    return items == null && transitiveSets == null;
   }
 
   /**
@@ -59,6 +70,9 @@ public final class NestedSetBuilder<E> {
    */
   public NestedSetBuilder<E> add(E element) {
     Preconditions.checkNotNull(element);
+    if (items == null) {
+      items = CompactHashSet.create();
+    }
     items.add(element);
     return this;
   }
@@ -77,6 +91,17 @@ public final class NestedSetBuilder<E> {
    */
   public NestedSetBuilder<E> addAll(Iterable<? extends E> elements) {
     Preconditions.checkNotNull(elements);
+    if (elements instanceof NestedSet) {
+      if (order.equals(Order.STABLE_ORDER)) {
+        // If direct/transitive order doesn't matter, add the nested set as a transitive member to
+        // avoid copying its elements.
+        return addTransitive((NestedSet<? extends E>) elements);
+      }
+      throw new IllegalArgumentException("NestedSet should be added as a transitive member");
+    }
+    if (items == null) {
+      items = CompactHashSet.createWithExpectedSize(Iterables.size(elements));
+    }
     Iterables.addAll(items, elements);
     return this;
   }
@@ -93,8 +118,8 @@ public final class NestedSetBuilder<E> {
    *
    * <p>The relative left-to-right order of transitive members is preserved from the sequence of
    * calls to {@link #addTransitive}. Since the traversal {@link Order} controls whether direct
-   * members appear before or after transitive ones, the interleaving of
-   * {@link #add}/{@link #addAll} with {@link #addTransitive} does not matter.
+   * members appear before or after transitive ones, the interleaving of {@link #add}/{@link
+   * #addAll} with {@link #addTransitive} does not matter.
    *
    * <p>The {@link Order} of the added set must be compatible with the order of this builder (see
    * {@link Order#isCompatible}). This is true even if the added set is empty. Strictly speaking, it
@@ -109,7 +134,7 @@ public final class NestedSetBuilder<E> {
    *
    * @param subset the set to add as a transitive member; must not be null
    * @return the builder
-   * @throws IllegalStateException if the order of {@code subset} is not compatible with the
+   * @throws IllegalArgumentException if the order of {@code subset} is not compatible with the
    *     order of this builder
    */
   public NestedSetBuilder<E> addTransitive(NestedSet<? extends E> subset) {
@@ -118,6 +143,9 @@ public final class NestedSetBuilder<E> {
         order.isCompatible(subset.getOrder()),
         "Order mismatch: %s != %s", subset.getOrder().getSkylarkName(), order.getSkylarkName());
     if (!subset.isEmpty()) {
+      if (transitiveSets == null) {
+        transitiveSets = CompactHashSet.create();
+      }
       transitiveSets.add(subset);
     }
     return this;
@@ -142,13 +170,16 @@ public final class NestedSetBuilder<E> {
     // is safe.
     CompactHashSet<NestedSet<E>> transitiveSetsCast =
         (CompactHashSet<NestedSet<E>>) (CompactHashSet<?>) transitiveSets;
-    if (items.isEmpty() && (transitiveSetsCast.size() == 1)) {
+    if (items == null && transitiveSetsCast != null && transitiveSetsCast.size() == 1) {
       NestedSet<E> candidate = getOnlyElement(transitiveSetsCast);
       if (candidate.getOrder().equals(order)) {
         return candidate;
       }
     }
-    return new NestedSet<>(order, items, transitiveSetsCast);
+    return new NestedSet<>(
+        order,
+        items == null ? ImmutableSet.of() : items,
+        transitiveSetsCast == null ? ImmutableSet.of() : transitiveSetsCast);
   }
 
   private static final ConcurrentMap<ImmutableList<?>, NestedSet<?>> immutableListCache =
@@ -159,21 +190,21 @@ public final class NestedSetBuilder<E> {
    */
   @SuppressWarnings("unchecked")
   public static <E> NestedSet<E> wrap(Order order, Iterable<E> wrappedItems) {
-    ImmutableList<E> wrappedList = ImmutableList.copyOf(wrappedItems);
-    if (wrappedList.isEmpty()) {
+    if (Iterables.isEmpty(wrappedItems)) {
       return order.emptySet();
-    } else if (order == Order.STABLE_ORDER
-               && wrappedList == wrappedItems && wrappedList.size() > 1) {
-      NestedSet<?> cached = immutableListCache.get(wrappedList);
-      if (cached != null) {
-        return (NestedSet<E>) cached;
+    } else if (order == Order.STABLE_ORDER && wrappedItems instanceof ImmutableList) {
+      ImmutableList<E> wrappedList = (ImmutableList) wrappedItems;
+      if (wrappedList.size() > 1) {
+        NestedSet<?> cached = immutableListCache.get(wrappedList);
+        if (cached != null) {
+          return (NestedSet<E>) cached;
+        }
+        NestedSet<E> built = new NestedSetBuilder<E>(order).addAll(wrappedList).build();
+        immutableListCache.putIfAbsent(wrappedList, built);
+        return built;
       }
-      NestedSet<E> built = new NestedSetBuilder<E>(order).addAll(wrappedList).build();
-      immutableListCache.putIfAbsent(wrappedList, built);
-      return built;
-    } else {
-      return new NestedSetBuilder<E>(order).addAll(wrappedList).build();
     }
+    return new NestedSetBuilder<E>(order).addAll(wrappedItems).build();
   }
 
   /**

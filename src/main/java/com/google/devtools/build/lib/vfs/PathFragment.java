@@ -60,7 +60,7 @@ public final class PathFragment
         CommandLineItem {
   private static final OsPathPolicy OS = OsPathPolicy.getFilePathOs();
 
-  @AutoCodec public static final PathFragment EMPTY_FRAGMENT = create("");
+  @AutoCodec public static final PathFragment EMPTY_FRAGMENT = new PathFragment("", 0);
   public static final char SEPARATOR_CHAR = OS.getSeparator();
   public static final int INVALID_SEGMENT = -1;
 
@@ -69,6 +69,9 @@ public final class PathFragment
 
   /** Creates a new normalized path fragment. */
   public static PathFragment create(String path) {
+    if (path.isEmpty()) {
+      return EMPTY_FRAGMENT;
+    }
     int normalizationLevel = OS.needsToNormalize(path);
     String normalizedPath =
         normalizationLevel != OsPathPolicy.NORMALIZED
@@ -96,6 +99,9 @@ public final class PathFragment
    */
   @AutoCodec.Instantiator
   static PathFragment createAlreadyNormalized(String normalizedPath, int driveStrLength) {
+    if (normalizedPath.isEmpty()) {
+      return EMPTY_FRAGMENT;
+    }
     return new PathFragment(normalizedPath, driveStrLength);
   }
 
@@ -241,8 +247,9 @@ public final class PathFragment
   /**
    * Returns the {@link PathFragment} relative to the base {@link PathFragment}.
    *
-   * <p>For example, <code>FilePath.create("foo/bar/wiz").relativeTo(FilePath.create("foo"))</code>
-   * returns <code>"bar/wiz"</code>.
+   * <p>For example, <code>
+   * {@link PathFragment}.create("foo/bar/wiz").relativeTo({@link PathFragment}.create("foo"))
+   * </code> returns <code>"bar/wiz"</code>.
    *
    * <p>If the {@link PathFragment} is not a child of the passed {@link PathFragment} an {@link
    * IllegalArgumentException} is thrown. In particular, this will happen whenever the two {@link
@@ -393,7 +400,8 @@ public final class PathFragment
   }
 
   /**
-   * Returns the specified segment of this path; index must be positive and less than numSegments().
+   * Returns the specified segment of this path; index must be non-negative and less than {@code
+   * segmentCount()}.
    *
    * <p>This operation is O(N) on the length of the string.
    */

@@ -57,7 +57,7 @@ public class RBuildFilesFunction implements QueryFunction {
   }
 
   @Override
-  @SuppressWarnings("unchecked") // Cast from <Target> to <T>. This will only be used with <Target>.
+  @SuppressWarnings("unchecked") // Cast from <T> to <Target>. This will only be used with <Target>.
   public <T> QueryTaskFuture<Void> eval(
       QueryEnvironment<T> env,
       QueryExpressionContext<T> context,
@@ -73,6 +73,7 @@ public class RBuildFilesFunction implements QueryFunction {
         args.stream()
             .map(argument -> PathFragment.create(argument.getWord()))
             .collect(Collectors.toList()),
+        (QueryExpressionContext<Target>) context,
         (Callback<Target>) callback);
   }
 }

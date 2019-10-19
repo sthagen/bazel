@@ -102,22 +102,21 @@ public final class ConfigurationFragmentPolicyTest {
                 ImmutableSet.<Class<?>>of(Long.class))
             .build();
 
-    assertThat(policy.getRequiredConfigurationFragments()).containsAllOf(Integer.class, Long.class);
+    assertThat(policy.getRequiredConfigurationFragments())
+        .containsAtLeast(Integer.class, Long.class);
 
     assertThat(policy.isLegalConfigurationFragment(Integer.class)).isTrue();
     assertThat(
             policy.isLegalConfigurationFragment(Integer.class, NoTransition.INSTANCE))
         .isTrue();
-    // TODO(mstaib): .isFalse() when dynamic configurations care which configuration a fragment was
-    // specified for
-    assertThat(policy.isLegalConfigurationFragment(Integer.class, TEST_HOST_TRANSITION))
-        .isTrue();
+    // TODO(b/140641941): .isFalse() when dynamic configurations care which configuration a fragment
+    // was specified for
+    assertThat(policy.isLegalConfigurationFragment(Integer.class, TEST_HOST_TRANSITION)).isTrue();
 
     assertThat(policy.isLegalConfigurationFragment(Long.class)).isTrue();
-    // TODO(mstaib): .isFalse() when dynamic configurations care which configuration a fragment was
-    // specified for
-    assertThat(policy.isLegalConfigurationFragment(Long.class, NoTransition.INSTANCE))
-        .isTrue();
+    // TODO(b/140641941): .isFalse() when dynamic configurations care which configuration a fragment
+    // was specified for
+    assertThat(policy.isLegalConfigurationFragment(Long.class, NoTransition.INSTANCE)).isTrue();
     assertThat(policy.isLegalConfigurationFragment(Long.class, TEST_HOST_TRANSITION))
         .isTrue();
 

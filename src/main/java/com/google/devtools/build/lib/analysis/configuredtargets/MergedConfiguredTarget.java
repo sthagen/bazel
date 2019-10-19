@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.configuredtargets;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
@@ -27,6 +28,7 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMapBuilder;
 import com.google.devtools.build.lib.packages.InfoInterface;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.Provider.Key;
+import com.google.devtools.build.lib.skylarkbuildapi.ActionApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import java.util.ArrayList;
 import java.util.List;
@@ -92,7 +94,7 @@ public final class MergedConfiguredTarget extends AbstractConfiguredTarget {
 
   @Override
   protected InfoInterface rawGetSkylarkProvider(Provider.Key providerKey) {
-    InfoInterface provider = providers.getProvider(providerKey);
+    InfoInterface provider = providers.get(providerKey);
     if (provider == null) {
       provider = base.get(providerKey);
     }
@@ -103,15 +105,20 @@ public final class MergedConfiguredTarget extends AbstractConfiguredTarget {
   protected Object rawGetSkylarkProvider(String providerKey) {
     if (providerKey.equals(RuleConfiguredTarget.ACTIONS_FIELD_NAME)) {
       ImmutableList.Builder<ActionAnalysisMetadata> actions = ImmutableList.builder();
+      // Only expose actions which are SkylarkValues.
+      // TODO(cparsons): Expose all actions to Starlark.
       for (ConfiguredAspect aspect : aspects) {
-        actions.addAll(aspect.getActions());
+        actions.addAll(
+            aspect.getActions().stream().filter(action -> action instanceof ActionApi).iterator());
       }
       if (base instanceof RuleConfiguredTarget) {
-        actions.addAll(((RuleConfiguredTarget) base).getActions());
+        actions.addAll(
+            ((RuleConfiguredTarget) base)
+                .getActions().stream().filter(action -> action instanceof ActionApi).iterator());
       }
       return actions.build();
     }
-    Object provider = providers.getProvider(providerKey);
+    Object provider = providers.get(providerKey);
     if (provider == null) {
       provider = base.get(providerKey);
     }
@@ -218,5 +225,10 @@ public final class MergedConfiguredTarget extends AbstractConfiguredTarget {
   @Override
   public void repr(SkylarkPrinter printer) {
     printer.append("<merged target " + getLabel() + ">");
+  }
+
+  @VisibleForTesting
+  public ConfiguredTarget getBaseConfiguredTargetForTesting() {
+    return base;
   }
 }

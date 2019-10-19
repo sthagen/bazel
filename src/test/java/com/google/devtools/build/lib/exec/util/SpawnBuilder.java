@@ -21,9 +21,12 @@ import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EmptyRunfilesSupplier;
+import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.ResourceSet;
+import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
+import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -37,29 +40,41 @@ public final class SpawnBuilder {
   private String mnemonic = "Mnemonic";
   private String progressMessage = "progress message";
   @Nullable private String ownerLabel;
+  @Nullable private PlatformInfo platform;
   private final List<String> args;
   private final Map<String, String> environment = new HashMap<>();
   private final Map<String, String> executionInfo = new HashMap<>();
+  private ImmutableMap<String, String> execProperties = ImmutableMap.of();
   private final List<ActionInput> inputs = new ArrayList<>();
   private final List<ActionInput> outputs = new ArrayList<>();
+  private final Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesetMappings =
+      new HashMap<>();
+
+  private RunfilesSupplier runfilesSupplier = EmptyRunfilesSupplier.INSTANCE;
 
   public SpawnBuilder(String... args) {
     this.args = ImmutableList.copyOf(args);
   }
 
   public Spawn build() {
-    ActionExecutionMetadata owner = new FakeOwner(mnemonic, progressMessage, ownerLabel);
+    ActionExecutionMetadata owner =
+        new FakeOwner(mnemonic, progressMessage, ownerLabel, platform, execProperties);
     return new SimpleSpawn(
         owner,
         ImmutableList.copyOf(args),
         ImmutableMap.copyOf(environment),
         ImmutableMap.copyOf(executionInfo),
-        /*runfilesSupplier=*/ EmptyRunfilesSupplier.INSTANCE,
-        ImmutableMap.of(),
+        runfilesSupplier,
+        ImmutableMap.copyOf(filesetMappings),
         ImmutableList.copyOf(inputs),
         /*tools=*/ ImmutableList.<Artifact>of(),
         ImmutableList.copyOf(outputs),
         ResourceSet.ZERO);
+  }
+
+  public SpawnBuilder withPlatform(PlatformInfo platform) {
+    this.platform = platform;
+    return this;
   }
 
   public SpawnBuilder withMnemonic(String mnemonic) {
@@ -84,6 +99,11 @@ public final class SpawnBuilder {
 
   public SpawnBuilder withExecutionInfo(String key, String value) {
     this.executionInfo.put(key, value);
+    return this;
+  }
+
+  public SpawnBuilder withExecProperties(ImmutableMap<String, String> execProperties) {
+    this.execProperties = execProperties;
     return this;
   }
 
@@ -113,6 +133,18 @@ public final class SpawnBuilder {
     for (String name : names) {
       this.outputs.add(ActionInputHelper.fromPath(name));
     }
+    return this;
+  }
+
+  public SpawnBuilder withFilesetMapping(
+      Artifact fileset, ImmutableList<FilesetOutputSymlink> mappings) {
+    Preconditions.checkArgument(fileset.isFileset(), "Artifact %s is not fileset", fileset);
+    filesetMappings.put(fileset, mappings);
+    return this;
+  }
+
+  public SpawnBuilder withRunfilesSupplier(RunfilesSupplier runfilesSupplier) {
+    this.runfilesSupplier = runfilesSupplier;
     return this;
   }
 }

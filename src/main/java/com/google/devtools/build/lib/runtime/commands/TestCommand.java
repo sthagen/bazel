@@ -16,11 +16,14 @@ package com.google.devtools.build.lib.runtime.commands;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
+import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
 import com.google.devtools.build.lib.buildtool.BuildResult;
 import com.google.devtools.build.lib.buildtool.BuildTool;
 import com.google.devtools.build.lib.buildtool.InstrumentationFilterSupport;
+import com.google.devtools.build.lib.buildtool.OutputDirectoryLinksUtils;
+import com.google.devtools.build.lib.buildtool.PathPrettyPrinter;
 import com.google.devtools.build.lib.buildtool.buildevent.TestingCompleteEvent;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
@@ -28,17 +31,18 @@ import com.google.devtools.build.lib.exec.TestStrategy;
 import com.google.devtools.build.lib.exec.TestStrategy.TestOutputFormat;
 import com.google.devtools.build.lib.runtime.AggregatingTestListener;
 import com.google.devtools.build.lib.runtime.BlazeCommand;
-import com.google.devtools.build.lib.runtime.BlazeCommandEventHandler;
 import com.google.devtools.build.lib.runtime.BlazeCommandResult;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.TerminalTestResultNotifier;
 import com.google.devtools.build.lib.runtime.TerminalTestResultNotifier.TestSummaryOptions;
-import com.google.devtools.build.lib.runtime.TestResultAnalyzer;
 import com.google.devtools.build.lib.runtime.TestResultNotifier;
+import com.google.devtools.build.lib.runtime.TestSummaryPrinter.TestLogPathFormatter;
+import com.google.devtools.build.lib.runtime.UiOptions;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.io.AnsiTerminalPrinter;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.common.options.OptionPriority.PriorityCategory;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
@@ -58,8 +62,6 @@ import java.util.List;
          completion = "label-test",
          allowResidue = true)
 public class TestCommand implements BlazeCommand {
-  private AnsiTerminalPrinter printer;
-
   /** Returns the name of the command to ask the project file for. */
   // TODO(hdm): move into BlazeRuntime?  It feels odd to duplicate the annotation here.
   protected String commandName() {
@@ -90,25 +92,27 @@ public class TestCommand implements BlazeCommand {
           + "one at a time"));
     }
 
-    TestResultAnalyzer resultAnalyzer = new TestResultAnalyzer(
-        options.getOptions(TestSummaryOptions.class),
-        options.getOptions(ExecutionOptions.class),
-        env.getEventBus());
-
-    printer = new AnsiTerminalPrinter(env.getReporter().getOutErr().getOutputStream(),
-        options.getOptions(BlazeCommandEventHandler.Options.class).useColor());
+    AnsiTerminalPrinter printer =
+        new AnsiTerminalPrinter(
+            env.getReporter().getOutErr().getOutputStream(),
+            options.getOptions(UiOptions.class).useColor());
 
     // Initialize test handler.
     AggregatingTestListener testListener =
-        new AggregatingTestListener(resultAnalyzer, env.getEventBus());
+        new AggregatingTestListener(
+            options.getOptions(TestSummaryOptions.class),
+            options.getOptions(ExecutionOptions.class),
+            env.getEventBus());
 
     env.getEventBus().register(testListener);
-    return doTest(env, options, testListener);
+    return doTest(env, options, testListener, printer);
   }
 
-  private BlazeCommandResult doTest(CommandEnvironment env,
+  private BlazeCommandResult doTest(
+      CommandEnvironment env,
       OptionsParsingResult options,
-      AggregatingTestListener testListener) {
+      AggregatingTestListener testListener,
+      AnsiTerminalPrinter printer) {
     BlazeRuntime runtime = env.getRuntime();
     // Run simultaneous build and test.
     List<String> targets = ProjectFileSupport.getTargets(runtime.getProjectFileProvider(), options);
@@ -117,7 +121,7 @@ public class TestCommand implements BlazeCommand {
         runtime.getStartupOptionsProvider(), targets,
         env.getReporter().getOutErr(), env.getCommandId(), env.getCommandStartTime());
     request.setRunTests();
-    if (options.getOptions(BuildConfiguration.Options.class).collectCodeCoverage
+    if (options.getOptions(CoreOptions.class).collectCodeCoverage
         && !options.containsExplicitOption(
             InstrumentationFilterSupport.INSTRUMENTATION_FILTER_FLAG)) {
       request.setNeedsInstrumentationFilter(true);
@@ -151,8 +155,9 @@ public class TestCommand implements BlazeCommand {
     }
 
     boolean buildSuccess = buildResult.getSuccess();
-    boolean testSuccess = analyzeTestResults(
-        testTargets, buildResult.getSkippedTargets(), testListener, options);
+    boolean testSuccess =
+        analyzeTestResults(
+            testTargets, buildResult.getSkippedTargets(), testListener, options, env, printer);
 
     if (testSuccess && !buildSuccess) {
       // If all tests run successfully, test summary should include warning if
@@ -170,15 +175,40 @@ public class TestCommand implements BlazeCommand {
   }
 
   /**
-   * Analyzes test results and prints summary information.
-   * Returns true if and only if all tests were successful.
+   * Analyzes test results and prints summary information. Returns true if and only if all tests
+   * were successful.
    */
-  private boolean analyzeTestResults(Collection<ConfiguredTarget> testTargets,
-                                     Collection<ConfiguredTarget> skippedTargets,
-                                     AggregatingTestListener listener,
-                                     OptionsParsingResult options) {
-    TestResultNotifier notifier = new TerminalTestResultNotifier(printer, options);
-    return listener.getAnalyzer().differentialAnalyzeAndReport(
-        testTargets, skippedTargets, listener, notifier);
+  private boolean analyzeTestResults(
+      Collection<ConfiguredTarget> testTargets,
+      Collection<ConfiguredTarget> skippedTargets,
+      AggregatingTestListener listener,
+      OptionsParsingResult options,
+      CommandEnvironment env,
+      AnsiTerminalPrinter printer) {
+    TestResultNotifier notifier = new TerminalTestResultNotifier(
+        printer,
+        makeTestLogPathFormatter(options, env),
+        options);
+    return listener.differentialAnalyzeAndReport(testTargets, skippedTargets, notifier);
+  }
+
+  private static TestLogPathFormatter makeTestLogPathFormatter(
+      OptionsParsingResult options,
+      CommandEnvironment env) {
+    TestSummaryOptions summaryOptions = options.getOptions(TestSummaryOptions.class);
+    if (!summaryOptions.printRelativeTestLogPaths) {
+      return Path::getPathString;
+    }
+    String productName = env.getRuntime().getProductName();
+    BuildRequestOptions requestOptions = env.getOptions().getOptions(BuildRequestOptions.class);
+    // requestOptions.printWorkspaceInOutputPathsIfNeeded is antithetical with
+    // summaryOptions.printRelativeTestLogPaths, so we completely ignore it.
+    PathPrettyPrinter pathPrettyPrinter =
+        OutputDirectoryLinksUtils.getPathPrettyPrinter(
+            requestOptions.getSymlinkPrefix(productName),
+            productName,
+            env.getWorkspace(),
+            env.getWorkspace());
+    return path -> pathPrettyPrinter.getPrettyPath(path).getPathString();
   }
 }

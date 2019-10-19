@@ -16,9 +16,7 @@ package com.google.devtools.build.lib.syntax;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
-import static org.junit.Assert.fail;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.StructProvider;
@@ -40,34 +38,12 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class EvalUtilsTest extends EvaluationTestCase {
 
-  private static MutableList<Object> makeList(Environment env) {
-    return MutableList.of(env, 1, 2, 3);
+  private static MutableList<Object> makeList(StarlarkThread thread) {
+    return MutableList.of(thread, 1, 2, 3);
   }
 
-  private static SkylarkDict<Object, Object> makeDict(Environment env) {
-    return SkylarkDict.of(env, 1, 1, 2, 2);
-  }
-
-  @Test
-  public void testEmptyStringToIterable() throws Exception {
-    assertThat(EvalUtils.toIterable("", null, null)).isEmpty();
-  }
-
-  @Test
-  public void testStringToIterable() throws Exception {
-    assertThat(EvalUtils.toIterable("abc", null, null)).hasSize(3);
-  }
-
-  @Test
-  public void testSize() throws Exception {
-    assertThat(EvalUtils.size("abc")).isEqualTo(3);
-    assertThat(EvalUtils.size(ImmutableMap.of(1, 2, 3, 4))).isEqualTo(2);
-    assertThat(EvalUtils.size(SkylarkList.Tuple.of(1, 2, 3))).isEqualTo(3);
-    SkylarkNestedSet set = SkylarkNestedSet.of(
-        Object.class,
-        NestedSetBuilder.stableOrder().add(1).add(2).add(3).build());
-    assertThat(EvalUtils.size(set)).isEqualTo(3);
-    assertThat(EvalUtils.size(ImmutableList.of(1, 2, 3))).isEqualTo(3);
+  private static SkylarkDict<Object, Object> makeDict(StarlarkThread thread) {
+    return SkylarkDict.of(thread, 1, 1, 2, 2);
   }
 
   /** MockClassA */
@@ -104,15 +80,15 @@ public class EvalUtilsTest extends EvaluationTestCase {
     // Mutability depends on the environment.
     assertThat(EvalUtils.isImmutable(makeList(null))).isTrue();
     assertThat(EvalUtils.isImmutable(makeDict(null))).isTrue();
-    assertThat(EvalUtils.isImmutable(makeList(env))).isFalse();
-    assertThat(EvalUtils.isImmutable(makeDict(env))).isFalse();
+    assertThat(EvalUtils.isImmutable(makeList(thread))).isFalse();
+    assertThat(EvalUtils.isImmutable(makeDict(thread))).isFalse();
   }
 
   @Test
   public void testDatatypeMutabilityDeep() throws Exception {
     assertThat(EvalUtils.isImmutable(Tuple.<Object>of(makeList(null)))).isTrue();
 
-    assertThat(EvalUtils.isImmutable(Tuple.<Object>of(makeList(env)))).isFalse();
+    assertThat(EvalUtils.isImmutable(Tuple.<Object>of(makeList(thread)))).isFalse();
   }
 
   @Test
@@ -124,10 +100,10 @@ public class EvalUtilsTest extends EvaluationTestCase {
       Runtime.NONE,
       SkylarkList.Tuple.of(1, 2, 3),
       SkylarkList.Tuple.of("1", "2", "3"),
-      SkylarkList.MutableList.of(env, 1, 2, 3),
-      SkylarkList.MutableList.of(env, "1", "2", "3"),
-      SkylarkDict.of(env, "key", 123),
-      SkylarkDict.of(env, 123, "value"),
+      SkylarkList.MutableList.of(thread, 1, 2, 3),
+      SkylarkList.MutableList.of(thread, "1", "2", "3"),
+      SkylarkDict.of(thread, "key", 123),
+      SkylarkDict.of(thread, 123, "value"),
       NestedSetBuilder.stableOrder().add(1).add(2).add(3).build(),
       StructProvider.STRUCT.create(ImmutableMap.of("key", (Object) "value"), "no field %s"),
     };
@@ -135,12 +111,10 @@ public class EvalUtilsTest extends EvaluationTestCase {
     for (int i = 0; i < objects.length; ++i) {
       for (int j = 0; j < objects.length; ++j) {
         if (i != j) {
-          try {
-            EvalUtils.SKYLARK_COMPARATOR.compare(objects[i], objects[j]);
-            fail("Shouldn't have compared different types");
-          } catch (ComparisonException e) {
-            // expected
-          }
+          Object first = objects[i];
+          Object second = objects[j];
+          assertThrows(
+              ComparisonException.class, () -> EvalUtils.SKYLARK_COMPARATOR.compare(first, second));
         }
       }
     }
@@ -148,12 +122,9 @@ public class EvalUtilsTest extends EvaluationTestCase {
 
   @Test
   public void testComparatorWithNones() throws Exception {
-    try {
-      EvalUtils.SKYLARK_COMPARATOR.compare(Runtime.NONE, Runtime.NONE);
-      fail("Shouldn't have compared nones");
-    } catch (ComparisonException e) {
-      // expected
-    }
+    assertThrows(
+        ComparisonException.class,
+        () -> EvalUtils.SKYLARK_COMPARATOR.compare(Runtime.NONE, Runtime.NONE));
   }
 
   @SkylarkModule(
@@ -186,8 +157,10 @@ public class EvalUtilsTest extends EvaluationTestCase {
         assertThrows(
             IllegalArgumentException.class,
             () -> EvalUtils.getSkylarkType(NonSkylarkValueSubclass.class));
-    assertThat(expected).hasMessageThat().contains(
-        "class com.google.devtools.build.lib.syntax.EvalUtilsTest$NonSkylarkValueSubclass "
-            + "is not allowed as a Skylark value");
+    assertThat(expected)
+        .hasMessageThat()
+        .contains(
+            "class com.google.devtools.build.lib.syntax.EvalUtilsTest$NonSkylarkValueSubclass "
+                + "is not allowed as a Starlark value");
   }
 }

@@ -16,7 +16,7 @@ package com.google.devtools.build.lib.bazel.rules.common;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.LICENSE;
-import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.packages.Type.STRING;
 
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
@@ -65,10 +65,7 @@ public final class BazelFilegroupRule implements RuleDefinition {
           <code>data</code></a> for more information about how to depend on and use data files.
         </p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .add(
-            attr("data", LABEL_LIST)
-                .allowedFileTypes(FileTypeSet.ANY_FILE)
-                .dontCheckConstraints())
+        .add(attr("data", LABEL_LIST).allowedFileTypes(FileTypeSet.ANY_FILE).dontCheckConstraints())
         .add(attr("output_licenses", LICENSE))
         /*<!-- #BLAZE_RULE(filegroup).ATTRIBUTE(path) -->
         An optional string to set a path to the files in the group, relative to the package path.
@@ -81,7 +78,7 @@ public final class BazelFilegroupRule implements RuleDefinition {
             attr("path", STRING)
                 .undocumented(
                     "only used to expose FilegroupPathProvider, which is not currently used"))
-        .supportsPlatforms(false)
+        .useToolchainResolution(false)
         .build();
   }
 

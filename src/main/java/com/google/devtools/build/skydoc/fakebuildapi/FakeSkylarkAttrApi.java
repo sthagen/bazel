@@ -14,14 +14,20 @@
 
 package com.google.devtools.build.skydoc.fakebuildapi;
 
+import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.skylarkbuildapi.ProviderApi;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAttrApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeDescriptor.Type;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AttributeType;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 
 /**
  * Fake implementation of {@link SkylarkAttrApi}.
@@ -29,94 +35,271 @@ import com.google.devtools.build.skydoc.fakebuildapi.FakeDescriptor.Type;
 public class FakeSkylarkAttrApi implements SkylarkAttrApi {
 
   @Override
-  public Descriptor intAttribute(Integer defaultInt, String doc, Boolean mandatory,
-      SkylarkList<?> values, FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.INT, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor stringAttribute(String defaultString, String doc, Boolean mandatory,
-      SkylarkList<?> values, FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.STRING, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor labelAttribute(Object defaultO, String doc, Boolean executable,
-      Object allowFiles, Object allowSingleFile, Boolean mandatory, SkylarkList<?> providers,
-      Object allowRules, Boolean singleFile, Object cfg, SkylarkList<?> aspects,
-      FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.LABEL, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor stringListAttribute(Boolean mandatory, Boolean nonEmpty, Boolean allowEmpty,
-      SkylarkList<?> defaultList, String doc, FuncallExpression ast, Environment env)
+  public Descriptor intAttribute(
+      Integer defaultInt,
+      String doc,
+      Boolean mandatory,
+      SkylarkList<?> values,
+      FuncallExpression ast,
+      StarlarkThread thread)
       throws EvalException {
-    return new FakeDescriptor(Type.STRING_LIST, doc, mandatory);
+    return new FakeDescriptor(AttributeType.INT, doc, mandatory, ImmutableList.of(), defaultInt);
   }
 
   @Override
-  public Descriptor intListAttribute(Boolean mandatory, Boolean nonEmpty, Boolean allowEmpty,
-      SkylarkList<?> defaultList, String doc, FuncallExpression ast, Environment env)
+  public Descriptor stringAttribute(
+      String defaultString,
+      String doc,
+      Boolean mandatory,
+      SkylarkList<?> values,
+      FuncallExpression ast,
+      StarlarkThread thread)
       throws EvalException {
-    return new FakeDescriptor(Type.INT_LIST, doc, mandatory);
+    return new FakeDescriptor(
+        AttributeType.STRING,
+        doc,
+        mandatory,
+        ImmutableList.of(),
+        defaultString != null ? "\"" + defaultString + "\"" : null);
   }
 
   @Override
-  public Descriptor labelListAttribute(Boolean allowEmpty, Object defaultList, String doc,
-      Object allowFiles, Object allowRules, SkylarkList<?> providers, SkylarkList<?> flags,
-      Boolean mandatory, Boolean nonEmpty, Object cfg, SkylarkList<?> aspects,
-      FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.LABEL_LIST, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor labelKeyedStringDictAttribute(Boolean allowEmpty, Object defaultList,
-      String doc, Object allowFiles, Object allowRules, SkylarkList<?> providers,
-      SkylarkList<?> flags, Boolean mandatory, Boolean nonEmpty, Object cfg, SkylarkList<?> aspects,
-      FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.LABEL_STRING_DICT, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor boolAttribute(Boolean defaultO, String doc, Boolean mandatory,
-      FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.BOOLEAN, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor outputAttribute(Object defaultO, String doc, Boolean mandatory,
-      FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.OUTPUT, doc, mandatory);
-  }
-
-  @Override
-  public Descriptor outputListAttribute(Boolean allowEmpty, SkylarkList<?> defaultList, String doc,
-      Boolean mandatory, Boolean nonEmpty, FuncallExpression ast, Environment env)
+  public Descriptor labelAttribute(
+      Object defaultO,
+      String doc,
+      Boolean executable,
+      Object allowFiles,
+      Object allowSingleFile,
+      Boolean mandatory,
+      SkylarkList<?> providers,
+      Object allowRules,
+      Boolean singleFile,
+      Object cfg,
+      SkylarkList<?> aspects,
+      FuncallExpression ast,
+      StarlarkThread thread)
       throws EvalException {
-    return new FakeDescriptor(Type.OUTPUT_LIST, doc, mandatory);
+    List<List<String>> allNameGroups = new ArrayList<>();
+    if (providers != null) {
+      allNameGroups = allProviderNameGroups(providers, thread);
+    }
+    return new FakeDescriptor(AttributeType.LABEL, doc, mandatory, allNameGroups, defaultO);
   }
 
   @Override
-  public Descriptor stringDictAttribute(Boolean allowEmpty, SkylarkDict<?, ?> defaultO, String doc,
-      Boolean mandatory, Boolean nonEmpty, FuncallExpression ast, Environment env)
+  public Descriptor stringListAttribute(
+      Boolean mandatory,
+      Boolean nonEmpty,
+      Boolean allowEmpty,
+      SkylarkList<?> defaultList,
+      String doc,
+      FuncallExpression ast,
+      StarlarkThread thread)
       throws EvalException {
-    return new FakeDescriptor(Type.STRING_DICT, doc, mandatory);
+    return new FakeDescriptor(
+        AttributeType.STRING_LIST, doc, mandatory, ImmutableList.of(), defaultList);
   }
 
   @Override
-  public Descriptor stringListDictAttribute(Boolean allowEmpty, SkylarkDict<?, ?> defaultO,
-      String doc, Boolean mandatory, Boolean nonEmpty, FuncallExpression ast, Environment env)
+  public Descriptor intListAttribute(
+      Boolean mandatory,
+      Boolean nonEmpty,
+      Boolean allowEmpty,
+      SkylarkList<?> defaultList,
+      String doc,
+      FuncallExpression ast,
+      StarlarkThread thread)
       throws EvalException {
-    return new FakeDescriptor(Type.STRING_LIST_DICT, doc, mandatory);
+    return new FakeDescriptor(
+        AttributeType.INT_LIST, doc, mandatory, ImmutableList.of(), defaultList);
   }
 
   @Override
-  public Descriptor licenseAttribute(Object defaultO, String doc, Boolean mandatory,
-      FuncallExpression ast, Environment env) throws EvalException {
-    return new FakeDescriptor(Type.LICENSE, doc, mandatory);
+  public Descriptor labelListAttribute(
+      Boolean allowEmpty,
+      Object defaultList,
+      String doc,
+      Object allowFiles,
+      Object allowRules,
+      SkylarkList<?> providers,
+      SkylarkList<?> flags,
+      Boolean mandatory,
+      Boolean nonEmpty,
+      Object cfg,
+      SkylarkList<?> aspects,
+      FuncallExpression ast,
+      StarlarkThread thread)
+      throws EvalException {
+    List<List<String>> allNameGroups = new ArrayList<>();
+    if (providers != null) {
+      allNameGroups = allProviderNameGroups(providers, thread);
+    }
+    return new FakeDescriptor(AttributeType.LABEL_LIST, doc, mandatory, allNameGroups, defaultList);
+  }
+
+  @Override
+  public Descriptor labelKeyedStringDictAttribute(
+      Boolean allowEmpty,
+      Object defaultList,
+      String doc,
+      Object allowFiles,
+      Object allowRules,
+      SkylarkList<?> providers,
+      SkylarkList<?> flags,
+      Boolean mandatory,
+      Boolean nonEmpty,
+      Object cfg,
+      SkylarkList<?> aspects,
+      FuncallExpression ast,
+      StarlarkThread thread)
+      throws EvalException {
+    List<List<String>> allNameGroups = new ArrayList<>();
+    if (providers != null) {
+      allNameGroups = allProviderNameGroups(providers, thread);
+    }
+    return new FakeDescriptor(
+        AttributeType.LABEL_STRING_DICT, doc, mandatory, allNameGroups, defaultList);
+  }
+
+  @Override
+  public Descriptor boolAttribute(
+      Boolean defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
+      throws EvalException {
+    return new FakeDescriptor(
+        AttributeType.BOOLEAN,
+        doc,
+        mandatory,
+        ImmutableList.of(),
+        Boolean.TRUE.equals(defaultO) ? "True" : "False");
+  }
+
+  @Override
+  public Descriptor outputAttribute(
+      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
+      throws EvalException {
+    return new FakeDescriptor(AttributeType.OUTPUT, doc, mandatory, ImmutableList.of(), defaultO);
+  }
+
+  @Override
+  public Descriptor outputListAttribute(
+      Boolean allowEmpty,
+      Object defaultList,
+      String doc,
+      Boolean mandatory,
+      Boolean nonEmpty,
+      FuncallExpression ast,
+      StarlarkThread thread)
+      throws EvalException {
+    return new FakeDescriptor(
+        AttributeType.OUTPUT_LIST, doc, mandatory, ImmutableList.of(), defaultList);
+  }
+
+  @Override
+  public Descriptor stringDictAttribute(
+      Boolean allowEmpty,
+      SkylarkDict<?, ?> defaultO,
+      String doc,
+      Boolean mandatory,
+      Boolean nonEmpty,
+      FuncallExpression ast,
+      StarlarkThread thread)
+      throws EvalException {
+    return new FakeDescriptor(
+        AttributeType.STRING_DICT, doc, mandatory, ImmutableList.of(), defaultO);
+  }
+
+  @Override
+  public Descriptor stringListDictAttribute(
+      Boolean allowEmpty,
+      SkylarkDict<?, ?> defaultO,
+      String doc,
+      Boolean mandatory,
+      Boolean nonEmpty,
+      FuncallExpression ast,
+      StarlarkThread thread)
+      throws EvalException {
+    return new FakeDescriptor(
+        AttributeType.STRING_LIST_DICT, doc, mandatory, ImmutableList.of(), defaultO);
+  }
+
+  @Override
+  public Descriptor licenseAttribute(
+      Object defaultO, String doc, Boolean mandatory, FuncallExpression ast, StarlarkThread thread)
+      throws EvalException {
+    return new FakeDescriptor(
+        AttributeType.STRING_LIST, doc, mandatory, ImmutableList.of(), defaultO);
   }
 
   @Override
   public void repr(SkylarkPrinter printer) {}
+
+  /**
+   * Returns a list of provider name groups, given the value of a Starlark attribute's "providers"
+   * argument.
+   *
+   * <p>{@code providers} can either be a list of providers or a list of lists of providers, where
+   * each provider is represented by a ProviderApi or by a String. In the case of a single-level
+   * list, the whole list is considered a single group, while in the case of a double-level list,
+   * each of the inner lists is a separate group.
+   */
+  private static List<List<String>> allProviderNameGroups(
+      SkylarkList<?> providers, StarlarkThread thread) {
+
+    List<List<String>> allNameGroups = new ArrayList<>();
+    for (Object object : providers) {
+      List<String> providerNameGroup;
+      if (object instanceof SkylarkList) {
+        SkylarkList<?> group = (SkylarkList<?>) object;
+        providerNameGroup = parseProviderGroup(group, thread);
+        allNameGroups.add(providerNameGroup);
+      } else {
+        providerNameGroup = parseProviderGroup(providers, thread);
+        allNameGroups.add(providerNameGroup);
+        break;
+      }
+    }
+    return allNameGroups;
+  }
+
+  /**
+   * Returns the names of the providers in the given group.
+   *
+   * <p>Each item in the group may be either a {@link ProviderApi} or a {@code String} (representing
+   * a legacy provider).
+   */
+  private static List<String> parseProviderGroup(SkylarkList<?> group, StarlarkThread thread) {
+    List<String> providerNameGroup = new ArrayList<>();
+    for (Object object : group) {
+      if (object instanceof ProviderApi) {
+        ProviderApi provider = (ProviderApi) object;
+        String providerName = providerName(provider, thread);
+        providerNameGroup.add(providerName);
+      } else if (object instanceof String) {
+        String legacyProvider = (String) object;
+        providerNameGroup.add(legacyProvider);
+      }
+    }
+    return providerNameGroup;
+  }
+
+  /**
+   * Returns the name of {@code provider}.
+   *
+   * <p>{@code thread} contains a {@code Map<String, Object>} where the values are built-in objects
+   * or objects defined in the file and the keys are the names of these objects. If a {@code
+   * provider} is in the map, the name of the provider is set as the key of this object in {@code
+   * bindings}. If it is not in the map, the provider may be part of a module in the map and the
+   * name will be set to "Unknown Provider".
+   */
+  private static String providerName(ProviderApi provider, StarlarkThread thread) {
+    Map<String, Object> bindings = thread.getGlobals().getTransitiveBindings();
+    if (bindings.containsValue(provider)) {
+      for (Entry<String, Object> envEntry : bindings.entrySet()) {
+        if (provider.equals(envEntry.getValue())) {
+          return envEntry.getKey();
+        }
+      }
+    }
+    return "Unknown Provider";
+  }
 }

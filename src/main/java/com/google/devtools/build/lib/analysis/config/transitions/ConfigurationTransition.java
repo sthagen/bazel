@@ -29,12 +29,12 @@ public interface ConfigurationTransition {
   List<BuildOptions> apply(BuildOptions buildOptions);
 
   /**
-   * We want to keep the number of transition interfaces no larger than what's necessary to
-   * maintain a clear configuration API.
+   * We want to keep the number of transition interfaces no larger than what's necessary to maintain
+   * a clear configuration API.
    *
    * <p>This method provides a speed bump against creating new interfaces too casually. While we
    * could provide stronger enforcement by making {@link ConfigurationTransition} an abstract class
-   * with a limited access constructor, keeping it as an interface supports definining transitions
+   * with a limited access constructor, keeping it as an interface supports defining transitions
    * with lambdas.
    *
    * <p>If you're considering adding a new override, contact bazel-dev@googlegroups.com to discuss.
@@ -51,5 +51,16 @@ public interface ConfigurationTransition {
 
   default String getName() {
     return this.getClass().getSimpleName();
+  }
+
+  /** Allows the given {@link Visitor} to inspect this transition. */
+  default <E extends Exception> void visit(Visitor<E> visitor) throws E {
+    visitor.accept(this);
+  }
+
+  /** Helper object that can be used to inspect {@link ConfigurationTransition} instances. */
+  @FunctionalInterface
+  interface Visitor<E extends Exception> {
+    void accept(ConfigurationTransition transition) throws E;
   }
 }

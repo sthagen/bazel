@@ -14,12 +14,23 @@
 
 package com.google.devtools.build.lib.packages.util;
 
+import com.google.devtools.build.lib.rules.proto.ProtoCommon;
+import com.google.devtools.build.lib.testutil.Scratch;
+import com.google.devtools.build.lib.testutil.TestConstants;
 import java.io.IOException;
 
 /**
  * Creates mock BUILD files required for the proto_library rule.
  */
 public final class MockProtoSupport {
+  private MockProtoSupport() {
+    throw new UnsupportedOperationException();
+  }
+
+  /** This is workarround for tests that do not use {@code Scratch} (e.g. aquery-tests). */
+  public static final String MIGRATION_TAG =
+      String.format("tags = ['%s'],", ProtoCommon.PROTO_RULES_MIGRATION_LABEL);
+
   /**
    * Setup the support for building proto_library. You additionally need to setup support for each
    * of the languages used in the specific test.
@@ -28,7 +39,7 @@ public final class MockProtoSupport {
    */
   public static void setup(MockToolsConfig config) throws IOException {
     createNetProto2(config);
-    createJavascriptClosureProto2(config);
+    createJavascriptJspb(config);
   }
 
   /**
@@ -36,9 +47,10 @@ public final class MockProtoSupport {
    * and versions.
    */
   private static void createNetProto2(MockToolsConfig config) throws IOException {
-    config.create("net/proto2/compiler/public/BUILD",
+    config.create(
+        "net/proto2/compiler/public/BUILD",
         "package(default_visibility=['//visibility:public'])",
-        "exports_files(['protocol_compiler'])");
+        "sh_binary(name='protocol_compiler', srcs=['protocol_compiler.sh'])");
 
     if (config.isRealFileSystem()) {
       // when using a "real" file system, import the jars and link to ensure compilation
@@ -91,10 +103,11 @@ public final class MockProtoSupport {
         "          srcs = [ 'composite_cc_plugin.cc' ])");
 
     // Fake targets for proto API libs of all languages and versions.
-    config.create("net/proto2/public/BUILD",
+    config.create(
+        "net/proto2/public/BUILD",
         "package(default_visibility=['//visibility:public'])",
-        "cc_library(name = 'proto2',",
-        "           srcs = [ 'proto2.cc' ])");
+        "cc_library(name = 'cc_proto_library_blaze_internal_deps',",
+        "           srcs = [ 'cc_proto_library_blaze_internal_deps.cc' ])");
     config.create("net/proto2/python/public/BUILD",
         "package(default_visibility=['//visibility:public'])",
          "py_library(name = 'public',",
@@ -117,7 +130,8 @@ public final class MockProtoSupport {
     config.create(
         "net/rpc/BUILD",
         "package(default_visibility=['//visibility:public'])",
-        "cc_library(name = 'stubby12_proto_rpc_libs')");
+        "cc_library(name = 'stubby12_proto_rpc_libs')",
+        "cc_library(name = 'no_stubby_rpc_libs_please_dont_depend_on_this')");
     config.create("net/rpc4/public/core/BUILD",
         "package(default_visibility=['//visibility:public'])",
         "cc_library(name = 'stubby4_rpc_libs')");
@@ -145,7 +159,9 @@ public final class MockProtoSupport {
         "java_library(name = 'rpc3_noloas_internal',",
         "             deps = ['//java/com/google/net/rpc:rpc_noloas_internal'],",
         "             srcs = [ 'Rpc3Noloas.java' ])");
-    config.create("net/proto2/proto/BUILD",
+    config.create(
+        "net/proto2/proto/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
         "package(default_visibility=['//visibility:public'])",
         "genrule(name = 'go_internal_bootstrap_hack',",
         "        srcs = [ 'descriptor.pb.go-prebuilt' ],",
@@ -189,15 +205,55 @@ public final class MockProtoSupport {
         "           srcs = [ 'metadata.go' ])");
   }
 
-  /**
-   * Create a dummy "javascript/closure/proto2" package.
-   */
-  private static void createJavascriptClosureProto2(MockToolsConfig config) throws IOException {
+  /** Create a dummy jspb support package. */
+  private static void createJavascriptJspb(MockToolsConfig config) throws IOException {
     config.create(
-        "javascript/closure/proto2/BUILD",
+        "net/proto2/compiler/js/internal/BUILD",
+        "package(default_visibility=['//visibility:public'])",
+        "cc_binary(name = 'protoc-gen-js',",
+        "    srcs = ['plugin.cc'])");
+    config.create(
+        "javascript/apps/jspb/BUILD",
+        "load('//tools/build_defs/js:rules.bzl', 'js_library')",
         "package(default_visibility=['//visibility:public'])",
         "js_library(name = 'message',",
-        "           srcs = ['message.js'],",
-        "           deps_mgmt = 'legacy')");
+        "       srcs = ['message.js'],",
+        "       deps_mgmt = 'legacy')");
+    config.create(
+        "javascript/closure/array/BUILD",
+        "load('//tools/build_defs/js:rules.bzl', 'js_library')",
+        "package(default_visibility=['//visibility:public'])",
+        "js_library(name = 'array',",
+        "       srcs = ['array.js'],",
+        "       deps_mgmt = 'legacy')");
+    config.create(
+        "javascript/apps/xid/BUILD",
+        "load('//tools/build_defs/js:rules.bzl', 'js_library')",
+        "package(default_visibility=['//visibility:public'])",
+        "js_library(name = 'xid',",
+        "       srcs = ['xid.js'],",
+        "       deps_mgmt = 'legacy')");
+  }
+
+  public static void setupWorkspace(Scratch scratch) throws Exception {
+    scratch.appendFile(
+        "WORKSPACE",
+        "local_repository(",
+        "    name = 'rules_proto',",
+        "    path = 'third_party/rules_proto',",
+        ")");
+    scratch.file("third_party/rules_proto/WORKSPACE");
+    scratch.file("third_party/rules_proto/proto/BUILD", "licenses(['notice'])");
+    scratch.file(
+        "third_party/rules_proto/proto/defs.bzl",
+        "def _add_tags(kargs):",
+        "    if 'tags' in kargs:",
+        "        kargs['tags'] += ['__PROTO_RULES_MIGRATION_DO_NOT_USE_WILL_BREAK__']",
+        "    else:",
+        "        kargs['tags'] = ['__PROTO_RULES_MIGRATION_DO_NOT_USE_WILL_BREAK__']",
+        "    return kargs",
+        "",
+        "def proto_library(**kargs): native.proto_library(**_add_tags(kargs))",
+        "def proto_lang_toolchain(**kargs): native.proto_lang_toolchain(**_add_tags(kargs))");
   }
 }

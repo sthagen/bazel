@@ -21,7 +21,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
-import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
@@ -41,24 +40,6 @@ public class HeaderDiscoveryTest {
   private final Path execRoot = fs.getPath("/execroot");
   private final Path derivedRoot = execRoot.getRelative("derived");
   private final ArtifactRoot artifactRoot = ArtifactRoot.asDerivedRoot(execRoot, derivedRoot);
-
-  /**
-   * Test that an included header is satisfied (=doesn't cause an error) if it provided by a tree
-   * artifact.
-   */
-  @Test
-  public void treeArtifactInclusionCheck() throws Exception {
-    ArtifactResolver artifactResolver = mock(ArtifactResolver.class);
-
-    checkHeaderInclusion(
-        artifactResolver,
-        ImmutableList.of(
-            derivedRoot.getRelative("tree_artifact/foo.h"),
-            derivedRoot.getRelative("tree_artifact/subdir/foo.h")),
-        ImmutableList.of(treeArtifact(derivedRoot.getRelative("tree_artifact"))));
-
-    // Implicitly check that there are no exceptions thrown.
-  }
 
   @Test
   public void errorsWhenMissingHeaders() {
@@ -84,7 +65,8 @@ public class HeaderDiscoveryTest {
         .shouldValidateInclusions()
         .setAction(new ActionsTestUtil.NullAction())
         .setPermittedSystemIncludePrefixes(ImmutableList.of())
-        .setSourceFile(new Artifact(derivedRoot.getRelative("foo.cc"), artifactRoot))
+        .setSourceFile(
+            ActionsTestUtil.createArtifact(artifactRoot, derivedRoot.getRelative("foo.cc")))
         .setDependencies(dependencies)
         .setAllowedDerivedinputs(includedHeaders)
         .build()
@@ -95,7 +77,7 @@ public class HeaderDiscoveryTest {
     return new SpecialArtifact(
         artifactRoot,
         artifactRoot.getExecPath().getRelative(artifactRoot.getRoot().relativize(path)),
-        ArtifactOwner.NullArtifactOwner.INSTANCE,
+        ActionsTestUtil.NULL_ARTIFACT_OWNER,
         Artifact.SpecialArtifactType.TREE);
   }
 }

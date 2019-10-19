@@ -14,29 +14,39 @@
 
 package com.google.devtools.build.skydoc.fakebuildapi;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
-import com.google.devtools.build.lib.skylarkbuildapi.FileTypeApi;
 import com.google.devtools.build.lib.skylarkbuildapi.ProviderApi;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAspectApi;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkRuleFunctionsApi;
 import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeDescriptor.Type;
-import com.google.devtools.build.skydoc.rendering.AttributeInfo;
-import com.google.devtools.build.skydoc.rendering.RuleInfo;
+import com.google.devtools.build.lib.syntax.SkylarkType;
+import com.google.devtools.build.lib.syntax.StarlarkFunction;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
+import com.google.devtools.build.skydoc.rendering.AspectInfoWrapper;
+import com.google.devtools.build.skydoc.rendering.ProviderInfoWrapper;
+import com.google.devtools.build.skydoc.rendering.RuleInfoWrapper;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AspectInfo;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AttributeInfo;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AttributeType;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.ProviderFieldInfo;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.ProviderInfo;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.RuleInfo;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
-import javax.annotation.Nullable;
 
 /**
  * Fake implementation of {@link SkylarkRuleFunctionsApi}.
@@ -47,32 +57,96 @@ import javax.annotation.Nullable;
 public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<FileApi> {
 
   private static final FakeDescriptor IMPLICIT_NAME_ATTRIBUTE_DESCRIPTOR =
-      new FakeDescriptor(Type.STRING, "A unique name for this rule.", true);
-  private final List<RuleInfo> ruleInfoList;
+      new FakeDescriptor(
+          AttributeType.NAME, "A unique name for this target.", true, ImmutableList.of(), "");
+  private final List<RuleInfoWrapper> ruleInfoList;
+
+  private final List<ProviderInfoWrapper> providerInfoList;
+
+  private final List<AspectInfoWrapper> aspectInfoList;
 
   /**
    * Constructor.
    *
    * @param ruleInfoList the list of {@link RuleInfo} objects to which rule() invocation information
    *     will be added
+   * @param providerInfoList the list of {@link ProviderInfo} objects to which provider() invocation
+   *     information will be added
+   * @param aspectInfoList the list of {@link AspectInfo} objects to which aspect() invocation
+   *     information will be added
    */
-  public FakeSkylarkRuleFunctionsApi(List<RuleInfo> ruleInfoList) {
+  public FakeSkylarkRuleFunctionsApi(
+      List<RuleInfoWrapper> ruleInfoList,
+      List<ProviderInfoWrapper> providerInfoList,
+      List<AspectInfoWrapper> aspectInfoList) {
     this.ruleInfoList = ruleInfoList;
+    this.providerInfoList = providerInfoList;
+    this.aspectInfoList = aspectInfoList;
   }
 
   @Override
   public ProviderApi provider(String doc, Object fields, Location location) throws EvalException {
-    return new FakeProviderApi();
+    FakeProviderApi fakeProvider = new FakeProviderApi();
+    // Field documentation will be output preserving the order in which the fields are listed.
+    ImmutableList.Builder<ProviderFieldInfo> providerFieldInfos = ImmutableList.builder();
+    if (fields instanceof SkylarkList) {
+      @SuppressWarnings("unchecked")
+      SkylarkList<String> fieldNames = (SkylarkList<String>)
+          SkylarkType.cast(
+              fields,
+              SkylarkList.class, String.class, location,
+              "Expected list of strings or dictionary of string -> string for 'fields'");
+      for (String fieldName : fieldNames) {
+        providerFieldInfos.add(asProviderFieldInfo(fieldName, "(Undocumented)"));
+      }
+    } else if (fields instanceof SkylarkDict) {
+      Map<String, String> dict = SkylarkType.castMap(
+          fields,
+          String.class, String.class,
+          "Expected list of strings or dictionary of string -> string for 'fields'");
+      for (Map.Entry<String, String> fieldEntry : dict.entrySet()) {
+        providerFieldInfos.add(asProviderFieldInfo(fieldEntry.getKey(), fieldEntry.getValue()));
+      }
+    } else {
+      // fields is NONE, so there is no field information to add.
+    }
+    providerInfoList.add(forProviderInfo(fakeProvider, doc, providerFieldInfos.build()));
+    return fakeProvider;
+  }
+
+  /** Constructor for ProviderFieldInfo. */
+  public ProviderFieldInfo asProviderFieldInfo(String name, String docString) {
+    return ProviderFieldInfo.newBuilder().setName(name).setDocString(docString).build();
+  }
+
+  /** Constructor for ProviderInfoWrapper. */
+  public ProviderInfoWrapper forProviderInfo(
+      BaseFunction identifier, String docString, Collection<ProviderFieldInfo> fieldInfos) {
+    return new ProviderInfoWrapper(identifier, docString, fieldInfos);
   }
 
   @Override
-  public BaseFunction rule(BaseFunction implementation, Boolean test, Object attrs,
-      Object implicitOutputs, Boolean executable, Boolean outputToGenfiles,
-      SkylarkList<?> fragments, SkylarkList<?> hostFragments, Boolean skylarkTestable,
-      SkylarkList<?> toolchains, String doc, SkylarkList<?> providesArg,
-      Boolean executionPlatformConstraintsAllowed, SkylarkList<?> execCompatibleWith,
-      FuncallExpression ast, Environment funcallEnv) throws EvalException {
-    List<AttributeInfo> attrInfos;
+  public BaseFunction rule(
+      StarlarkFunction implementation,
+      Boolean test,
+      Object attrs,
+      Object implicitOutputs,
+      Boolean executable,
+      Boolean outputToGenfiles,
+      SkylarkList<?> fragments,
+      SkylarkList<?> hostFragments,
+      Boolean skylarkTestable,
+      SkylarkList<?> toolchains,
+      String doc,
+      SkylarkList<?> providesArg,
+      Boolean executionPlatformConstraintsAllowed,
+      SkylarkList<?> execCompatibleWith,
+      Object analysisTest,
+      Object buildSetting,
+      Object cfg,
+      FuncallExpression ast,
+      StarlarkThread funcallThread)
+      throws EvalException {
     ImmutableMap.Builder<String, FakeDescriptor> attrsMapBuilder = ImmutableMap.builder();
     if (attrs != null && attrs != Runtime.NONE) {
       SkylarkDict<?, ?> attrsDict = (SkylarkDict<?, ?>) attrs;
@@ -80,25 +154,27 @@ public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<File
     }
 
     attrsMapBuilder.put("name", IMPLICIT_NAME_ATTRIBUTE_DESCRIPTOR);
-    attrInfos = attrsMapBuilder.build().entrySet().stream()
-        .filter(entry -> !entry.getKey().startsWith("_"))
-        .map(entry -> new AttributeInfo(
-            entry.getKey(),
-            entry.getValue().getDocString(),
-            entry.getValue().getType().getDescription(),
-            entry.getValue().isMandatory()))
-        .collect(Collectors.toList());
+    List<AttributeInfo> attrInfos =
+        attrsMapBuilder.build().entrySet().stream()
+            .filter(entry -> !entry.getKey().startsWith("_"))
+            .map(entry -> entry.getValue().asAttributeInfo(entry.getKey()))
+            .collect(Collectors.toList());
     attrInfos.sort(new AttributeNameComparator());
 
     RuleDefinitionIdentifier functionIdentifier = new RuleDefinitionIdentifier();
 
-    ruleInfoList.add(new RuleInfo(functionIdentifier, ast.getLocation(), doc, attrInfos));
+    // Only the Builder is passed to RuleInfoWrapper as the rule name is not yet available.
+    RuleInfo.Builder ruleInfo = RuleInfo.newBuilder().setDocString(doc).addAllAttribute(attrInfos);
+
+    ruleInfoList.add(new RuleInfoWrapper(functionIdentifier, ast.getLocation(), ruleInfo));
+
     return functionIdentifier;
   }
 
   @Override
-  public Label label(String labelString, Boolean relativeToCallerRepository, Location loc,
-      Environment env) throws EvalException {
+  public Label label(
+      String labelString, Boolean relativeToCallerRepository, Location loc, StarlarkThread thread)
+      throws EvalException {
     try {
       return Label.parseAbsolute(
           labelString,
@@ -110,17 +186,53 @@ public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<File
   }
 
   @Override
-  public FileTypeApi<FileApi> fileType(SkylarkList<?> types, Location loc, Environment env)
+  public SkylarkAspectApi aspect(
+      StarlarkFunction implementation,
+      SkylarkList<?> attributeAspects,
+      Object attrs,
+      SkylarkList<?> requiredAspectProvidersArg,
+      SkylarkList<?> providesArg,
+      SkylarkList<?> fragments,
+      SkylarkList<?> hostFragments,
+      SkylarkList<?> toolchains,
+      String doc,
+      Boolean applyToFiles,
+      FuncallExpression ast,
+      StarlarkThread funcallThread)
       throws EvalException {
-    return null;
-  }
+    FakeSkylarkAspect fakeAspect = new FakeSkylarkAspect();
+    ImmutableMap.Builder<String, FakeDescriptor> attrsMapBuilder = ImmutableMap.builder();
+    if (attrs != null && attrs != Runtime.NONE) {
+      SkylarkDict<?, ?> attrsDict = (SkylarkDict<?, ?>) attrs;
+      attrsMapBuilder.putAll(attrsDict.getContents(String.class, FakeDescriptor.class, "attrs"));
+    }
 
-  @Override
-  public SkylarkAspectApi aspect(BaseFunction implementation, SkylarkList<?> attributeAspects,
-      Object attrs, SkylarkList<?> requiredAspectProvidersArg, SkylarkList<?> providesArg,
-      SkylarkList<?> fragments, SkylarkList<?> hostFragments, SkylarkList<?> toolchains, String doc,
-      FuncallExpression ast, Environment funcallEnv) throws EvalException {
-    return new FakeSkylarkAspect();
+    attrsMapBuilder.put("name", IMPLICIT_NAME_ATTRIBUTE_DESCRIPTOR);
+    List<AttributeInfo> attrInfos =
+        attrsMapBuilder.build().entrySet().stream()
+            .filter(entry -> !entry.getKey().startsWith("_"))
+            .map(entry -> entry.getValue().asAttributeInfo(entry.getKey()))
+            .collect(Collectors.toList());
+    attrInfos.sort(new AttributeNameComparator());
+
+    List<String> aspectAttrs = new ArrayList<>();
+    if (attributeAspects != null) {
+      aspectAttrs = attributeAspects.getContents(String.class, "aspectAttrs");
+    }
+
+    aspectAttrs =
+        aspectAttrs.stream().filter(entry -> !entry.startsWith("_")).collect(Collectors.toList());
+
+    // Only the Builder is passed to AspectInfoWrapper as the aspect name is not yet available.
+    AspectInfo.Builder aspectInfo =
+        AspectInfo.newBuilder()
+            .setDocString(doc)
+            .addAllAttribute(attrInfos)
+            .addAllAspectAttribute(aspectAttrs);
+
+    aspectInfoList.add(new AspectInfoWrapper(fakeAspect, ast.getLocation(), aspectInfo));
+
+    return fakeAspect;
   }
 
   /**
@@ -137,19 +249,13 @@ public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<File
     public RuleDefinitionIdentifier() {
       super("RuleDefinitionIdentifier" + idCounter++);
     }
-
-    @Override
-    public boolean equals(@Nullable Object other) {
-      // Use exact object matching.
-      return this == other;
-    }
   }
 
   /**
    * A comparator for {@link AttributeInfo} objects which sorts by attribute name alphabetically,
    * except that any attribute named "name" is placed first.
    */
-  private static class AttributeNameComparator implements Comparator<AttributeInfo> {
+  public static class AttributeNameComparator implements Comparator<AttributeInfo> {
 
     @Override
     public int compare(AttributeInfo o1, AttributeInfo o2) {

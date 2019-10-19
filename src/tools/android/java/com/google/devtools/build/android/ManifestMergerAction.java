@@ -185,9 +185,11 @@ public class ManifestMergerAction {
   }
 
   public static void main(String[] args) throws Exception {
-    OptionsParser optionsParser = OptionsParser.newOptionsParser(Options.class);
-    optionsParser.enableParamsFileSupport(
-        new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()));
+    OptionsParser optionsParser =
+        OptionsParser.builder()
+            .optionsClasses(Options.class)
+            .argsPreProcessor(new ShellQuotedParamsFilePreProcessor(FileSystems.getDefault()))
+            .build();
     optionsParser.parseAndExitUponError(args);
     options = optionsParser.getOptions(Options.class);
 
@@ -228,10 +230,13 @@ public class ManifestMergerAction {
         Files.copy(manifest, options.manifestOutput, StandardCopyOption.REPLACE_EXISTING);
       }
     } catch (AndroidManifestProcessor.ManifestProcessingException e) {
-      System.exit(1);
+      // We special case ManifestProcessingExceptions here to indicate that this is
+      // caused by a build error, not an Bazel-internal error.
+      logger.log(SEVERE, "Error during merging manifests", e);
+      System.exit(1); // Don't duplicate the error to the user or bubble up the exception.
     } catch (Exception e) {
       logger.log(SEVERE, "Error during merging manifests", e);
-      throw e;
+      throw e; // This is a proper internal exception, so we bubble it up.
     }
   }
 }

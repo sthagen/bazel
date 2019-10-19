@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 package(
     default_testonly = 1,
     default_visibility = [
@@ -29,6 +31,7 @@ java_library(
         "//src/test/java/com/google/devtools/build/lib:testutil",
         "//third_party:junit4",
         "//third_party:truth",
+        "//third_party:truth8",
     ],
 )
 

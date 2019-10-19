@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BasicActionLookupValue;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
@@ -26,7 +27,6 @@ import com.google.devtools.build.skyframe.SkyKey;
  */
 // TODO(bazel-team): This seems to be superfluous now, but it cannot be removed without making
 // PrecomputedValue public instead of package-private
-@AutoCodec
 public class WorkspaceStatusValue extends BasicActionLookupValue {
   private final Artifact stableArtifact;
   private final Artifact volatileArtifact;
@@ -38,7 +38,9 @@ public class WorkspaceStatusValue extends BasicActionLookupValue {
       Artifact stableArtifact,
       Artifact volatileArtifact,
       WorkspaceStatusAction workspaceStatusAction) {
-    super(workspaceStatusAction);
+    super(
+        Actions.GeneratingActions.fromSingleAction(workspaceStatusAction, BUILD_INFO_KEY),
+        /*nonceVersion=*/ null);
     this.stableArtifact = stableArtifact;
     this.volatileArtifact = volatileArtifact;
   }
@@ -49,11 +51,6 @@ public class WorkspaceStatusValue extends BasicActionLookupValue {
 
   public Artifact getVolatileArtifact() {
     return volatileArtifact;
-  }
-
-  @AutoCodec.VisibleForSerialization
-  WorkspaceStatusAction getWorkspaceStatusAction() {
-    return (WorkspaceStatusAction) getAction(0);
   }
 
   /** {@link SkyKey} for {@link WorkspaceStatusValue}. */

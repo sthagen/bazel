@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.sandbox;
 
+import com.google.auto.value.AutoValue;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -26,6 +27,7 @@ import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput.EmptyActionInput;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
+import com.google.devtools.build.lib.shell.Subprocess;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsParsingResult;
@@ -38,19 +40,23 @@ import java.util.TreeMap;
 
 /** Helper methods that are shared by the different sandboxing strategies in this package. */
 public final class SandboxHelpers {
+  /** Wrapper class for the inputs of a sandbox. */
+  public static final class SandboxInputs {
+    private final Map<PathFragment, Path> files;
+    private final Map<PathFragment, PathFragment> symlinks;
 
-  /**
-   * Returns the inputs of a Spawn as a map of PathFragments relative to an execRoot to paths in the
-   * host filesystem where the input files can be found.
-   *
-   * <p>Also writes any supported {@link VirtualActionInput}s found.
-   *
-   * @throws IOException If any files could not be written.
-   */
-  public static Map<PathFragment, Path> processInputFiles(
-      Spawn spawn, SpawnExecutionContext context, Path execRoot) throws IOException {
-    return processInputFiles(
-        context.getInputMapping(), spawn, context.getArtifactExpander(), execRoot);
+    public SandboxInputs(Map<PathFragment, Path> files, Map<PathFragment, PathFragment> symlinks) {
+      this.files = files;
+      this.symlinks = symlinks;
+    }
+
+    public Map<PathFragment, Path> getFiles() {
+      return files;
+    }
+
+    public Map<PathFragment, PathFragment> getSymlinks() {
+      return symlinks;
+    }
   }
 
   /**
@@ -61,7 +67,28 @@ public final class SandboxHelpers {
    *
    * @throws IOException If any files could not be written.
    */
-  private static Map<PathFragment, Path> processInputFiles(
+  public static SandboxInputs processInputFiles(
+      Spawn spawn,
+      SpawnExecutionContext context,
+      Path execRoot,
+      boolean expandTreeArtifactsInRunfiles)
+      throws IOException {
+    return processInputFiles(
+        context.getInputMapping(expandTreeArtifactsInRunfiles),
+        spawn,
+        context.getArtifactExpander(),
+        execRoot);
+  }
+
+  /**
+   * Returns the inputs of a Spawn as a map of PathFragments relative to an execRoot to paths in the
+   * host filesystem where the input files can be found.
+   *
+   * <p>Also writes any supported {@link VirtualActionInput}s found.
+   *
+   * @throws IOException If any files could not be written.
+   */
+  private static SandboxInputs processInputFiles(
       Map<PathFragment, ActionInput> inputMap,
       Spawn spawn,
       ArtifactExpander artifactExpander,
@@ -85,6 +112,8 @@ public final class SandboxHelpers {
     }
 
     Map<PathFragment, Path> inputFiles = new TreeMap<>();
+    Map<PathFragment, PathFragment> inputSymlinks = new TreeMap<>();
+
     for (Map.Entry<PathFragment, ActionInput> e : inputMap.entrySet()) {
       PathFragment pathFragment = e.getKey();
       ActionInput actionInput = e.getValue();
@@ -101,21 +130,48 @@ public final class SandboxHelpers {
           Preconditions.checkState(actionInput instanceof EmptyActionInput);
         }
       }
-      Path inputPath =
-          actionInput instanceof EmptyActionInput
-              ? null
-              : execRoot.getRelative(actionInput.getExecPath());
-      inputFiles.put(pathFragment, inputPath);
+
+      if (actionInput.isSymlink()) {
+        Path inputPath = execRoot.getRelative(actionInput.getExecPath());
+        // TODO(lberki): This does I/O. This method already throws IOException, so I suppose that is
+        // A-OK?
+        inputSymlinks.put(pathFragment, inputPath.readSymbolicLink());
+      } else {
+        Path inputPath =
+            actionInput instanceof EmptyActionInput
+                ? null
+                : execRoot.getRelative(actionInput.getExecPath());
+        inputFiles.put(pathFragment, inputPath);
+      }
     }
-    return inputFiles;
+    return new SandboxInputs(inputFiles, inputSymlinks);
   }
 
-  public static ImmutableSet<PathFragment> getOutputFiles(Spawn spawn) {
-    ImmutableSet.Builder<PathFragment> outputFiles = ImmutableSet.builder();
-    for (ActionInput output : spawn.getOutputFiles()) {
-      outputFiles.add(PathFragment.create(output.getExecPathString()));
+  /** The file and directory outputs of a sandboxed spawn. */
+  @AutoValue
+  public abstract static class SandboxOutputs {
+    public abstract ImmutableSet<PathFragment> files();
+
+    public abstract ImmutableSet<PathFragment> dirs();
+
+    public static SandboxOutputs create(
+        ImmutableSet<PathFragment> files, ImmutableSet<PathFragment> dirs) {
+      return new AutoValue_SandboxHelpers_SandboxOutputs(files, dirs);
     }
-    return outputFiles.build();
+  }
+
+  public static SandboxOutputs getOutputs(Spawn spawn) {
+    ImmutableSet.Builder<PathFragment> files = ImmutableSet.builder();
+    ImmutableSet.Builder<PathFragment> dirs = ImmutableSet.builder();
+    for (ActionInput output : spawn.getOutputFiles()) {
+      PathFragment path = PathFragment.create(output.getExecPathString());
+      if (output instanceof Artifact && ((Artifact) output).isTreeArtifact()) {
+        dirs.add(path);
+      } else {
+        files.add(path);
+      }
+    }
+    return SandboxOutputs.create(files.build(), dirs.build());
   }
 
   /**
@@ -132,5 +188,30 @@ public final class SandboxHelpers {
         .getOptions(TestConfiguration.TestOptions.class)
         .testArguments
         .contains("--wrapper_script_flag=--debug");
+  }
+
+  /**
+   * Waits for a process to terminate.
+   *
+   * @param process the process to wait for
+   * @return the exit code of the terminated process
+   */
+  static int waitForProcess(Subprocess process) {
+    boolean interrupted = false;
+    try {
+      while (true) {
+        try {
+          process.waitFor();
+          break;
+        } catch (InterruptedException ie) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    return process.exitValue();
   }
 }

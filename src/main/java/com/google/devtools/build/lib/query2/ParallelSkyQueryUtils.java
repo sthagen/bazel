@@ -19,8 +19,6 @@ import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.cmdline.PackageIdentifier;
-import com.google.devtools.build.lib.concurrent.MultisetSemaphore;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.query2.engine.Callback;
@@ -31,7 +29,6 @@ import com.google.devtools.build.lib.query2.engine.QueryExpression;
 import com.google.devtools.build.lib.query2.engine.QueryExpressionContext;
 import com.google.devtools.build.lib.query2.engine.QueryUtil;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.AggregateAllCallback;
-import com.google.devtools.build.lib.query2.engine.Uniquifier;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.util.Collection;
@@ -53,7 +50,7 @@ import javax.annotation.Nullable;
 public class ParallelSkyQueryUtils {
 
   /** The maximum number of keys to visit at once. */
-  @VisibleForTesting static final int VISIT_BATCH_SIZE = 10000;
+  @VisibleForTesting public static final int VISIT_BATCH_SIZE = 10000;
 
   private ParallelSkyQueryUtils() {
   }
@@ -62,17 +59,13 @@ public class ParallelSkyQueryUtils {
       SkyQueryEnvironment env,
       QueryExpression expression,
       QueryExpressionContext<Target> context,
-      Callback<Target> callback,
-      MultisetSemaphore<PackageIdentifier> packageSemaphore) {
+      Callback<Target> callback) {
     return env.eval(
         expression,
         context,
-        ParallelVisitor.createParallelVisitorCallback(
+        ParallelVisitorUtils.createParallelVisitorCallback(
             new RdepsUnboundedVisitor.Factory(
-                env,
-                /*unfilteredUniverse=*/ Predicates.alwaysTrue(),
-                callback,
-                packageSemaphore)));
+                env, /*unfilteredUniverse=*/ Predicates.alwaysTrue(), callback)));
   }
 
   static QueryTaskFuture<Void> getAllRdepsBoundedParallel(
@@ -80,18 +73,13 @@ public class ParallelSkyQueryUtils {
       QueryExpression expression,
       int depth,
       QueryExpressionContext<Target> context,
-      Callback<Target> callback,
-      MultisetSemaphore<PackageIdentifier> packageSemaphore) {
+      Callback<Target> callback) {
     return env.eval(
         expression,
         context,
-        ParallelVisitor.createParallelVisitorCallback(
+        ParallelVisitorUtils.createParallelVisitorCallback(
             new RdepsBoundedVisitor.Factory(
-                env,
-                depth,
-                /*universe=*/ Predicates.alwaysTrue(),
-                callback,
-                packageSemaphore)));
+                env, depth, /*universe=*/ Predicates.alwaysTrue(), callback)));
   }
 
   static QueryTaskFuture<Void> getRdepsInUniverseUnboundedParallel(
@@ -99,14 +87,12 @@ public class ParallelSkyQueryUtils {
       QueryExpression expression,
       Predicate<SkyKey> unfilteredUniverse,
       QueryExpressionContext<Target> context,
-      Callback<Target> callback,
-      MultisetSemaphore<PackageIdentifier> packageSemaphore) {
+      Callback<Target> callback) {
     return env.eval(
         expression,
         context,
-        ParallelVisitor.createParallelVisitorCallback(
-            new RdepsUnboundedVisitor.Factory(
-                env, unfilteredUniverse, callback, packageSemaphore)));
+        ParallelVisitorUtils.createParallelVisitorCallback(
+            new RdepsUnboundedVisitor.Factory(env, unfilteredUniverse, callback)));
   }
 
   static QueryTaskFuture<Predicate<SkyKey>> getDTCSkyKeyPredicateFuture(
@@ -120,22 +106,23 @@ public class ParallelSkyQueryUtils {
 
     Function<ThreadSafeMutableSet<Target>, QueryTaskFuture<Predicate<SkyKey>>>
         getTransitiveClosureAsyncFunction =
-        universeValue -> {
-          ThreadSafeAggregateAllSkyKeysCallback aggregateAllCallback =
-              new ThreadSafeAggregateAllSkyKeysCallback(concurrencyLevel);
-          return env.executeAsync(
-              () -> {
-                Callback<Target> visitorCallback =
-                    ParallelVisitor.createParallelVisitorCallback(
+            universeValue -> {
+              ThreadSafeAggregateAllSkyKeysCallback aggregateAllCallback =
+                  new ThreadSafeAggregateAllSkyKeysCallback(concurrencyLevel);
+              return env.execute(
+                  () -> {
+                    UnfilteredSkyKeyTTVDTCVisitor visitor =
                         new UnfilteredSkyKeyTTVDTCVisitor.Factory(
-                            env,
-                            env.createSkyKeyUniquifier(),
-                            processResultsBatchSize,
-                            aggregateAllCallback));
-                visitorCallback.process(universeValue);
-                return Predicates.in(aggregateAllCallback.getResult());
-              });
-        };
+                                env,
+                                env.createSkyKeyUniquifier(),
+                                processResultsBatchSize,
+                                aggregateAllCallback)
+                            .create();
+                    visitor.visitAndWaitForCompletion(
+                        SkyQueryEnvironment.makeTransitiveTraversalKeysStrict(universeValue));
+                    return Predicates.in(aggregateAllCallback.getResult());
+                  });
+            };
 
     return env.transformAsync(universeValueFuture, getTransitiveClosureAsyncFunction);
   }
@@ -146,28 +133,27 @@ public class ParallelSkyQueryUtils {
       int depth,
       Predicate<SkyKey> universe,
       QueryExpressionContext<Target> context,
-      Callback<Target> callback,
-      MultisetSemaphore<PackageIdentifier> packageSemaphore) {
+      Callback<Target> callback) {
     return env.eval(
         expression,
         context,
-        ParallelVisitor.createParallelVisitorCallback(
-            new RdepsBoundedVisitor.Factory(
-                env,
-                depth,
-                universe,
-                callback,
-                packageSemaphore)));
+        ParallelVisitorUtils.createParallelVisitorCallback(
+            new RdepsBoundedVisitor.Factory(env, depth, universe, callback)));
   }
 
   /** Specialized parallel variant of {@link SkyQueryEnvironment#getRBuildFiles}. */
   static void getRBuildFilesParallel(
       SkyQueryEnvironment env,
       Collection<PathFragment> fileIdentifiers,
+      QueryExpressionContext<Target> context,
       Callback<Target> callback) throws QueryException, InterruptedException {
-    Uniquifier<SkyKey> keyUniquifier = env.createSkyKeyUniquifier();
     RBuildFilesVisitor visitor =
-        new RBuildFilesVisitor(env, keyUniquifier, callback);
+        new RBuildFilesVisitor(
+            env,
+            /*visitUniquifier=*/ env.createSkyKeyUniquifier(),
+            /*resultUniquifier=*/ env.createSkyKeyUniquifier(),
+            context,
+            callback);
     visitor.visitAndWaitForCompletion(env.getFileStateKeysForFileFragments(fileIdentifiers));
   }
 
@@ -176,14 +162,12 @@ public class ParallelSkyQueryUtils {
       QueryExpression expression,
       QueryExpressionContext<Target> context,
       Callback<Target> callback,
-      MultisetSemaphore<PackageIdentifier> packageSemaphore,
       boolean depsNeedFiltering) {
     return env.eval(
         expression,
         context,
-        ParallelVisitor.createParallelVisitorCallback(
-            new DepsUnboundedVisitor.Factory(
-                env, callback, packageSemaphore, depsNeedFiltering, context)));
+        ParallelVisitorUtils.createParallelVisitorCallback(
+            new DepsUnboundedVisitor.Factory(env, callback, depsNeedFiltering, context)));
   }
 
   static class DepAndRdep {

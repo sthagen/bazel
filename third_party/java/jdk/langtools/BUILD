@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_import")
+
 package(default_visibility = ["//visibility:public"])
 
 licenses(["restricted"])  # GNU GPL v2 with Classpath exception
@@ -17,6 +19,16 @@ filegroup(
         "javac-9+181-r4173-1.jar",
         "javac-9+181-r4173-1.srcjar",
         "jdk_compiler.jar",
+        "jdk_compiler-src.jar",
+    ],
+)
+
+filegroup(
+    name = "license-and-srcs",
+    srcs = [
+        "LICENSE",
+        "java_compiler-src.jar",
+        "javac-9+181-r4173-1.srcjar",
         "jdk_compiler-src.jar",
     ],
 )

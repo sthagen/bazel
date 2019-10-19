@@ -20,7 +20,7 @@ import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
 
 /** {@code fdo_profile} rule class. */
@@ -51,6 +51,12 @@ public final class FdoProfileRule implements RuleDefinition {
         that holds an LLVM profraw profile, or .afdo for AutoFDO profile.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("absolute_path_profile", Type.STRING))
+        /* <!-- #BLAZE_RULE(fdo_profile).ATTRIBUTE(proto_profile) -->
+        Label of the protobuf profile.
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(attr("proto_profile", LABEL)
+            .allowedFileTypes(FileTypeSet.ANY_FILE)
+            .singleArtifact())
         .advertiseProvider(FdoProfileProvider.class)
         .build();
   }
@@ -65,7 +71,7 @@ public final class FdoProfileRule implements RuleDefinition {
   }
 }
 
-/*<!-- #BLAZE_RULE (NAME = fdo_profile, TYPE = LIBRARY, FAMILY = Cpp) -->
+/*<!-- #BLAZE_RULE (NAME = fdo_profile, TYPE = LIBRARY, FAMILY = C / C++) -->
 
 <p>Represents an FDO profile that is either in the workspace or at a specified absolute path.
 Examples:</p>

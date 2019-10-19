@@ -14,7 +14,9 @@
 #ifndef SRC_TOOLS_SINGLEJAR_TRANSIENT_BYTES_H_
 #define SRC_TOOLS_SINGLEJAR_TRANSIENT_BYTES_H_
 
+#ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS 1
+#endif
 
 #include <inttypes.h>
 #include <algorithm>
@@ -129,6 +131,13 @@ class TransientBytes {
     }
 
     // Smog check
+    // This check is disabled on Windows because z_stream::total_out is of type
+    // of uLong (unsigned long), which is 64-bit for most 64-bit Unix platforms,
+    // but it is 32-bit even for Win64. This means even though zlib is capable
+    // of compressing data >4GB as long as it is processed by chunks, zlib
+    // cannot report the correct total number of processed bytes >4GB through
+    // z_stream::total_out on Windows.
+#ifndef _WIN32
     if (inflater->total_out() - old_total_out != out_bytes) {
       diag_errx(2,
                 "%s:%d: Internal error inflating %.*s: inflater wrote %" PRIu64
@@ -137,6 +146,7 @@ class TransientBytes {
                 __FILE__, __LINE__, lh->file_name_length(), lh->file_name(),
                 inflater->total_out() - old_total_out, out_bytes);
     }
+#endif
     inflater->reset();
   }
 

@@ -62,6 +62,14 @@ final class WorkerFactory extends BaseKeyedPooledObjectFactory<WorkerKey, Worker
     if (sandboxed) {
       Path workDir = getSandboxedWorkerPath(key, workerId);
       worker = new SandboxedWorker(key, workerId, workDir, logFile);
+    } else if (key.getProxied()) {
+      worker =
+          new WorkerProxy(
+              key,
+              workerId,
+              key.getExecRoot(),
+              logFile,
+              WorkerMultiplexerManager.getInstance(key.hashCode()));
     } else {
       worker = new Worker(key, workerId, key.getExecRoot(), logFile);
     }
@@ -114,7 +122,7 @@ final class WorkerFactory extends BaseKeyedPooledObjectFactory<WorkerKey, Worker
     boolean hashMatches =
         key.getWorkerFilesCombinedHash().equals(worker.getWorkerFilesCombinedHash());
 
-    if (reporter != null && !hashMatches) {
+    if (workerOptions.workerVerbose && reporter != null && !hashMatches) {
       StringBuilder msg = new StringBuilder();
       msg.append(
           String.format(
@@ -124,8 +132,8 @@ final class WorkerFactory extends BaseKeyedPooledObjectFactory<WorkerKey, Worker
       files.addAll(key.getWorkerFilesWithHashes().keySet());
       files.addAll(worker.getWorkerFilesWithHashes().keySet());
       for (PathFragment file : files) {
-        HashCode oldHash = key.getWorkerFilesWithHashes().get(file);
-        HashCode newHash = worker.getWorkerFilesWithHashes().get(file);
+        HashCode oldHash = worker.getWorkerFilesWithHashes().get(file);
+        HashCode newHash = key.getWorkerFilesWithHashes().get(file);
         if (!oldHash.equals(newHash)) {
           msg.append("\n")
               .append(file.getPathString())

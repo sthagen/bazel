@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_binary", "java_toolchain")
+
 # Description:
 # JavaBuilder and java tools used by Bazel
 package(default_visibility = [":buildjar_package_group"])
@@ -10,7 +12,6 @@ filegroup(
         "//src/java_tools/buildjar/java/com/google/devtools/build/java/bazel:srcs",
         "//src/java_tools/buildjar/java/com/google/devtools/build/java/turbine:srcs",
         "//src/java_tools/buildjar/javatests/com/google/devtools/build/buildjar:srcs",
-        "//src/java_tools/buildjar/javatests/com/google/devtools/build/java/bazel:srcs",
         "//src/java_tools/buildjar/javatests/com/google/devtools/build/java/turbine:srcs",
     ],
     visibility = ["//:__subpackages__"],
@@ -19,6 +20,7 @@ filegroup(
 package_group(
     name = "buildjar_package_group",
     packages = [
+        "//src/...",
         "//src/java_tools/buildjar/...",
         "//src/tools/android/...",
     ],
@@ -39,16 +41,6 @@ java_binary(
 )
 
 filegroup(
-    name = "JavaBuilderDeploy",
-    srcs = [":JavaBuilder_deploy.jar"],
-    tags = ["manual"],
-    visibility = [
-        ":buildjar_package_group",
-        "//src:__pkg__",
-    ],
-)
-
-filegroup(
     name = "bootstrap_VanillaJavaBuilder_deploy.jar",
     srcs = ["//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:bootstrap_VanillaJavaBuilder_deploy.jar"],
     tags = ["manual"],
@@ -62,14 +54,6 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-java_library(
-    name = "BazelJavaCompiler",
-    visibility = ["//visibility:public"],
-    exports = [
-        "//src/java_tools/buildjar/java/com/google/devtools/build/java/bazel:BazelJavaCompiler",
-    ],
-)
-
 # This toolchain is used to bootstrap Bazel.
 java_toolchain(
     name = "bootstrap_toolchain",
@@ -77,7 +61,7 @@ java_toolchain(
     # class path after -bootclasspath. For convenience, we currently have a
     # single jar that contains the contents of both the bootclasspath and
     # extdirs.
-    bootclasspath = ["//tools/jdk:platformclasspath8.jar"],
+    bootclasspath = ["//tools/jdk:platformclasspath.jar"],
     extclasspath = [],
     genclass = ["bootstrap_genclass_deploy.jar"],
     ijar = ["//third_party/ijar"],

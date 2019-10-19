@@ -3,8 +3,7 @@ layout: documentation
 title: Build Tutorial - Java
 ---
 
-Introduction to Bazel: Building a Java Project
-==========
+# Introduction to Bazel: Building a Java Project
 
 In this tutorial, you'll learn the basics of building Java applications with
 Bazel. You will set up your workspace and build a simple Java project that
@@ -24,22 +23,11 @@ In this tutorial you'll learn how to:
 *  Deploy a target
 
 ## Contents
+{:.no_toc}
 
-*  [Before you begin](#before-you-begin)
-   *  [Install Bazel](#install-bazel)
-   *  [Install the JDK](#install-the-jdk)
-   *  [Get the sample project](#get-the-sample-project)
-*  [Build with Bazel](#build-with-bazel)
-   *  [Set up the workspace](#set-up-the-workspace)
-   *  [Understand the BUILD file](#understand-the-build-file)
-   *  [Build the project](#build-the-project)
-   *  [Review the dependency graph](#review-the-dependency-graph)
-*  [Refine your Bazel build](#refine-your-bazel-build)
-   *  [Specify multiple build targets](#specify-multiple-build-targets)
-   *  [Use multiple packages](#use-multiple-packages)
-*  [Use labels to reference targets](#use-labels-to-reference-targets)
-*  [Package a Java target for deployment](#package-a-java-target-for-deployment)
-*  [Further reading](#further-reading)
+* ToC
+{:toc}
+
 
 ## Before you begin
 
@@ -62,7 +50,7 @@ you don't have it installed already.
         3.  Under the "User&nbsp;variables" list (the one on the top), click "New...".
         4.  In the "Variable&nbsp;name" field, enter `JAVA_HOME`.
         5.  Click "Browse&nbsp;Directory...".
-        6.  Navigate to the JDK directory (for example `C:\Program&nbsp;Files\Java\jdk1.8.0_152`).
+        6.  Navigate to the JDK directory (for example `C:\Program Files\Java\jdk1.8.0_152`).
         7.  Click "OK" on all dialog windows.
 
 ### Get the sample project
@@ -187,7 +175,7 @@ Let's visualize our sample project's dependencies. First, generate a text
 representation of the dependency graph (run the command at the workspace root):
 
 ```
-bazel query  --nohost_deps --noimplicit_deps "deps(//:ProjectRunner)" --output graph
+bazel query  --notool_deps --noimplicit_deps "deps(//:ProjectRunner)" --output graph
 ```
 
 The above command tells Bazel to look for all dependencies for the target
@@ -263,8 +251,8 @@ recompiles that file.
 Looking at the dependency graph, you can see that `ProjectRunner` depends on the
 same inputs as it did before, but the structure of the build is different:
 
-![Dependency graph of the target 'ProjectRunner' after adding a dependency]
-(/assets/tutorial_java_02.svg)
+![Dependency graph of the target 'ProjectRunner' after adding a dependency](
+/assets/tutorial_java_02.svg)
 
 You've now built the project with two targets. The `ProjectRunner` target builds
 two source files and depends on one other target (`:greeter`), which builds
@@ -357,8 +345,8 @@ target in the `BUILD` file (the `name` attribute). If the target is a file
 target, then `path/to/package` is the path to the root of the package, and
 `target-name` is the name of the target file, including its full path.
 
-When referencing targets within the same package, you can skip the package path
-and just use `//:target-name`. When referencing targets within the same `BUILD`
+When referencing targets at the repository root, the package path is empty,
+just use `//:target-name`. When referencing targets within the same `BUILD`
 file, you can even skip the `//` workspace root identifier and just use
 `:target-name`.
 
@@ -420,10 +408,13 @@ dependencies.
 
 ## Further reading
 
+*  [rules_jvm_external](https://github.com/bazelbuild/rules_jvm_external) for
+   rules to manage transitive Maven dependencies.
+
 *  [External Dependencies](../external.html) to learn more about working with
    local and remote repositories.
 
-*  The [Build Encyclopedia](../be/overview.html) to learn more about Bazel.
+*  The [other rules](../rules.html) to learn more about Bazel.
 
 *  The [C++ build tutorial](../tutorial/cpp.md) to get started with building
    C++ projects with Bazel.

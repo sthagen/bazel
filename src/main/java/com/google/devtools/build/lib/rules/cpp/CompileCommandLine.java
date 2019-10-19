@@ -17,12 +17,14 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.rules.cpp.CcCommon.CoptsFilter;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.ExpansionException;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
-import com.google.devtools.build.lib.rules.cpp.CppCompileAction.DotdFile;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +38,7 @@ public final class CompileCommandLine {
   private final FeatureConfiguration featureConfiguration;
   private final CcToolchainVariables variables;
   private final String actionName;
-  private final DotdFile dotdFile;
+  private final Artifact dotdFile;
 
   @AutoCodec.Instantiator
   @VisibleForSerialization
@@ -46,7 +48,7 @@ public final class CompileCommandLine {
       FeatureConfiguration featureConfiguration,
       CcToolchainVariables variables,
       String actionName,
-      DotdFile dotdFile) {
+      Artifact dotdFile) {
     this.sourceFile = Preconditions.checkNotNull(sourceFile);
     this.coptsFilter = coptsFilter;
     this.featureConfiguration = Preconditions.checkNotNull(featureConfiguration);
@@ -62,8 +64,12 @@ public final class CompileCommandLine {
   }
 
   /** Returns the environment variables that should be set for C++ compile actions. */
-  protected Map<String, String> getEnvironment() {
-    return featureConfiguration.getEnvironmentVariables(actionName, variables);
+  protected Map<String, String> getEnvironment() throws CommandLineExpansionException {
+    try {
+      return featureConfiguration.getEnvironmentVariables(actionName, variables);
+    } catch (ExpansionException e) {
+      throw new CommandLineExpansionException(e.getMessage());
+    }
   }
 
   /** Returns the tool path for the compilation based on the current feature configuration. */
@@ -80,30 +86,41 @@ public final class CompileCommandLine {
    * @param overwrittenVariables: Variables that will overwrite original build variables. When null,
    *     unmodified original variables are used.
    */
-  protected List<String> getArguments(@Nullable CcToolchainVariables overwrittenVariables) {
+  protected List<String> getArguments(
+      @Nullable PathFragment parameterFilePath, @Nullable CcToolchainVariables overwrittenVariables)
+      throws CommandLineExpansionException {
     List<String> commandLine = new ArrayList<>();
 
     // first: The command name.
     commandLine.add(getToolPath());
 
     // second: The compiler options.
-    commandLine.addAll(getCompilerOptions(overwrittenVariables));
+    if (parameterFilePath != null) {
+      commandLine.add("@" + parameterFilePath.getSafePathString());
+    } else {
+      commandLine.addAll(getCompilerOptions(overwrittenVariables));
+    }
     return commandLine;
   }
 
-  public List<String> getCompilerOptions(@Nullable CcToolchainVariables overwrittenVariables) {
-    List<String> options = new ArrayList<>();
+  public List<String> getCompilerOptions(@Nullable CcToolchainVariables overwrittenVariables)
+      throws CommandLineExpansionException {
+    try {
+      List<String> options = new ArrayList<>();
 
-    CcToolchainVariables updatedVariables = variables;
-    if (variables != null && overwrittenVariables != null) {
-      CcToolchainVariables.Builder variablesBuilder = new CcToolchainVariables.Builder(variables);
-      variablesBuilder.addAllNonTransitive(overwrittenVariables);
-      updatedVariables = variablesBuilder.build();
+      CcToolchainVariables updatedVariables = variables;
+      if (variables != null && overwrittenVariables != null) {
+        CcToolchainVariables.Builder variablesBuilder = CcToolchainVariables.builder(variables);
+        variablesBuilder.addAllNonTransitive(overwrittenVariables);
+        updatedVariables = variablesBuilder.build();
+      }
+      addFilteredOptions(
+          options, featureConfiguration.getPerFeatureExpansions(actionName, updatedVariables));
+
+      return options;
+    } catch (ExpansionException e) {
+      throw new CommandLineExpansionException(e.getMessage());
     }
-    addFilteredOptions(
-        options, featureConfiguration.getPerFeatureExpansions(actionName, updatedVariables));
-
-    return options;
   }
 
   // For each option in 'in', add it to 'out' unless it is matched by the 'coptsFilter' regexp.
@@ -114,8 +131,13 @@ public final class CompileCommandLine {
         out.addAll(pair.getSecond());
         continue;
       }
-
-      pair.getSecond().stream().filter(coptsFilter::passesFilter).forEachOrdered(out::add);
+      // We do not uses Java's stream API here as it causes a substantial overhead compared to the
+      // very little work that this is actually doing.
+      for (String flag : pair.getSecond()) {
+        if (coptsFilter.passesFilter(flag)) {
+          out.add(flag);
+        }
+      }
     }
   }
 
@@ -123,7 +145,7 @@ public final class CompileCommandLine {
     return sourceFile;
   }
 
-  public DotdFile getDotdFile() {
+  public Artifact getDotdFile() {
     return dotdFile;
   }
 
@@ -140,18 +162,20 @@ public final class CompileCommandLine {
    */
   public ImmutableList<String> getCopts() {
     if (variables.isAvailable(CompileBuildVariables.USER_COMPILE_FLAGS.getVariableName())) {
-      return CcToolchainVariables.toStringList(
-          variables, CompileBuildVariables.USER_COMPILE_FLAGS.getVariableName());
+      try {
+        return CcToolchainVariables.toStringList(
+            variables, CompileBuildVariables.USER_COMPILE_FLAGS.getVariableName());
+      } catch (ExpansionException e) {
+        throw new IllegalStateException(
+            "Should not happen - 'user_compile_flags' should be a string list, but wasn't.");
+      }
     } else {
       return ImmutableList.of();
     }
   }
 
   public static Builder builder(
-      Artifact sourceFile,
-      CoptsFilter coptsFilter,
-      String actionName,
-      DotdFile dotdFile) {
+      Artifact sourceFile, CoptsFilter coptsFilter, String actionName, Artifact dotdFile) {
     return new Builder(sourceFile, coptsFilter, actionName, dotdFile);
   }
 
@@ -162,7 +186,7 @@ public final class CompileCommandLine {
     private FeatureConfiguration featureConfiguration;
     private CcToolchainVariables variables = CcToolchainVariables.EMPTY;
     private final String actionName;
-    @Nullable private final DotdFile dotdFile;
+    @Nullable private final Artifact dotdFile;
 
     public CompileCommandLine build() {
       return new CompileCommandLine(
@@ -175,10 +199,7 @@ public final class CompileCommandLine {
     }
 
     private Builder(
-        Artifact sourceFile,
-        CoptsFilter coptsFilter,
-        String actionName,
-        DotdFile dotdFile) {
+        Artifact sourceFile, CoptsFilter coptsFilter, String actionName, Artifact dotdFile) {
       this.sourceFile = sourceFile;
       this.coptsFilter = coptsFilter;
       this.actionName = actionName;

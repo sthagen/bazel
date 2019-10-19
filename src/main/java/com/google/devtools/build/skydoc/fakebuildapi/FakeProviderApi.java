@@ -17,10 +17,10 @@ package com.google.devtools.build.skydoc.fakebuildapi;
 import com.google.devtools.build.lib.skylarkbuildapi.ProviderApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.FunctionSignature;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 import javax.annotation.Nullable;
 
 /**
@@ -29,12 +29,17 @@ import javax.annotation.Nullable;
  */
 public class FakeProviderApi extends BaseFunction implements ProviderApi {
 
+  /**
+   * Each fake is constructed with a unique name, controlled by this counter being the name suffix.
+   */
+  private static int idCounter = 0;
+
   public FakeProviderApi() {
-    super("ProviderFunction", FunctionSignature.WithValues.create(FunctionSignature.KWARGS));
+    super("ProviderIdentifier" + idCounter++, FunctionSignature.KWARGS);
   }
 
   @Override
-  protected Object call(Object[] args, @Nullable FuncallExpression ast, Environment env)
+  protected Object call(Object[] args, @Nullable FuncallExpression ast, StarlarkThread thread)
       throws EvalException, InterruptedException {
     return new FakeStructApi();
   }

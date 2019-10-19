@@ -66,7 +66,7 @@ def _impl(ctx):
         fail("ERROR: rule_size_test.margin must be 0 when " +
              "rule_size_test.expect is 0")
 
-    amount = len(ctx.attr.src[DefaultInfo].files)
+    amount = len(ctx.attr.src[DefaultInfo].files.to_list())
 
     if ctx.attr.margin > 0:
         if amount >= ctx.attr.expect:
@@ -88,7 +88,14 @@ def _impl(ctx):
 
     if ctx.attr.is_windows:
         test_bin = ctx.actions.declare_file(ctx.label.name + ".bat")
-        ctx.actions.write(output = test_bin, content = "", is_executable = True)
+
+        # CreateProcessW can launch .bat files directly as long as they are NOT
+        # empty. Therefore we write a .bat file with a comment in it.
+        ctx.actions.write(
+            output = test_bin,
+            content = "@REM dummy",
+            is_executable = True,
+        )
     else:
         test_bin = ctx.actions.declare_file(ctx.label.name + ".sh")
         ctx.actions.write(

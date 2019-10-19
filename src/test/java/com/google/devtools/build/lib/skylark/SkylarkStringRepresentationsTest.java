@@ -173,7 +173,7 @@ public class SkylarkStringRepresentationsTest extends SkylarkTestCase {
         "dep = rule(implementation = _impl)",
         "",
         "def _genfile_impl(ctx):",
-        "  ctx.file_action(output = ctx.outputs.my_output, content = 'foo')",
+        "  ctx.actions.write(output = ctx.outputs.my_output, content = 'foo')",
         "genfile = rule(",
         "  implementation = _genfile_impl,",
         "  outputs = {'my_output': '%{name}.txt'},",
@@ -267,12 +267,12 @@ public class SkylarkStringRepresentationsTest extends SkylarkTestCase {
   @Test
   public void testStringRepresentations_Rules() throws Exception {
     assertStringRepresentation("native.cc_library", "<built-in rule cc_library>");
-    assertStringRepresentation("rule(implementation=str)", "<rule>");
+    assertStringRepresentation("def f(): pass", "rule(implementation=f)", "<rule>");
   }
 
   @Test
   public void testStringRepresentations_Aspects() throws Exception {
-    assertStringRepresentation("aspect(implementation=str)", "<aspect>");
+    assertStringRepresentation("def f(): pass", "aspect(implementation=f)", "<aspect>");
   }
 
   @Test
@@ -354,7 +354,6 @@ public class SkylarkStringRepresentationsTest extends SkylarkTestCase {
     assertStringRepresentation("attr.output_list()", "<attr.output_list>");
     assertStringRepresentation("attr.string_dict()", "<attr.string_dict>");
     assertStringRepresentation("attr.string_list_dict()", "<attr.string_list_dict>");
-    assertStringRepresentation("attr.license()", "<attr.license>");
   }
 
   @Test

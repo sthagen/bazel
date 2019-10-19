@@ -11,7 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include "tools/cpp/runfiles/runfiles_src.h"  // this line is replaced in @bazel_tools
+
+// The "srcs_for_embedded_tools" rule in the same package sets the line below to
+// include runfiles.h from the correct path. Do not modify the line below.
+#include "tools/cpp/runfiles/runfiles_src.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -23,6 +26,7 @@
 #endif  // _WIN32
 
 #include <fstream>
+#include <functional>
 #include <map>
 #include <sstream>
 #include <vector>
@@ -90,6 +94,10 @@ bool IsDirectory(const string& path) {
 }
 
 bool PathsFrom(const std::string& argv0, std::string runfiles_manifest_file,
+               std::string runfiles_dir, std::string* out_manifest,
+               std::string* out_directory);
+
+bool PathsFrom(const std::string& argv0, std::string runfiles_manifest_file,
                std::string runfiles_dir,
                std::function<bool(const std::string&)> is_runfiles_manifest,
                std::function<bool(const std::string&)> is_runfiles_directory,
@@ -104,16 +112,8 @@ Runfiles* Runfiles::Create(const string& argv0,
                            const string& runfiles_manifest_file,
                            const string& runfiles_dir, string* error) {
   string manifest, directory;
-  if (!PathsFrom(argv0, runfiles_manifest_file, runfiles_dir,
-                 [](const string& path) {
-                   return (ends_with(path, "MANIFEST") ||
-                           ends_with(path, ".runfiles_manifest")) &&
-                          IsReadableFile(path);
-                 },
-                 [](const string& path) {
-                   return ends_with(path, ".runfiles") && IsDirectory(path);
-                 },
-                 &manifest, &directory)) {
+  if (!PathsFrom(argv0, runfiles_manifest_file, runfiles_dir, &manifest,
+                 &directory)) {
     if (error) {
       std::ostringstream err;
       err << "ERROR: " << __FILE__ << "(" << __LINE__
@@ -156,14 +156,14 @@ string GetEnv(const string& key) {
 #ifdef _WIN32
   DWORD size = ::GetEnvironmentVariableA(key.c_str(), NULL, 0);
   if (size == 0) {
-    return std::move(string());  // unset or empty envvar
+    return string();  // unset or empty envvar
   }
   std::unique_ptr<char[]> value(new char[size]);
   ::GetEnvironmentVariableA(key.c_str(), value.get(), size);
-  return std::move(string(value.get()));
+  return value.get();
 #else
   char* result = getenv(key.c_str());
-  return std::move((result == NULL) ? string() : string(result));
+  return (result == NULL) ? string() : string(result);
 #endif
 }
 
@@ -243,7 +243,20 @@ Runfiles* Runfiles::Create(const string& argv0, string* error) {
                           GetEnv("RUNFILES_DIR"), error);
 }
 
+Runfiles* Runfiles::CreateForTest(std::string* error) {
+  return Runfiles::Create(std::string(), GetEnv("RUNFILES_MANIFEST_FILE"),
+                          GetEnv("TEST_SRCDIR"), error);
+}
+
 namespace {
+
+bool PathsFrom(const string& argv0, string mf, string dir, string* out_manifest,
+               string* out_directory) {
+  return PathsFrom(argv0, mf, dir,
+                   [](const string& path) { return IsReadableFile(path); },
+                   [](const string& path) { return IsDirectory(path); },
+                   out_manifest, out_directory);
+}
 
 bool PathsFrom(const string& argv0, string mf, string dir,
                function<bool(const string&)> is_runfiles_manifest,
@@ -255,7 +268,7 @@ bool PathsFrom(const string& argv0, string mf, string dir,
   bool mfValid = is_runfiles_manifest(mf);
   bool dirValid = is_runfiles_directory(dir);
 
-  if (!mfValid && !dirValid) {
+  if (!argv0.empty() && !mfValid && !dirValid) {
     mf = argv0 + ".runfiles/MANIFEST";
     dir = argv0 + ".runfiles";
     mfValid = is_runfiles_manifest(mf);
@@ -279,7 +292,8 @@ bool PathsFrom(const string& argv0, string mf, string dir,
     }
   }
 
-  if (!dirValid) {
+  if (!dirValid &&
+      (ends_with(mf, ".runfiles_manifest") || ends_with(mf, "/MANIFEST"))) {
     static const size_t kSubstrLen = 9;  // "_manifest" or "/MANIFEST"
     dir = mf.substr(0, mf.size() - kSubstrLen);
     dirValid = is_runfiles_directory(dir);

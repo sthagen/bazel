@@ -7,45 +7,18 @@ title: Extension Overview
 
 <!-- [TOC] -->
 
-## Loading an extension
+## Getting started
 
-Bazel extensions are files ending in `.bzl`. Use the `load` statement to
-import a symbol from an extension.
+Bazel extensions are files ending in `.bzl`. Use a [load statement](
+../build-ref.html#load) to import a symbol from an extension.
 
-```python
-load("//build_tools/rules:maprule.bzl", "maprule")
-```
+Before learning the more advanced concepts, we recommend that you first:
 
-This code will load the file `build_tools/rules/maprule.bzl` and add the
-`maprule` symbol to the environment. This can be used to load new rules,
-functions or constants (e.g. a string, a list, etc.). Multiple symbols can be
-imported by using additional arguments to the call to `load`. Arguments must
-be string literals (no variable) and `load` statements must appear at
-top-level, i.e. they cannot be in a function body.
+* Read about the [Starlark language](language.md), used in both the BUILD and
+  `.bzl` files.
 
-The first argument of `load` is a [label](https://docs.bazel.build/versions/master/build-ref.html#labels)
-identifying a `.bzl` file. If it is a relative label, it is resolved with
-respect to the package (not directory) containing the current `.bzl` file.
-Relative labels in `load` statements should use a leading `:`.
-
-`load` also supports aliases, i.e. you can assign different names to the
-imported symbols.
-
-```python
-load("//build_tools/rules:maprule.bzl", maprule_alias = "maprule")
-```
-
-You can define multiple aliases within one `load` statement. Moreover, the
-argument list can contain both aliases and regular symbol names. The following
-example is perfectly legal (please note when to use quotation marks).
-
-```python
-load(":my_rules.bzl", "some_rule", nice_alias = "some_other_rule")
-```
-
-In a `.bzl` file, symbols starting with `_` are not exported and cannot be loaded
-from another file. Visibility doesn't affect loading (yet): you don't need to
-use `exports_files` to make a `.bzl` file visible.
+* Learn how you can [share variables](tutorial-sharing-variables.md) between two
+  BUILD files.
 
 ## Macros and rules
 
@@ -97,3 +70,37 @@ Bazel tries to be clever: it uses dependency analysis to know which files must
 be loaded, which rules must be analyzed, and which actions must be executed. For
 example, if a rule generates actions that we don't need for the current build,
 they will not be executed.
+
+## Creating extensions
+
+* [Create your first macro](tutorial-creating-a-macro.md) in order to reuse some
+  code. Then [learn more about macros](macros.md) and
+  [using them to create "custom verbs"](tutorial-custom-verbs.md).
+
+* [Follow the rules tutorial](rules-tutorial.md) to get started with rules.
+  Next, you can read more about the [rules concepts](rules.md).
+
+The two links below will be very useful when writing your own extensions. Keep
+them within reach:
+
+* The [API reference](lib/skylark-overview.html)
+
+* [Examples](https://github.com/bazelbuild/examples/tree/master/rules)
+
+## Going further
+
+In addition to [macro](macros.md) and [rules](rules.md), you may want to write
+[aspects](aspects.md) and [repository rules](repository_rules.md).
+
+* Use [Buildifier](https://github.com/bazelbuild/buildtools) to format and lint
+  your code. We recommend that you use it consistently.
+
+* Follow the [`.bzl` style guide](bzl-style.md).
+
+* [Test](testing.md) your code.
+
+* [Generate documentation](https://skydoc.bazel.build/) to help your users.
+
+* [Optimize the performance](performance.md) of your code.
+
+* [Deploy](deploying.md) your extensions to other people.

@@ -13,30 +13,28 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
-import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.packages.Type.STRING;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.Whitelist;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.EmptyToNullLabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
+import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.EmptyToNullLabelConverter;
+import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.skylark.annotations.SkylarkConfigurationField;
-import com.google.devtools.build.lib.analysis.whitelisting.Whitelist;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.RuleErrorConsumer;
-import com.google.devtools.build.lib.rules.android.AndroidConfiguration.AndroidAaptVersion.AndroidRobolectricTestDeprecationLevel;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.DynamicMode;
 import com.google.devtools.build.lib.rules.cpp.CppOptions.DynamicModeConverter;
 import com.google.devtools.build.lib.rules.cpp.CppOptions.LibcTopLabelConverter;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidConfigurationApi;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.EnumConverter;
@@ -48,7 +46,6 @@ import java.util.List;
 import javax.annotation.Nullable;
 
 /** Configuration fragment for Android rules. */
-@AutoCodec
 @Immutable
 public class AndroidConfiguration extends BuildConfiguration.Fragment
     implements AndroidConfigurationApi {
@@ -79,18 +76,18 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     }
   }
 
+  /** Converter for {@link ManifestMergerOrder} */
+  public static final class ManifestMergerOrderConverter
+      extends EnumConverter<ManifestMergerOrder> {
+    public ManifestMergerOrderConverter() {
+      super(ManifestMergerOrder.class, "android manifest merger order");
+    }
+  }
+
   /** Converter for {@link AndroidAaptVersion} */
   public static final class AndroidAaptConverter extends EnumConverter<AndroidAaptVersion> {
     public AndroidAaptConverter() {
       super(AndroidAaptVersion.class, "android androidAaptVersion");
-    }
-  }
-
-  /** Converter for {@link AndroidRobolectricTestDeprecationLevel} */
-  public static final class AndroidRobolectricTestDeprecationLevelConverter
-      extends EnumConverter<AndroidRobolectricTestDeprecationLevel> {
-    public AndroidRobolectricTestDeprecationLevelConverter() {
-      super(AndroidRobolectricTestDeprecationLevel.class, "android robolectric deprecation level");
     }
   }
 
@@ -152,11 +149,15 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
   /** Types of android manifest mergers. */
   public enum AndroidManifestMerger {
     LEGACY,
-    ANDROID;
+    ANDROID,
+    FORCE_ANDROID;
 
     public static List<String> getAttributeValues() {
       return ImmutableList.of(
-          LEGACY.name().toLowerCase(), ANDROID.name().toLowerCase(), getRuleAttributeDefault());
+          LEGACY.name().toLowerCase(),
+          ANDROID.name().toLowerCase(),
+          FORCE_ANDROID.name().toLowerCase(),
+          getRuleAttributeDefault());
     }
 
     public static String getRuleAttributeDefault() {
@@ -171,6 +172,16 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
       }
       return null;
     }
+  }
+
+  /** Orders for merging android manifests. */
+  public enum ManifestMergerOrder {
+    /** Manifests are sorted alphabetically by exec path. */
+    ALPHABETICAL,
+    /** Manifests are sorted alphabetically by configuration-relative path. */
+    ALPHABETICAL_BY_CONFIGURATION,
+    /** Library manifests come before the manifests of their dependencies. */
+    DEPENDENCY;
   }
 
   /** Types of android manifest mergers. */
@@ -197,167 +208,150 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
       return null;
     }
 
-    /** android_robolectric_test deprecation levels */
-    public enum AndroidRobolectricTestDeprecationLevel {
-      OFF,
-      WARNING,
-      DEPRECATED;
-
-      public static List<String> getAttributeValues() {
-        return ImmutableList.of(
-            OFF.name().toLowerCase(),
-            WARNING.name().toLowerCase(),
-            DEPRECATED.name().toLowerCase());
-      }
-
-      public static AndroidRobolectricTestDeprecationLevel fromString(String value) {
-        for (AndroidRobolectricTestDeprecationLevel level :
-            AndroidRobolectricTestDeprecationLevel.values()) {
-          if (level.name().equals(value)) {
-            return level;
-          }
-        }
-        return null;
-      }
-    }
-
     // TODO(corysmith): Move to an appropriate place when no longer needed as a public function.
     @Nullable
     public static AndroidAaptVersion chooseTargetAaptVersion(RuleContext ruleContext)
         throws RuleErrorException {
       if (ruleContext.isLegalFragment(AndroidConfiguration.class)) {
-        boolean hasAapt2 = AndroidSdkProvider.fromRuleContext(ruleContext).getAapt2() != null;
+        AndroidDataContext dataContext = AndroidDataContext.makeContext(ruleContext);
 
         if (ruleContext.getRule().isAttrDefined("aapt_version", STRING)) {
-          // On rules that can choose a version, test attribute then flag choose the aapt version
-          // target.
-          AndroidAaptVersion flag =
-              AndroidCommon.getAndroidConfig(ruleContext).getAndroidAaptVersion();
-
-          AndroidAaptVersion version =
-              fromString(ruleContext.attributes().get("aapt_version", STRING));
-          // version is null if the value is "auto"
-          version = version == AndroidAaptVersion.AUTO ? flag : version;
-
-          if (version == AAPT2 && !hasAapt2) {
-            ruleContext.throwWithRuleError(
-                "aapt2 processing requested but not available on the android_sdk");
-            return null;
-          }
-          return version == AndroidAaptVersion.AUTO ? AAPT : version;
+          // On rules that can choose a version, verify attribute and flag.
+          return chooseTargetAaptVersion(
+              dataContext, ruleContext, ruleContext.attributes().get("aapt_version", STRING));
         } else {
-          // On rules can't choose, assume aapt2 if aapt2 is present in the sdk.
-          return hasAapt2 ? AAPT2 : AAPT;
+          // On rules that can't choose, assume aapt2 if aapt2 is present in the sdk.
+          // This ensures that non-leaf nodes (e.g. android_library) will generate aapt2 actions.
+          if (dataContext.getAndroidConfig().incompatibleProhibitAapt1) {
+            verifySdkHasAapt2(dataContext, ruleContext);
+            return AAPT2;
+          }
+          return AndroidSdkProvider.fromRuleContext(ruleContext).getAapt2() != null ? AAPT2 : AAPT;
         }
       }
       return null;
     }
 
+    /**
+     * Select the aapt version for resource processing actions.
+     *
+     * <p>If --incompatible_prohibit_aapt1 is active, and the rule specifies the {@code
+     * aapt_version} attribute, this will fail.
+     *
+     * <p>Otherwise, order of precedence:
+     * <li>1. --android_aapt flag
+     * <li>2. 'aapt_version' attribute on target
+     *
+     * @param dataContext the Android data context for detecting aapt2 and fetching Android configs
+     * @param errorConsumer the rule context for reporting errors during version selection
+     * @param attributeString if not null, the aapt version specified by the 'aapt_version' target
+     *     attribute
+     * @return the selected version: aapt or aapt2
+     * @throws RuleErrorException error if aapt2 is requested but it's not available in the SDK
+     */
     @Nullable
     public static AndroidAaptVersion chooseTargetAaptVersion(
         AndroidDataContext dataContext,
         RuleErrorConsumer errorConsumer,
-        @Nullable String versionString)
+        @Nullable String attributeString)
         throws RuleErrorException {
+
+      if (dataContext.getAndroidConfig().incompatibleProhibitAapt1) {
+        verifySdkHasAapt2(dataContext, errorConsumer);
+
+        if (!"auto".equals(attributeString)) {
+          throw errorConsumer.throwWithAttributeError(
+              "aapt_version", "Attribute is no longer supported");
+        }
+        return AAPT2;
+      }
 
       boolean hasAapt2 = dataContext.getSdk().getAapt2() != null;
       AndroidAaptVersion flag = dataContext.getAndroidConfig().getAndroidAaptVersion();
+      AndroidAaptVersion attribute = AndroidAaptVersion.fromString(attributeString);
 
-      AndroidAaptVersion version = fromString(versionString);
-      // version is null if the value is "auto"
-      version = version == AndroidAaptVersion.AUTO ? flag : version;
+      AndroidAaptVersion version = flag == AUTO ? attribute : flag;
 
       if (version == AAPT2 && !hasAapt2) {
-        errorConsumer.throwWithRuleError(
+        throw errorConsumer.throwWithRuleError(
             "aapt2 processing requested but not available on the android_sdk");
-        return null;
       }
-      return version == AndroidAaptVersion.AUTO ? AAPT : version;
+
+      if (version == AUTO) {
+        return AAPT;
+      }
+
+      return version;
+    }
+
+    private static void verifySdkHasAapt2(
+        AndroidDataContext dataContext, RuleErrorConsumer errorConsumer) throws RuleErrorException {
+      if (dataContext.getSdk().getAapt2() == null) {
+        throw errorConsumer.throwWithRuleError("aapt2 not available from the android_sdk");
+      }
     }
   }
 
   /** Android configuration options. */
   public static class Options extends FragmentOptions {
     @Option(
-      name = "Android configuration distinguisher",
-      defaultValue = "MAIN",
-      converter = ConfigurationDistinguisherConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
-      metadataTags = {OptionMetadataTag.INTERNAL}
-    )
+        name = "Android configuration distinguisher",
+        defaultValue = "MAIN",
+        converter = ConfigurationDistinguisherConverter.class,
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+        metadataTags = {OptionMetadataTag.INTERNAL})
     public ConfigurationDistinguisher configurationDistinguisher;
 
-    // For deploying incremental installation of native libraries. Do not use on the command line.
-    // The idea is that once this option works, we'll flip the default value in a config file, then
-    // once it is proven that it works, remove it from Bazel and said config file.
     @Option(
-      name = "android_incremental_native_libs",
-      defaultValue = "false",
-      // mobile-install v1 is going away, and this flag does not apply to v2
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.EXECUTION,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = OptionMetadataTag.EXPERIMENTAL
-    )
-    public boolean incrementalNativeLibs;
-
-    @Option(
-      name = "android_crosstool_top",
-      defaultValue = "//external:android/crosstool",
-      converter = EmptyToNullLabelConverter.class,
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.CHANGES_INPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "The location of the C++ compiler used for Android builds."
-    )
+        name = "android_crosstool_top",
+        defaultValue = "//external:android/crosstool",
+        converter = EmptyToNullLabelConverter.class,
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.CHANGES_INPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "The location of the C++ compiler used for Android builds.")
     public Label androidCrosstoolTop;
 
     @Option(
-      name = "android_cpu",
-      defaultValue = "armeabi-v7a",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "The Android target CPU."
-    )
+        name = "android_cpu",
+        defaultValue = "armeabi-v7a",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "The Android target CPU.")
     public String cpu;
 
     @Option(
-      name = "android_compiler",
-      defaultValue = "null",
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "The Android target compiler."
-    )
+        name = "android_compiler",
+        defaultValue = "null",
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "The Android target compiler.")
     public String cppCompiler;
 
     @Option(
-      name = "android_grte_top",
-      defaultValue = "null",
-      converter = LibcTopLabelConverter.class,
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {
-        OptionEffectTag.CHANGES_INPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "The Android target grte_top."
-    )
+        name = "android_grte_top",
+        defaultValue = "null",
+        converter = LibcTopLabelConverter.class,
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {
+          OptionEffectTag.CHANGES_INPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "The Android target grte_top.")
     public Label androidLibcTopLabel;
 
     @Option(
@@ -380,353 +374,398 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     // Label of filegroup combining all Android tools used as implicit dependencies of
     // android_* rules
     @Option(
-      name = "android_sdk",
-      defaultValue = "@bazel_tools//tools/android:sdk",
-      converter = LabelConverter.class,
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {
-        OptionEffectTag.CHANGES_INPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "Specifies Android SDK/platform that is used to build Android applications."
-    )
+        name = "android_sdk",
+        defaultValue = "@bazel_tools//tools/android:sdk",
+        converter = LabelConverter.class,
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {
+          OptionEffectTag.CHANGES_INPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "Specifies Android SDK/platform that is used to build Android applications.")
     public Label sdk;
 
     // TODO(bazel-team): Maybe merge this with --android_cpu above.
     @Option(
-      name = "fat_apk_cpu",
-      converter = Converters.CommaSeparatedOptionListConverter.class,
-      defaultValue = "armeabi-v7a",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help =
-          "Setting this option enables fat APKs, which contain native binaries for all "
-              + "specified target architectures, e.g., --fat_apk_cpu=x86,armeabi-v7a. If this "
-              + "flag is specified, then --android_cpu is ignored for dependencies of "
-              + "android_binary rules."
-    )
+        name = "fat_apk_cpu",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "armeabi-v7a",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help =
+            "Setting this option enables fat APKs, which contain native binaries for all "
+                + "specified target architectures, e.g., --fat_apk_cpu=x86,armeabi-v7a. If this "
+                + "flag is specified, then --android_cpu is ignored for dependencies of "
+                + "android_binary rules.")
     public List<String> fatApkCpus;
 
     // For desugaring lambdas when compiling Java 8 sources. Do not use on the command line.
     // The idea is that once this option works, we'll flip the default value in a config file, then
     // once it is proven that it works, remove it from Bazel and said config file.
     @Option(
-      name = "desugar_for_android",
-      oldName = "experimental_desugar_for_android",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "Whether to desugar Java 8 bytecode before dexing."
-    )
+        name = "desugar_for_android",
+        oldName = "experimental_desugar_for_android",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "Whether to desugar Java 8 bytecode before dexing.")
     public boolean desugarJava8;
 
     @Option(
-      name = "experimental_desugar_java8_libs",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      metadataTags = OptionMetadataTag.EXPERIMENTAL,
-      help = "Whether to include supported Java 8 libraries in apps for legacy devices."
-    )
+        name = "experimental_desugar_java8_libs",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "Whether to include supported Java 8 libraries in apps for legacy devices.")
     public boolean desugarJava8Libs;
 
     // This flag is intended to be flipped globally.
     @Option(
-      name = "experimental_check_desugar_deps",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {
-        OptionEffectTag.EAGERNESS_TO_EXIT,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = OptionMetadataTag.EXPERIMENTAL,
-      help = "Whether to double-check correct desugaring at Android binary level."
-    )
+        name = "experimental_check_desugar_deps",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+        effectTags = {
+          OptionEffectTag.EAGERNESS_TO_EXIT,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "Whether to double-check correct desugaring at Android binary level.")
     public boolean checkDesugarDeps;
 
     @Option(
-      name = "incremental_dexing",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "Does most of the work for dexing separately for each Jar file."
-    )
+        name = "incremental_dexing",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "Does most of the work for dexing separately for each Jar file.")
     public boolean incrementalDexing;
 
     @Option(
-      name = "experimental_incremental_dexing_after_proguard",
-      defaultValue = "1",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.LOSES_INCREMENTAL_STATE},
-      help =
-          "Whether to use incremental dexing tools when building proguarded Android binaries.  "
-              + "Values > 0 turn the feature on, values > 1 run that many dexbuilder shards."
-    )
+        name = "experimental_incremental_dexing_after_proguard",
+        defaultValue = "1",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE
+        },
+        help =
+            "Whether to use incremental dexing tools when building proguarded Android binaries.  "
+                + "Values > 0 turn the feature on, values > 1 run that many dexbuilder shards.")
     public int incrementalDexingShardsAfterProguard;
 
     /** Whether to use a separate tool to shard classes before merging them into final dex files. */
     @Option(
-      name = "experimental_use_dex_splitter_for_incremental_dexing",
-      defaultValue = "false",
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      help = "Do not use."
-    )
+        name = "experimental_use_dex_splitter_for_incremental_dexing",
+        defaultValue = "false",
+        metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        help = "Do not use.")
     public boolean incrementalDexingUseDexSharder;
 
     @Option(
-      name = "experimental_incremental_dexing_after_proguard_by_default",
-      defaultValue = "false",
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      help =
-          "Whether to use incremental dexing for proguarded Android binaries by default.  "
-              + "Use incremental_dexing attribute to override default for a particular "
-              + "android_binary."
-    )
+        name = "experimental_incremental_dexing_after_proguard_by_default",
+        defaultValue = "false",
+        metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        help =
+            "Whether to use incremental dexing for proguarded Android binaries by default.  "
+                + "Use incremental_dexing attribute to override default for a particular "
+                + "android_binary.")
     public boolean incrementalDexingAfterProguardByDefault;
 
     // TODO(b/31711689): Remove this flag when this optimization is proven to work globally.
     @Option(
-      name = "experimental_android_assume_minsdkversion",
-      defaultValue = "false",
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.ACTION_COMMAND_LINES,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help =
-          "When enabled, the minSdkVersion is parsed from the merged AndroidManifest and used to "
-              + "instruct Proguard on valid Android build versions."
-    )
+        name = "experimental_android_assume_minsdkversion",
+        defaultValue = "false",
+        metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.ACTION_COMMAND_LINES,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help =
+            "When enabled, the minSdkVersion is parsed from the merged AndroidManifest and used to "
+                + "instruct Proguard on valid Android build versions.")
     public boolean assumeMinSdkVersion;
 
     @Option(
-      name = "experimental_android_use_parallel_dex2oat",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.TESTING,
-      effectTags = {
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS
-      },
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "Use dex2oat in parallel to possibly speed up android_test."
-    )
+        name = "experimental_android_use_parallel_dex2oat",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.TESTING,
+        effectTags = {
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS
+        },
+        metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+        help = "Use dex2oat in parallel to possibly speed up android_test.")
     public boolean useParallelDex2Oat;
+
+    @Option(
+        name = "break_build_on_parallel_dex2oat_failure",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.TESTING,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+        help =
+            "If true dex2oat action failures will cause the build to break "
+                + "instead of executing dex2oat during test runtime.")
+    public boolean breakBuildOnParallelDex2OatFailure;
 
     // Do not use on the command line.
     // This flag is intended to be updated as we add supported flags to the incremental dexing tools
     @Option(
-      name = "non_incremental_per_target_dexopts",
-      converter = Converters.CommaSeparatedOptionListConverter.class,
-      defaultValue = "--positions",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help =
-          "dx flags that that prevent incremental dexing for binary targets that list any of "
-              + "the flags listed here in their 'dexopts' attribute, which are ignored with "
-              + "incremental dexing (superseding --dexopts_supported_in_incremental_dexing).  "
-              + "Defaults to --positions for safety but can in general be used "
-              + "to make sure the listed dx flags are honored, with additional build latency.  "
-              + "Please notify us if you find yourself needing this flag."
-    )
+        name = "non_incremental_per_target_dexopts",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "--positions",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help =
+            "dx flags that that prevent incremental dexing for binary targets that list any of "
+                + "the flags listed here in their 'dexopts' attribute, which are ignored with "
+                + "incremental dexing (superseding --dexopts_supported_in_incremental_dexing).  "
+                + "Defaults to --positions for safety but can in general be used "
+                + "to make sure the listed dx flags are honored, with additional build latency.  "
+                + "Please notify us if you find yourself needing this flag.")
     public List<String> nonIncrementalPerTargetDexopts;
 
     // Do not use on the command line.
     // This flag is intended to be updated as we add supported flags to the incremental dexing tools
     @Option(
-      name = "dexopts_supported_in_incremental_dexing",
-      converter = Converters.CommaSeparatedOptionListConverter.class,
-      defaultValue = "--no-optimize,--no-locals",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.ACTION_COMMAND_LINES,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help = "dx flags supported when converting Jars to dex archives incrementally."
-    )
+        name = "dexopts_supported_in_incremental_dexing",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "--no-optimize,--no-locals",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.ACTION_COMMAND_LINES,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help = "dx flags supported when converting Jars to dex archives incrementally.")
     public List<String> dexoptsSupportedInIncrementalDexing;
 
     // Do not use on the command line.
     // This flag is intended to be updated as we add supported flags to the incremental dexing tools
     @Option(
-      name = "dexopts_supported_in_dexmerger",
-      converter = Converters.CommaSeparatedOptionListConverter.class,
-      defaultValue = "--minimal-main-dex,--set-max-idx-number",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.ACTION_COMMAND_LINES,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help = "dx flags supported in tool that merges dex archives into final classes.dex files."
-    )
+        name = "dexopts_supported_in_dexmerger",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "--minimal-main-dex,--set-max-idx-number",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.ACTION_COMMAND_LINES,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help = "dx flags supported in tool that merges dex archives into final classes.dex files.")
     public List<String> dexoptsSupportedInDexMerger;
 
+    // Do not use on the command line.
+    // This flag is intended to be updated as we add supported flags to the incremental dexing tools
     @Option(
-      name = "use_workers_with_dexbuilder",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.EXECUTION},
-      help = "Whether dexbuilder supports being run in local worker mode."
-    )
+        name = "dexopts_supported_in_dexsharder",
+        converter = Converters.CommaSeparatedOptionListConverter.class,
+        defaultValue = "--minimal-main-dex",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.ACTION_COMMAND_LINES,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help = "dx flags supported in tool that groups classes for inclusion in final .dex files.")
+    public List<String> dexoptsSupportedInDexSharder;
+
+    @Option(
+        name = "use_workers_with_dexbuilder",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.EXECUTION},
+        help = "Whether dexbuilder supports being run in local worker mode.")
     public boolean useWorkersWithDexbuilder;
 
     @Option(
-      name = "experimental_android_rewrite_dexes_with_rex",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      metadataTags = OptionMetadataTag.EXPERIMENTAL,
-      help = "use rex tool to rewrite dex files"
-    )
+        name = "experimental_android_rewrite_dexes_with_rex",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "use rex tool to rewrite dex files")
     public boolean useRexToCompressDexFiles;
 
     @Option(
-      name = "experimental_allow_android_library_deps_without_srcs",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {
-        OptionEffectTag.EAGERNESS_TO_EXIT,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help =
-          "Flag to help transition from allowing to disallowing srcs-less android_library"
-              + " rules with deps. The depot needs to be cleaned up to roll this out by default."
-    )
+        name = "experimental_allow_android_library_deps_without_srcs",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+        effectTags = {
+          OptionEffectTag.EAGERNESS_TO_EXIT,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help =
+            "Flag to help transition from allowing to disallowing srcs-less android_library"
+                + " rules with deps. The depot needs to be cleaned up to roll this out by default.")
     public boolean allowAndroidLibraryDepsWithoutSrcs;
 
     @Option(
-      name = "experimental_android_resource_shrinking",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help = "Enables resource shrinking for android_binary APKs that use ProGuard."
-    )
+        name = "experimental_android_resource_shrinking",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help = "Enables resource shrinking for android_binary APKs that use ProGuard.")
     public boolean useExperimentalAndroidResourceShrinking;
 
     @Option(
-      name = "android_resource_shrinking",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help = "Enables resource shrinking for android_binary APKs that use ProGuard."
-    )
+        name = "android_resource_shrinking",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help = "Enables resource shrinking for android_binary APKs that use ProGuard.")
     public boolean useAndroidResourceShrinking;
 
     @Option(
-      name = "experimental_android_resource_cycle_shrinking",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = OptionMetadataTag.EXPERIMENTAL,
-      help =
-          "Enables more shrinking of code and resources by instructing AAPT2 "
-              + "to emit conditional Proguard keep rules."
-    )
+        name = "experimental_android_resource_cycle_shrinking",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help =
+            "Enables more shrinking of code and resources by instructing AAPT2 "
+                + "to emit conditional Proguard keep rules.")
     public boolean useAndroidResourceCycleShrinking;
 
     @Option(
-      name = "android_manifest_merger",
-      defaultValue = "android",
-      converter = AndroidManifestMergerConverter.class,
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help =
-          "Selects the manifest merger to use for android_binary rules. Flag to help the"
-              + "transition to the Android manifest merger from the legacy merger."
-    )
+        name = "experimental_android_resource_path_shortening",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "Enables shortening of resource file paths within android_binary APKs.")
+    public boolean useAndroidResourcePathShortening;
+
+    @Option(
+        name = "experimental_android_resource_name_obfuscation",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "Enables obfuscation of resource names within android_binary APKs.")
+    public boolean useAndroidResourceNameObfuscation;
+
+    @Option(
+        name = "android_manifest_merger",
+        defaultValue = "android",
+        converter = AndroidManifestMergerConverter.class,
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help =
+            "Selects the manifest merger to use for android_binary rules. Flag to help the"
+                + "transition to the Android manifest merger from the legacy merger.")
     public AndroidManifestMerger manifestMerger;
 
     @Option(
-      name = "android_aapt",
-      defaultValue = "aapt",
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      converter = AndroidAaptConverter.class,
-      help =
-          "Selects the version of androidAaptVersion to use for android_binary rules."
-              + "Flag to help the test and transition to aapt2."
-    )
+        name = "android_manifest_merger_order",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.ACTION_COMMAND_LINES,
+          OptionEffectTag.EXECUTION,
+        },
+        defaultValue = "alphabetical",
+        converter = ManifestMergerOrderConverter.class,
+        help =
+            "Sets the order of manifests passed to the manifest merger for Android binaries. "
+                + "ALPHABETICAL means manifests are sorted by path relative to the execroot. "
+                + "ALPHABETICAL_BY_CONFIGURATION means manifests are sorted by paths relative "
+                + "to the configuration directory within the output directory. "
+                + "DEPENDENCY means manifests are ordered with each library's manifest coming "
+                + "before the manifests of its dependencies.")
+    public ManifestMergerOrder manifestMergerOrder;
+
+    @Option(
+        name = "android_aapt",
+        defaultValue = "aapt2",
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        converter = AndroidAaptConverter.class,
+        help =
+            "Selects the version of androidAaptVersion to use for android_binary rules."
+                + "Flag to help the test and transition to aapt2.")
     public AndroidAaptVersion androidAaptVersion;
 
     @Option(
-      name = "apk_signing_method",
-      converter = ApkSigningMethodConverter.class,
-      defaultValue = "v1_v2",
-      documentationCategory = OptionDocumentationCategory.SIGNING,
-      effectTags = {
-        OptionEffectTag.ACTION_COMMAND_LINES,
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help = "Implementation to use to sign APKs"
-    )
+        name = "apk_signing_method",
+        converter = ApkSigningMethodConverter.class,
+        defaultValue = "v1_v2",
+        documentationCategory = OptionDocumentationCategory.SIGNING,
+        effectTags = {
+          OptionEffectTag.ACTION_COMMAND_LINES,
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        help = "Implementation to use to sign APKs")
     public ApkSigningMethod apkSigningMethod;
 
     @Option(
-      name = "use_singlejar_apkbuilder",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-      effectTags = OptionEffectTag.LOADING_AND_ANALYSIS,
-      help = "Build Android APKs with SingleJar."
-    )
+        name = "use_singlejar_apkbuilder",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+        effectTags = OptionEffectTag.LOADING_AND_ANALYSIS,
+        help = "Build Android APKs with SingleJar.")
     public boolean useSingleJarApkBuilder;
 
     @Option(
-      name = "experimental_android_compress_java_resources",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = OptionMetadataTag.EXPERIMENTAL,
-      help = "Compress Java resources in APKs"
-    )
+        name = "experimental_android_compress_java_resources",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "Compress Java resources in APKs")
     public boolean compressJavaResources;
 
     @Option(
@@ -743,102 +782,102 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     public boolean dataBindingV2;
 
     @Option(
-      name = "experimental_android_library_exports_manifest_default",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-      },
-      help = "The default value of the exports_manifest attribute on android_library."
-    )
+        name = "android_databinding_use_v3_4_args",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        metadataTags = OptionMetadataTag.EXPERIMENTAL,
+        help = "Use android databinding v2 with 3.4.0 argument")
+    public boolean dataBindingUpdatedArgs;
+
+    @Option(
+        name = "experimental_android_library_exports_manifest_default",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.AFFECTS_OUTPUTS,
+          OptionEffectTag.LOADING_AND_ANALYSIS,
+          OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        },
+        help = "The default value of the exports_manifest attribute on android_library.")
     public boolean exportsManifestDefault;
 
     @Option(
-      name = "experimental_android_aapt2_robolectric",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "If true, robolectric resources will be packaged using aapt2 if available."
-    )
-    public boolean useAapt2ForRobolectric;
+        name = "experimental_omit_resources_info_provider_from_android_binary",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+        help =
+            "Omit AndroidResourcesInfo provider from android_binary rules."
+                + " Propagating resources out to other binaries is usually unintentional.")
+    public boolean omitResourcesInfoProviderFromAndroidBinary;
 
     @Option(
-      name = "experimental_android_throw_on_resource_conflict",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {
-        OptionEffectTag.EAGERNESS_TO_EXIT,
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      help = "If passed, resource merge conflicts will be treated as errors instead of warnings"
-    )
-    public boolean throwOnResourceConflict;
-
-    @Option(
-      name = "experimental_skip_parsing_action",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "Skips resource parsing action for library targets"
-              + " and uses the output of the compile action instead for resource merging."
-    )
-    public boolean skipParsingAction;
-
-    @Option(
-      name = "android_fixed_resource_neverlinking",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      help =
-          "If true, resources will properly not get propagated through neverlinked libraries."
-              + " Otherwise, the old behavior of propagating those resources if no resource-related"
-              + " attributes are specified in the neverlink library will be preserved."
-    )
+        name = "android_fixed_resource_neverlinking",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        help =
+            "If true, resources will properly not get propagated through neverlinked libraries."
+                + " Otherwise, the old behavior of propagating those resources if no"
+                + " resource-related attributes are specified in the neverlink library"
+                + " will be preserved.")
     public boolean fixedResourceNeverlinking;
 
     @Option(
-      name = "android_robolectric_test_deprecation_level",
-      defaultValue = "off",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BUILD_FILE_SEMANTICS},
-      converter = AndroidRobolectricTestDeprecationLevelConverter.class,
-      help =
-          "Determine the deprecation level of android_robolectric_test. Can be 'off', "
-              + "'warning', or 'deprecated'."
-    )
-    public AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel;
+        name = "android_migration_tag_check",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.EAGERNESS_TO_EXIT,
+        },
+        help =
+            "If enabled, strict usage of the Starlark migration tag is enabled for android rules. "
+                + "Prefer using --incompatible_disable_native_android_rules.")
+    public boolean checkForMigrationTag;
 
     @Option(
-      name = "android_migration_tag_check",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.EAGERNESS_TO_EXIT,
-      },
-      help = "If enabled, strict usage of the Skylark migration tag is enabled for android rules."
-    )
-    public boolean checkForMigrationTag;
+        name = "incompatible_disable_native_android_rules",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+        effectTags = {
+          OptionEffectTag.EAGERNESS_TO_EXIT,
+        },
+        metadataTags = {
+          OptionMetadataTag.INCOMPATIBLE_CHANGE,
+          OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+        },
+        help =
+            "If enabled, direct usage of the native Android rules is disabled. Please use the"
+                + " Starlark Android rules from https://github.com/bazelbuild/rules_android")
+    public boolean disableNativeAndroidRules;
+
+    @Option(
+        name = "experimental_filter_r_jars_from_android_test",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.CHANGES_INPUTS,
+        },
+        help = "If enabled, R Jars will be filtered from the test apk built by android_test.")
+    public boolean filterRJarsFromAndroidTest;
 
     // TODO(eaftan): enable this by default and delete it
     @Option(
-      name = "experimental_one_version_enforcement_use_transitive_jars_for_binary_under_test",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
-        OptionEffectTag.ACTION_COMMAND_LINES
-      },
-      help =
-          "If enabled, one version enforcement for android_test uses the binary_under_test's "
-              + "transitive classpath, otherwise it uses the deploy jar"
-    )
+        name = "experimental_one_version_enforcement_use_transitive_jars_for_binary_under_test",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+          OptionEffectTag.ACTION_COMMAND_LINES
+        },
+        help =
+            "If enabled, one version enforcement for android_test uses the binary_under_test's "
+                + "transitive classpath, otherwise it uses the deploy jar")
     public boolean oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
 
     @Option(
@@ -846,28 +885,28 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
         defaultValue = "null",
         documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
         effectTags = {
-            OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS,
-            OptionEffectTag.EXECUTION,
+          OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS,
+          OptionEffectTag.EXECUTION,
         },
         help = "Enable the persistent Android resource processor by using workers.",
         expansion = {
-            "--internal_persistent_busybox_tools",
-            // This implementation uses unique workers for each tool in the busybox.
-            "--strategy=AaptPackage=worker",
-            "--strategy=AndroidResourceParser=worker",
-            "--strategy=AndroidResourceValidator=worker",
-            "--strategy=AndroidResourceCompiler=worker",
-            "--strategy=RClassGenerator=worker",
-            "--strategy=AndroidResourceLink=worker",
-            "--strategy=AndroidAapt2=worker",
-            "--strategy=AndroidAssetMerger=worker",
-            "--strategy=AndroidResourceMerger=worker",
-            "--strategy=AndroidCompiledResourceMerger=worker",
-            // TODO(jingwen): ManifestMerger prints to stdout when there's a manifest merge
-            // conflict. The worker protocol does not like this because it uses std i/o to
-            // for communication. To get around this, re-configure manifest merger to *not*
-            // use stdout for merge conflict warnings.
-            // "--strategy=ManifestMerger=worker",
+          "--internal_persistent_busybox_tools",
+          // This implementation uses unique workers for each tool in the busybox.
+          "--strategy=AaptPackage=worker",
+          "--strategy=AndroidResourceParser=worker",
+          "--strategy=AndroidResourceValidator=worker",
+          "--strategy=AndroidResourceCompiler=worker",
+          "--strategy=RClassGenerator=worker",
+          "--strategy=AndroidResourceLink=worker",
+          "--strategy=AndroidAapt2=worker",
+          "--strategy=AndroidAssetMerger=worker",
+          "--strategy=AndroidResourceMerger=worker",
+          "--strategy=AndroidCompiledResourceMerger=worker",
+          // TODO(jingwen): ManifestMerger prints to stdout when there's a manifest merge
+          // conflict. The worker protocol does not like this because it uses std i/o to
+          // for communication. To get around this, re-configure manifest merger to *not*
+          // use stdout for merge conflict warnings.
+          // "--strategy=ManifestMerger=worker",
         })
     public Void persistentResourceProcessor;
 
@@ -875,22 +914,77 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
      * We use this option to decide when to enable workers for busybox tools. This flag is also a
      * guard against enabling workers using nothing but --persistent_android_resource_processor.
      *
-     * Consequently, we use this option to decide between param files or regular command
-     * line parameters. If we're not using workers or on Windows, there's no need to always use
-     * param files for I/O performance reasons.
+     * <p>Consequently, we use this option to decide between param files or regular command line
+     * parameters. If we're not using workers or on Windows, there's no need to always use param
+     * files for I/O performance reasons.
      */
     @Option(
         name = "internal_persistent_busybox_tools",
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {
-            OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS,
-            OptionEffectTag.EXECUTION,
+          OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS,
+          OptionEffectTag.EXECUTION,
+        },
+        defaultValue = "false",
+        help = "Tracking flag for when busybox workers are enabled.")
+    public boolean persistentBusyboxTools;
+
+    @Option(
+        name = "incompatible_prohibit_aapt1",
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.AFFECTS_OUTPUTS},
+        metadataTags = {
+          OptionMetadataTag.INCOMPATIBLE_CHANGE,
+          OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
         },
         defaultValue = "false",
         help =
-            "Tracking flag for when busybox workers are enabled."
-    )
-    public boolean persistentBusyboxTools;
+            "End support for aapt in Android rules. "
+                + "To resolve issues when migrating your app to build with aapt2, see "
+                + "https://developer.android.com/studio/command-line/aapt2#aapt2_changes")
+    public boolean incompatibleProhibitAapt1;
+
+    @Option(
+        name = "experimental_remove_r_classes_from_instrumentation_test_jar",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.CHANGES_INPUTS,
+        },
+        help =
+            "If enabled and the test instruments an application, all the R classes from the test's "
+                + "deploy jar will be removed.")
+    public boolean removeRClassesFromInstrumentationTestJar;
+
+    @Option(
+        name = "experimental_always_filter_duplicate_classes_from_android_test",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {
+          OptionEffectTag.CHANGES_INPUTS,
+        },
+        help =
+            "If enabled and the android_test defines a binary_under_test, the class filterering "
+                + "applied to the test's deploy jar will always filter duplicate classes based "
+                + "solely on matching class and package name, ignoring hash values.")
+    public boolean alwaysFilterDuplicateClassesFromAndroidTest;
+
+    @Option(
+        name = "experimental_filter_library_jar_with_program_jar",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+        effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
+        help =
+            "Filter the ProGuard ProgramJar to remove any classes also present in the LibraryJar.")
+    public boolean filterLibraryJarWithProgramJar;
+
+    @Option(
+        name = "experimental_use_rtxt_from_merged_resources",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.CHANGES_INPUTS},
+        help = "Use R.txt from the merging action, instead of from the validation action.")
+    public boolean useRTxtFromMergedResources;
 
     @Override
     public FragmentOptions getHost() {
@@ -910,13 +1004,18 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
       host.nonIncrementalPerTargetDexopts = nonIncrementalPerTargetDexopts;
       host.dexoptsSupportedInIncrementalDexing = dexoptsSupportedInIncrementalDexing;
       host.dexoptsSupportedInDexMerger = dexoptsSupportedInDexMerger;
+      host.dexoptsSupportedInDexSharder = dexoptsSupportedInDexSharder;
       host.useWorkersWithDexbuilder = useWorkersWithDexbuilder;
       host.manifestMerger = manifestMerger;
+      host.manifestMergerOrder = manifestMergerOrder;
       host.androidAaptVersion = androidAaptVersion;
       host.allowAndroidLibraryDepsWithoutSrcs = allowAndroidLibraryDepsWithoutSrcs;
       host.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
           oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
       host.persistentBusyboxTools = persistentBusyboxTools;
+
+      // Unless the build was started from an Android device, host means MAIN.
+      host.configurationDistinguisher = ConfigurationDistinguisher.MAIN;
       return host;
     }
   }
@@ -924,8 +1023,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
   /** Configuration loader for the Android fragment. */
   public static class Loader implements ConfigurationFragmentFactory {
     @Override
-    public Fragment create(BuildOptions buildOptions)
-        throws InvalidConfigurationException, InterruptedException {
+    public Fragment create(BuildOptions buildOptions) throws InvalidConfigurationException {
       return new AndroidConfiguration(buildOptions.get(Options.class));
     }
 
@@ -942,7 +1040,6 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
 
   private final Label sdk;
   private final String cpu;
-  private final boolean useIncrementalNativeLibs;
   private final ConfigurationDistinguisher configurationDistinguisher;
   private final boolean incrementalDexing;
   private final int incrementalDexingShardsAfterProguard;
@@ -952,6 +1049,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
   private final ImmutableList<String> dexoptsSupportedInIncrementalDexing;
   private final ImmutableList<String> targetDexoptsThatPreventIncrementalDexing;
   private final ImmutableList<String> dexoptsSupportedInDexMerger;
+  private final ImmutableList<String> dexoptsSupportedInDexSharder;
   private final boolean useWorkersWithDexbuilder;
   private final boolean desugarJava8;
   private final boolean desugarJava8Libs;
@@ -960,26 +1058,35 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
   private final boolean allowAndroidLibraryDepsWithoutSrcs;
   private final boolean useAndroidResourceShrinking;
   private final boolean useAndroidResourceCycleShrinking;
+  private final boolean useAndroidResourcePathShortening;
+  private final boolean useAndroidResourceNameObfuscation;
   private final AndroidManifestMerger manifestMerger;
+  private final ManifestMergerOrder manifestMergerOrder;
   private final ApkSigningMethod apkSigningMethod;
   private final boolean useSingleJarApkBuilder;
   private final boolean compressJavaResources;
   private final boolean exportsManifestDefault;
   private final AndroidAaptVersion androidAaptVersion;
-  private final boolean useAapt2ForRobolectric;
-  private final boolean throwOnResourceConflict;
   private final boolean useParallelDex2Oat;
-  private final boolean skipParsingAction;
+  private final boolean breakBuildOnParallelDex2OatFailure;
+  private final boolean omitResourcesInfoProviderFromAndroidBinary;
   private final boolean fixedResourceNeverlinking;
-  private final AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel;
   private final boolean checkForMigrationTag;
   private final boolean oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
   private final boolean dataBindingV2;
+  private final boolean dataBindingUpdatedArgs;
   private final boolean persistentBusyboxTools;
+  private final boolean filterRJarsFromAndroidTest;
+  private final boolean removeRClassesFromInstrumentationTestJar;
+  private final boolean alwaysFilterDuplicateClassesFromAndroidTest;
+  private final boolean filterLibraryJarWithProgramJar;
+  private final boolean useRTxtFromMergedResources;
 
-  AndroidConfiguration(Options options) throws InvalidConfigurationException {
+  // Incompatible changes
+  private final boolean incompatibleProhibitAapt1;
+
+  private AndroidConfiguration(Options options) throws InvalidConfigurationException {
     this.sdk = options.sdk;
-    this.useIncrementalNativeLibs = options.incrementalNativeLibs;
     this.cpu = options.cpu;
     this.configurationDistinguisher = options.configurationDistinguisher;
     this.incrementalDexing = options.incrementalDexing;
@@ -992,6 +1099,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     this.targetDexoptsThatPreventIncrementalDexing =
         ImmutableList.copyOf(options.nonIncrementalPerTargetDexopts);
     this.dexoptsSupportedInDexMerger = ImmutableList.copyOf(options.dexoptsSupportedInDexMerger);
+    this.dexoptsSupportedInDexSharder = ImmutableList.copyOf(options.dexoptsSupportedInDexSharder);
     this.useWorkersWithDexbuilder = options.useWorkersWithDexbuilder;
     this.desugarJava8 = options.desugarJava8;
     this.desugarJava8Libs = options.desugarJava8Libs;
@@ -1000,24 +1108,52 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     this.useAndroidResourceShrinking =
         options.useAndroidResourceShrinking || options.useExperimentalAndroidResourceShrinking;
     this.useAndroidResourceCycleShrinking = options.useAndroidResourceCycleShrinking;
+    this.useAndroidResourcePathShortening = options.useAndroidResourcePathShortening;
+    this.useAndroidResourceNameObfuscation = options.useAndroidResourceNameObfuscation;
     this.manifestMerger = options.manifestMerger;
+    this.manifestMergerOrder = options.manifestMergerOrder;
     this.apkSigningMethod = options.apkSigningMethod;
     this.useSingleJarApkBuilder = options.useSingleJarApkBuilder;
     this.useRexToCompressDexFiles = options.useRexToCompressDexFiles;
     this.compressJavaResources = options.compressJavaResources;
     this.exportsManifestDefault = options.exportsManifestDefault;
-    this.androidAaptVersion = options.androidAaptVersion;
-    this.useAapt2ForRobolectric = options.useAapt2ForRobolectric;
-    this.throwOnResourceConflict = options.throwOnResourceConflict;
     this.useParallelDex2Oat = options.useParallelDex2Oat;
-    this.skipParsingAction = options.skipParsingAction;
+    this.breakBuildOnParallelDex2OatFailure = options.breakBuildOnParallelDex2OatFailure;
+    this.omitResourcesInfoProviderFromAndroidBinary =
+        options.omitResourcesInfoProviderFromAndroidBinary;
     this.fixedResourceNeverlinking = options.fixedResourceNeverlinking;
-    this.robolectricTestDeprecationLevel = options.robolectricTestDeprecationLevel;
-    this.checkForMigrationTag = options.checkForMigrationTag;
+    // use --incompatible_disable_native_android_rules, and also the old flag for backwards
+    // compatibility
+    this.checkForMigrationTag = options.checkForMigrationTag || options.disableNativeAndroidRules;
     this.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
         options.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
     this.dataBindingV2 = options.dataBindingV2;
+    this.dataBindingUpdatedArgs = options.dataBindingUpdatedArgs;
     this.persistentBusyboxTools = options.persistentBusyboxTools;
+    this.filterRJarsFromAndroidTest = options.filterRJarsFromAndroidTest;
+    this.incompatibleProhibitAapt1 = options.incompatibleProhibitAapt1;
+    this.removeRClassesFromInstrumentationTestJar =
+        options.removeRClassesFromInstrumentationTestJar;
+    this.alwaysFilterDuplicateClassesFromAndroidTest =
+        options.alwaysFilterDuplicateClassesFromAndroidTest;
+    this.filterLibraryJarWithProgramJar = options.filterLibraryJarWithProgramJar;
+    this.useRTxtFromMergedResources = options.useRTxtFromMergedResources;
+
+    // We use the --incompatible_prohibit_aapt1 flag to signal a breaking change in Bazel.
+    // This is required by the Bazel Incompatible Changes policy.
+    if (incompatibleProhibitAapt1) {
+      if (options.androidAaptVersion != AndroidAaptVersion.AAPT2) {
+        throw new InvalidConfigurationException(
+            "--android_aapt is no longer available for setting aapt version to aapt");
+      }
+      this.androidAaptVersion = AndroidAaptVersion.AAPT2;
+    } else {
+      if (options.androidAaptVersion == AndroidAaptVersion.AUTO) {
+        this.androidAaptVersion = AndroidAaptVersion.AAPT2;
+      } else {
+        this.androidAaptVersion = options.androidAaptVersion;
+      }
+    }
 
     if (incrementalDexingShardsAfterProguard < 0) {
       throw new InvalidConfigurationException(
@@ -1034,83 +1170,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     }
   }
 
-  @AutoCodec.Instantiator
-  AndroidConfiguration(
-      Label sdk,
-      String cpu,
-      boolean useIncrementalNativeLibs,
-      ConfigurationDistinguisher configurationDistinguisher,
-      boolean incrementalDexing,
-      int incrementalDexingShardsAfterProguard,
-      boolean incrementalDexingUseDexSharder,
-      boolean incrementalDexingAfterProguardByDefault,
-      boolean assumeMinSdkVersion,
-      ImmutableList<String> dexoptsSupportedInIncrementalDexing,
-      ImmutableList<String> targetDexoptsThatPreventIncrementalDexing,
-      ImmutableList<String> dexoptsSupportedInDexMerger,
-      boolean useWorkersWithDexbuilder,
-      boolean desugarJava8,
-      boolean desugarJava8Libs,
-      boolean checkDesugarDeps,
-      boolean useRexToCompressDexFiles,
-      boolean allowAndroidLibraryDepsWithoutSrcs,
-      boolean useAndroidResourceShrinking,
-      boolean useAndroidResourceCycleShrinking,
-      AndroidManifestMerger manifestMerger,
-      ApkSigningMethod apkSigningMethod,
-      boolean useSingleJarApkBuilder,
-      boolean compressJavaResources,
-      boolean exportsManifestDefault,
-      AndroidAaptVersion androidAaptVersion,
-      boolean useAapt2ForRobolectric,
-      boolean throwOnResourceConflict,
-      boolean useParallelDex2Oat,
-      boolean skipParsingAction,
-      boolean fixedResourceNeverlinking,
-      AndroidRobolectricTestDeprecationLevel robolectricTestDeprecationLevel,
-      boolean checkForMigrationTag,
-      boolean oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest,
-      boolean dataBindingV2,
-      boolean persistentBusyboxTools) {
-    this.sdk = sdk;
-    this.cpu = cpu;
-    this.useIncrementalNativeLibs = useIncrementalNativeLibs;
-    this.configurationDistinguisher = configurationDistinguisher;
-    this.incrementalDexing = incrementalDexing;
-    this.incrementalDexingShardsAfterProguard = incrementalDexingShardsAfterProguard;
-    this.incrementalDexingUseDexSharder = incrementalDexingUseDexSharder;
-    this.incrementalDexingAfterProguardByDefault = incrementalDexingAfterProguardByDefault;
-    this.assumeMinSdkVersion = assumeMinSdkVersion;
-    this.dexoptsSupportedInIncrementalDexing = dexoptsSupportedInIncrementalDexing;
-    this.targetDexoptsThatPreventIncrementalDexing = targetDexoptsThatPreventIncrementalDexing;
-    this.dexoptsSupportedInDexMerger = dexoptsSupportedInDexMerger;
-    this.useWorkersWithDexbuilder = useWorkersWithDexbuilder;
-    this.desugarJava8 = desugarJava8;
-    this.desugarJava8Libs = desugarJava8Libs;
-    this.checkDesugarDeps = checkDesugarDeps;
-    this.useRexToCompressDexFiles = useRexToCompressDexFiles;
-    this.allowAndroidLibraryDepsWithoutSrcs = allowAndroidLibraryDepsWithoutSrcs;
-    this.useAndroidResourceShrinking = useAndroidResourceShrinking;
-    this.useAndroidResourceCycleShrinking = useAndroidResourceCycleShrinking;
-    this.manifestMerger = manifestMerger;
-    this.apkSigningMethod = apkSigningMethod;
-    this.useSingleJarApkBuilder = useSingleJarApkBuilder;
-    this.compressJavaResources = compressJavaResources;
-    this.exportsManifestDefault = exportsManifestDefault;
-    this.androidAaptVersion = androidAaptVersion;
-    this.useAapt2ForRobolectric = useAapt2ForRobolectric;
-    this.throwOnResourceConflict = throwOnResourceConflict;
-    this.useParallelDex2Oat = useParallelDex2Oat;
-    this.skipParsingAction = skipParsingAction;
-    this.fixedResourceNeverlinking = fixedResourceNeverlinking;
-    this.robolectricTestDeprecationLevel = robolectricTestDeprecationLevel;
-    this.checkForMigrationTag = checkForMigrationTag;
-    this.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
-        oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
-    this.dataBindingV2 = dataBindingV2;
-    this.persistentBusyboxTools = persistentBusyboxTools;
-  }
-
+  @Override
   public String getCpu() {
     return cpu;
   }
@@ -1124,26 +1184,26 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     return sdk;
   }
 
-  public boolean useIncrementalNativeLibs() {
-    return useIncrementalNativeLibs;
-  }
-
   /** Returns whether to use incremental dexing. */
+  @Override
   public boolean useIncrementalDexing() {
     return incrementalDexing;
   }
 
   /** Returns whether to process proguarded Android binaries with incremental dexing tools. */
+  @Override
   public int incrementalDexingShardsAfterProguard() {
     return incrementalDexingShardsAfterProguard;
   }
 
   /** Whether to use a separate tool to shard classes before merging them into final dex files. */
+  @Override
   public boolean incrementalDexingUseDexSharder() {
     return incrementalDexingUseDexSharder;
   }
 
   /** Whether to use incremental dexing to build proguarded binaries by default. */
+  @Override
   public boolean incrementalDexingAfterProguardByDefault() {
     return incrementalDexingAfterProguardByDefault;
   }
@@ -1152,45 +1212,59 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
    * Returns true if an -assumevalues should be generated for Proguard based on the minSdkVersion of
    * the merged AndroidManifest.
    */
+  @Override
   public boolean assumeMinSdkVersion() {
     return assumeMinSdkVersion;
   }
 
   /** dx flags supported in incremental dexing actions. */
+  @Override
   public ImmutableList<String> getDexoptsSupportedInIncrementalDexing() {
     return dexoptsSupportedInIncrementalDexing;
   }
 
   /** dx flags supported in dexmerger actions. */
+  @Override
   public ImmutableList<String> getDexoptsSupportedInDexMerger() {
     return dexoptsSupportedInDexMerger;
+  }
+
+  /** dx flags supported in dexmerger actions. */
+  public ImmutableList<String> getDexoptsSupportedInDexSharder() {
+    return dexoptsSupportedInDexSharder;
   }
 
   /**
    * Incremental dexing must not be used for binaries that list any of these flags in their {@code
    * dexopts} attribute.
    */
+  @Override
   public ImmutableList<String> getTargetDexoptsThatPreventIncrementalDexing() {
     return targetDexoptsThatPreventIncrementalDexing;
   }
 
   /** Whether to assume the dexbuilder tool supports local worker mode. */
+  @Override
   public boolean useWorkersWithDexbuilder() {
     return useWorkersWithDexbuilder;
   }
 
+  @Override
   public boolean desugarJava8() {
     return desugarJava8;
   }
 
+  @Override
   public boolean desugarJava8Libs() {
     return desugarJava8Libs;
   }
 
+  @Override
   public boolean checkDesugarDeps() {
     return checkDesugarDeps;
   }
 
+  @Override
   public boolean useRexToCompressDexFiles() {
     return useRexToCompressDexFiles;
   }
@@ -1200,12 +1274,24 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
         && Whitelist.isAvailable(ruleContext, "allow_deps_without_srcs");
   }
 
+  @Override
   public boolean useAndroidResourceShrinking() {
     return useAndroidResourceShrinking;
   }
 
+  @Override
   public boolean useAndroidResourceCycleShrinking() {
     return useAndroidResourceCycleShrinking;
+  }
+
+  @Override
+  public boolean useAndroidResourcePathShortening() {
+    return useAndroidResourcePathShortening;
+  }
+
+  @Override
+  public boolean useAndroidResourceNameObfuscation() {
+    return useAndroidResourceNameObfuscation;
   }
 
   public AndroidAaptVersion getAndroidAaptVersion() {
@@ -1216,64 +1302,106 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment
     return manifestMerger;
   }
 
+  public ManifestMergerOrder getManifestMergerOrder() {
+    return manifestMergerOrder;
+  }
+
   public ApkSigningMethod getApkSigningMethod() {
     return apkSigningMethod;
   }
 
+  @Override
+  public boolean apkSigningMethodV1() {
+    return apkSigningMethod.signV1();
+  }
+
+  @Override
+  public boolean apkSigningMethodV2() {
+    return apkSigningMethod.signV2();
+  }
+
+  @Override
   public boolean useSingleJarApkBuilder() {
     return useSingleJarApkBuilder;
   }
 
+  @Override
   public boolean useParallelDex2Oat() {
     return useParallelDex2Oat;
   }
 
-  boolean compressJavaResources() {
+  @Override
+  public boolean breakBuildOnParallelDex2OatFailure() {
+    return breakBuildOnParallelDex2OatFailure;
+  }
+
+  @Override
+  public boolean compressJavaResources() {
     return compressJavaResources;
   }
 
-  boolean getExportsManifestDefault() {
+  @Override
+  public boolean getExportsManifestDefault() {
     return exportsManifestDefault;
   }
 
-  public boolean useAapt2ForRobolectric() {
-    return useAapt2ForRobolectric;
+  @Override
+  public boolean omitResourcesInfoProviderFromAndroidBinary() {
+    return this.omitResourcesInfoProviderFromAndroidBinary;
   }
 
-  boolean throwOnResourceConflict() {
-    return throwOnResourceConflict;
-  }
-
-  public boolean skipParsingAction() {
-    return this.skipParsingAction;
-  }
-
+  @Override
   public boolean fixedResourceNeverlinking() {
     return this.fixedResourceNeverlinking;
   }
 
-  public AndroidRobolectricTestDeprecationLevel getRobolectricTestDeprecationLevel() {
-    return robolectricTestDeprecationLevel;
-  }
-
+  @Override
   public boolean checkForMigrationTag() {
     return checkForMigrationTag;
   }
 
+  @Override
   public boolean getOneVersionEnforcementUseTransitiveJarsForBinaryUnderTest() {
     return oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
   }
 
+  @Override
   public boolean useDataBindingV2() {
     return dataBindingV2;
   }
 
-  public boolean persistentBusyboxTools() { 
-    return persistentBusyboxTools; 
+  @Override
+  public boolean useDataBindingUpdatedArgs() {
+    return dataBindingUpdatedArgs;
+  }
+
+  @Override
+  public boolean persistentBusyboxTools() {
+    return persistentBusyboxTools;
   }
 
   @Override
   public String getOutputDirectoryName() {
     return configurationDistinguisher.suffix;
+  }
+
+  public boolean filterRJarsFromAndroidTest() {
+    return filterRJarsFromAndroidTest;
+  }
+
+  public boolean removeRClassesFromInstrumentationTestJar() {
+    return removeRClassesFromInstrumentationTestJar;
+  }
+
+  public boolean alwaysFilterDuplicateClassesFromAndroidTest() {
+    return alwaysFilterDuplicateClassesFromAndroidTest;
+  }
+
+  public boolean filterLibraryJarWithProgramJar() {
+    return filterLibraryJarWithProgramJar;
+  }
+
+  boolean useRTxtFromMergedResources() {
+    return useRTxtFromMergedResources;
   }
 }

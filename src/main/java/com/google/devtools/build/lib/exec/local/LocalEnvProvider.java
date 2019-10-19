@@ -13,7 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.exec.local;
 
-import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.exec.BinTools;
+import com.google.devtools.build.lib.util.OS;
 import java.io.IOException;
 import java.util.Map;
 
@@ -23,26 +24,33 @@ import java.util.Map;
  */
 public interface LocalEnvProvider {
 
-  public static final LocalEnvProvider UNMODIFIED =
-      new LocalEnvProvider() {
-        @Override
-        public Map<String, String> rewriteLocalEnv(
-            Map<String, String> env, Path execRoot, String fallbackTmpDir) {
-          return env;
-        }
-      };
+  /**
+   * Creates a local environment provider for the current OS.
+   *
+   * @param clientEnv the environment variables as supplied by the Bazel client
+   * @return the local environment provider
+   */
+  static LocalEnvProvider forCurrentOs(Map<String, String> clientEnv) {
+    switch (OS.getCurrent()) {
+      case DARWIN:
+        return new XcodeLocalEnvProvider(clientEnv);
+      case WINDOWS:
+        return new WindowsLocalEnvProvider(clientEnv);
+      default:
+        return new PosixLocalEnvProvider(clientEnv);
+    }
+  }
 
   /**
    * Rewrites a {@code Spawn}'s the environment if necessary.
    *
    * @param env the Spawn's environment to rewrite
-   * @param execRoot the path where the Spawn is executed
+   * @param binTools used to find built-in tool paths
    * @param fallbackTmpDir an absolute path to a temp directory that the Spawn could use. The
    *     particular implementation of {@link LocalEnvProvider} may choose to use some other path,
    *     typically the "TMPDIR" environment variable in the Bazel client's environment, but if
    *     that's unavailable, the implementation may decide to use this {@code fallbackTmpDir}.
    */
   Map<String, String> rewriteLocalEnv(
-      Map<String, String> env, Path execRoot, String fallbackTmpDir)
-      throws IOException;
+      Map<String, String> env, BinTools binTools, String fallbackTmpDir) throws IOException;
 }

@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.bazel.debug;
 
 import com.google.devtools.build.lib.bazel.debug.proto.WorkspaceLogProtos;
+import com.google.devtools.build.lib.bazel.debug.proto.WorkspaceLogProtos.ExtractEvent;
 import com.google.devtools.build.lib.bazel.debug.proto.WorkspaceLogProtos.FileEvent;
 import com.google.devtools.build.lib.bazel.debug.proto.WorkspaceLogProtos.OsEvent;
 import com.google.devtools.build.lib.bazel.debug.proto.WorkspaceLogProtos.SymlinkEvent;
@@ -37,11 +38,9 @@ public final class WorkspaceRuleEvent implements ProgressLike {
     this.event = event;
   }
 
-  /**
-   * Creates a new WorkspaceRuleEvent for an execution event.
-   */
+  /** Creates a new WorkspaceRuleEvent for an execution event. */
   public static WorkspaceRuleEvent newExecuteEvent(
-      Iterable<Object> args,
+      Iterable<?> args, // <String> or <SkylarkPath> expected
       Integer timeout,
       Map<String, String> commonEnvironment,
       Map<String, String> customEnvironment,
@@ -83,6 +82,7 @@ public final class WorkspaceRuleEvent implements ProgressLike {
       List<URL> urls,
       String output,
       String sha256,
+      String integrity,
       Boolean executable,
       String ruleLabel,
       Location location) {
@@ -90,6 +90,7 @@ public final class WorkspaceRuleEvent implements ProgressLike {
         WorkspaceLogProtos.DownloadEvent.newBuilder()
             .setOutput(output)
             .setSha256(sha256)
+            .setIntegrity(integrity)
             .setExecutable(executable);
     for (URL u : urls) {
       e.addUrl(u.toString());
@@ -107,11 +108,34 @@ public final class WorkspaceRuleEvent implements ProgressLike {
     return new WorkspaceRuleEvent(result.build());
   }
 
-  /** Creates a new WorkspaceRuleEvent for a download and excract event. */
+  /** Creates a new WorkspaceRuleEvent for an extract event. */
+  public static WorkspaceRuleEvent newExtractEvent(
+      String archive, String output, String stripPrefix, String ruleLabel, Location location) {
+    ExtractEvent e =
+        WorkspaceLogProtos.ExtractEvent.newBuilder()
+            .setArchive(archive)
+            .setOutput(output)
+            .setStripPrefix(stripPrefix)
+            .build();
+
+    WorkspaceLogProtos.WorkspaceEvent.Builder result =
+        WorkspaceLogProtos.WorkspaceEvent.newBuilder();
+    result = result.setExtractEvent(e);
+    if (location != null) {
+      result = result.setLocation(location.print());
+    }
+    if (ruleLabel != null) {
+      result = result.setRule(ruleLabel);
+    }
+    return new WorkspaceRuleEvent(result.build());
+  }
+
+  /** Creates a new WorkspaceRuleEvent for a download and extract event. */
   public static WorkspaceRuleEvent newDownloadAndExtractEvent(
       List<URL> urls,
       String output,
       String sha256,
+      String integrity,
       String type,
       String stripPrefix,
       String ruleLabel,
@@ -120,6 +144,7 @@ public final class WorkspaceRuleEvent implements ProgressLike {
         WorkspaceLogProtos.DownloadAndExtractEvent.newBuilder()
             .setOutput(output)
             .setSha256(sha256)
+            .setIntegrity(integrity)
             .setType(type)
             .setStripPrefix(stripPrefix);
     for (URL u : urls) {
@@ -160,6 +185,59 @@ public final class WorkspaceRuleEvent implements ProgressLike {
     return new WorkspaceRuleEvent(result.build());
   }
 
+  /** Creates a new WorkspaceRuleEvent for a file read event. */
+  public static WorkspaceRuleEvent newReadEvent(String path, String ruleLabel, Location location) {
+    WorkspaceLogProtos.ReadEvent e =
+        WorkspaceLogProtos.ReadEvent.newBuilder().setPath(path).build();
+
+    WorkspaceLogProtos.WorkspaceEvent.Builder result =
+        WorkspaceLogProtos.WorkspaceEvent.newBuilder();
+    result = result.setReadEvent(e);
+    if (location != null) {
+      result = result.setLocation(location.print());
+    }
+    if (ruleLabel != null) {
+      result = result.setRule(ruleLabel);
+    }
+    return new WorkspaceRuleEvent(result.build());
+  }
+
+  /** Creates a new WorkspaceRuleEvent for a file read event. */
+  public static WorkspaceRuleEvent newDeleteEvent(
+      String path, String ruleLabel, Location location) {
+    WorkspaceLogProtos.DeleteEvent e =
+        WorkspaceLogProtos.DeleteEvent.newBuilder().setPath(path).build();
+
+    WorkspaceLogProtos.WorkspaceEvent.Builder result =
+        WorkspaceLogProtos.WorkspaceEvent.newBuilder();
+    result = result.setDeleteEvent(e);
+    if (location != null) {
+      result = result.setLocation(location.print());
+    }
+    if (ruleLabel != null) {
+      result = result.setRule(ruleLabel);
+    }
+    return new WorkspaceRuleEvent(result.build());
+  }
+
+  /** Creates a new WorkspaceRuleEvent for a patch event. */
+  public static WorkspaceRuleEvent newPatchEvent(
+      String patchFile, int strip, String ruleLabel, Location location) {
+    WorkspaceLogProtos.PatchEvent e =
+        WorkspaceLogProtos.PatchEvent.newBuilder().setPatchFile(patchFile).setStrip(strip).build();
+
+    WorkspaceLogProtos.WorkspaceEvent.Builder result =
+        WorkspaceLogProtos.WorkspaceEvent.newBuilder();
+    result = result.setPatchEvent(e);
+    if (location != null) {
+      result = result.setLocation(location.print());
+    }
+    if (ruleLabel != null) {
+      result = result.setRule(ruleLabel);
+    }
+    return new WorkspaceRuleEvent(result.build());
+  }
+
   /** Creates a new WorkspaceRuleEvent for an os event. */
   public static WorkspaceRuleEvent newOsEvent(String ruleLabel, Location location) {
     OsEvent e = WorkspaceLogProtos.OsEvent.getDefaultInstance();
@@ -179,7 +257,8 @@ public final class WorkspaceRuleEvent implements ProgressLike {
   /** Creates a new WorkspaceRuleEvent for a symlink event. */
   public static WorkspaceRuleEvent newSymlinkEvent(
       String from, String to, String ruleLabel, Location location) {
-    SymlinkEvent e = WorkspaceLogProtos.SymlinkEvent.newBuilder().setFrom(from).setTo(to).build();
+    SymlinkEvent e =
+        WorkspaceLogProtos.SymlinkEvent.newBuilder().setTarget(from).setPath(to).build();
 
     WorkspaceLogProtos.WorkspaceEvent.Builder result =
         WorkspaceLogProtos.WorkspaceEvent.newBuilder();

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 #include <algorithm>
@@ -43,13 +46,13 @@ using std::wstring;
         ::GetEnvironmentVariableA(blaze_util::AsLower(key).c_str(), NULL, 0), \
         (DWORD)0);                                                            \
     ASSERT_EQ(::GetEnvironmentVariableW(                                      \
-                  blaze_util::CstringToWstring(key).get(), NULL, 0),          \
+                  blaze_util::CstringToWstring(key).c_str(), NULL, 0),        \
               (DWORD)0);                                                      \
-    ASSERT_EQ(::GetEnvironmentVariableW(blaze_util::CstringToWstring(         \
-                                            blaze_util::AsLower(key).c_str()) \
-                                            .get(),                           \
-                                        NULL, 0),                             \
-              (DWORD)0);                                                      \
+    ASSERT_EQ(                                                                \
+        ::GetEnvironmentVariableW(                                            \
+            blaze_util::CstringToWstring(blaze_util::AsLower(key)).c_str(),   \
+            NULL, 0),                                                         \
+        (DWORD)0);                                                            \
   }
 
 // Asserts that the envvar named `key` is set to the `expected` value.
@@ -58,65 +61,66 @@ using std::wstring;
 // are case-insensitive on Windows).
 //
 // This is a macro so the assertions will have the correct line number.
-#define ASSERT_ENVVAR(/* const (char* | string&) */ _key,                    \
-                      /* const (char* | string&) */ _expected)               \
-  {                                                                          \
-    string key(_key);                                                        \
-    string expected(_expected);                                              \
-    DWORD size = ::GetEnvironmentVariableA(key.c_str(), NULL, 0);            \
-    ASSERT_GT(size, (DWORD)0);                                               \
-    unique_ptr<char[]> buf(new char[size]);                                  \
-                                                                             \
-    /* Assert that GetEnvironmentVariableA can retrieve the value. */        \
-    ASSERT_EQ(::GetEnvironmentVariableA(key.c_str(), buf.get(), size),       \
-              size - 1);                                                     \
-    ASSERT_EQ(string(buf.get()), expected);                                  \
-                                                                             \
-    /* Assert that envvar keys are case-insensitive. */                      \
-    string lkey(blaze_util::AsLower(key));                                   \
-    ASSERT_EQ(::GetEnvironmentVariableA(lkey.c_str(), buf.get(), size),      \
-              size - 1);                                                     \
-    ASSERT_EQ(string(buf.get()), expected);                                  \
-                                                                             \
-    /* Assert that GetEnvironmentVariableW can retrieve the value. */        \
-    wstring wkey(blaze_util::CstringToWstring(key.c_str()).get());           \
-    wstring wexpected(blaze_util::CstringToWstring(expected.c_str()).get()); \
-    size = ::GetEnvironmentVariableW(wkey.c_str(), NULL, 0);                 \
-    ASSERT_GT(size, (DWORD)0);                                               \
-    unique_ptr<WCHAR[]> wbuf(new WCHAR[size]);                               \
-    ASSERT_EQ(::GetEnvironmentVariableW(wkey.c_str(), wbuf.get(), size),     \
-              size - 1);                                                     \
-    ASSERT_EQ(wstring(wbuf.get()), wexpected);                               \
-                                                                             \
-    /* Assert that widechar envvar keys are case-insensitive. */             \
-    wstring wlkey(blaze_util::CstringToWstring(lkey.c_str()).get());         \
-    ASSERT_EQ(::GetEnvironmentVariableW(wlkey.c_str(), wbuf.get(), size),    \
-              size - 1);                                                     \
-    ASSERT_EQ(wstring(wbuf.get()), wexpected);                               \
+#define ASSERT_ENVVAR(/* const (char* | string&) */ _key,                 \
+                      /* const (char* | string&) */ _expected)            \
+  {                                                                       \
+    string key(_key);                                                     \
+    string expected(_expected);                                           \
+    DWORD size = ::GetEnvironmentVariableA(key.c_str(), NULL, 0);         \
+    ASSERT_GT(size, (DWORD)0);                                            \
+    unique_ptr<char[]> buf(new char[size]);                               \
+                                                                          \
+    /* Assert that GetEnvironmentVariableA can retrieve the value. */     \
+    ASSERT_EQ(::GetEnvironmentVariableA(key.c_str(), buf.get(), size),    \
+              size - 1);                                                  \
+    ASSERT_EQ(string(buf.get()), expected);                               \
+                                                                          \
+    /* Assert that envvar keys are case-insensitive. */                   \
+    string lkey(blaze_util::AsLower(key));                                \
+    ASSERT_EQ(::GetEnvironmentVariableA(lkey.c_str(), buf.get(), size),   \
+              size - 1);                                                  \
+    ASSERT_EQ(string(buf.get()), expected);                               \
+                                                                          \
+    /* Assert that GetEnvironmentVariableW can retrieve the value. */     \
+    wstring wkey(blaze_util::CstringToWstring(key));                      \
+    wstring wexpected(blaze_util::CstringToWstring(expected));            \
+    size = ::GetEnvironmentVariableW(wkey.c_str(), NULL, 0);              \
+    ASSERT_GT(size, (DWORD)0);                                            \
+    unique_ptr<WCHAR[]> wbuf(new WCHAR[size]);                            \
+    ASSERT_EQ(::GetEnvironmentVariableW(wkey.c_str(), wbuf.get(), size),  \
+              size - 1);                                                  \
+    ASSERT_EQ(wstring(wbuf.get()), wexpected);                            \
+                                                                          \
+    /* Assert that widechar envvar keys are case-insensitive. */          \
+    wstring wlkey(blaze_util::CstringToWstring(lkey));                    \
+    ASSERT_EQ(::GetEnvironmentVariableW(wlkey.c_str(), wbuf.get(), size), \
+              size - 1);                                                  \
+    ASSERT_EQ(wstring(wbuf.get()), wexpected);                            \
   }
 
 TEST(BlazeUtilWindowsTest, TestGetEnv) {
-  ASSERT_ENVVAR_UNSET("DOES_not_EXIST");
+#define _STR(x) #x
+#define STR(x) _STR(x)
+  const char* envvar = "BAZEL_TEST_" STR(__LINE__);
+#undef STR
+#undef _STR
 
-  string actual(GetEnv("TEST_SRCDIR"));
-  ASSERT_NE(actual, "");
+  ASSERT_TRUE(SetEnvironmentVariableA(envvar, "A\\B c"));
+  ASSERT_EQ(GetEnv(envvar), "A\\B c");
+}
 
-  std::replace(actual.begin(), actual.end(), '/', '\\');
-  ASSERT_NE(actual.find(":\\"), string::npos);
+TEST(BlazeUtilWindowsTest, TestGetPathEnv) {
+#define _STR(x) #x
+#define STR(x) _STR(x)
+  const char* envvar = "BAZEL_TEST_" STR(__LINE__);
+#undef STR
+#undef _STR
 
-  ASSERT_ENVVAR_UNSET("Bazel_TEST_Key1");
-  ASSERT_TRUE(::SetEnvironmentVariableA("Bazel_TEST_Key1", "some_VALUE"));
-  ASSERT_ENVVAR("Bazel_TEST_Key1", "some_VALUE");
-  ASSERT_TRUE(::SetEnvironmentVariableA("Bazel_TEST_Key1", NULL));
+  ASSERT_TRUE(SetEnvironmentVariableA(envvar, "A\\B c"));
+  ASSERT_EQ(GetPathEnv(envvar), "A/B c");
 
-  string long_string(MAX_PATH, 'a');
-  string long_key = string("Bazel_TEST_Key2_") + long_string;
-  string long_value = string("Bazel_TEST_Value2_") + long_string;
-
-  ASSERT_ENVVAR_UNSET(long_key.c_str());
-  ASSERT_TRUE(::SetEnvironmentVariableA(long_key.c_str(), long_value.c_str()));
-  ASSERT_ENVVAR(long_key, long_value);
-  ASSERT_TRUE(::SetEnvironmentVariableA(long_key.c_str(), NULL));
+  ASSERT_TRUE(SetEnvironmentVariableA(envvar, "\\\\?\\A:\\B c"));
+  ASSERT_EQ(GetPathEnv(envvar), "A:/B c");
 }
 
 TEST(BlazeUtilWindowsTest, TestSetEnv) {

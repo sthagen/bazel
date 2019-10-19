@@ -1,5 +1,8 @@
 package(default_visibility = ["//visibility:private"])
 
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//tools/python:private/defs.bzl", "py_library", "py_test")
+
 filegroup(
     name = "srcs",
     srcs = glob(["**"]),
@@ -22,6 +25,8 @@ py_library(
         "//src/test/py/bazel:__pkg__",
         "//third_party/def_parser:__pkg__",
         "//tools/android:__pkg__",
+        "//tools/build_rules:__pkg__",
+        "//tools/python:__pkg__",
     ],
 )
 
@@ -86,6 +91,23 @@ py_test(
 )
 
 py_test(
+    name = "bazel_windows_symlinks_test",
+    size = "medium",
+    srcs = select({
+        "//src/conditions:windows": ["bazel_windows_symlinks_test.py"],
+        "//conditions:default": ["empty_test.py"],
+    }),
+    main = select({
+        "//src/conditions:windows": "bazel_windows_symlinks_test.py",
+        "//conditions:default": "empty_test.py",
+    }),
+    deps = select({
+        "//src/conditions:windows": [":test_base"],
+        "//conditions:default": [],
+    }),
+)
+
+py_test(
     name = "windows_remote_test",
     size = "medium",
     srcs = select({
@@ -106,7 +128,6 @@ py_test(
     name = "launcher_test",
     size = "medium",
     srcs = ["launcher_test.py"],
-    tags = ["manual"],  # TODO(b/72827255): Reenable once it works.
     deps = [":test_base"],
 )
 
@@ -119,6 +140,18 @@ py_test(
         ":test_base",
         "//third_party/py/six",
     ],
+)
+
+py_test(
+    name = "runfiles_sandboxed_test",
+    timeout = "long",
+    srcs = ["runfiles_sandboxed_test.py"],
+    data = glob(["testdata/runfiles_test/**"]),
+    tags = [
+        # Windows does not support sandboxing yet.
+        "no_windows",
+    ],
+    deps = [":test_base"],
 )
 
 py_test(
@@ -144,6 +177,13 @@ py_test(
         "//src/conditions:windows": ["test_wrapper_test.py"],
         "//conditions:default": ["empty_test.py"],
     }),
+    data = select({
+        "//src/conditions:windows": [
+            ":printargs",
+            "native_test.bzl",
+        ],
+        "//conditions:default": [],
+    }),
     main = select({
         "//src/conditions:windows": "test_wrapper_test.py",
         "//conditions:default": "empty_test.py",
@@ -154,10 +194,29 @@ py_test(
     }),
 )
 
+cc_binary(
+    name = "printargs",
+    testonly = 1,
+    srcs = ["printargs.cc"],
+)
+
+py_test(
+    name = "first_time_use_test",
+    srcs = ["first_time_use_test.py"],
+    deps = [":test_base"],
+)
+
 py_test(
     name = "query_test",
     size = "medium",
     srcs = ["query_test.py"],
+    deps = [":test_base"],
+)
+
+py_test(
+    name = "genrule_test",
+    size = "medium",
+    srcs = ["genrule_test.py"],
     deps = [":test_base"],
 )
 

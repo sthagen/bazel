@@ -22,19 +22,18 @@ import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.Dependency;
+import com.google.devtools.build.lib.analysis.DependencyResolver.DependencyKind;
 import com.google.devtools.build.lib.analysis.DependencyResolver.InconsistentAspectOrderException;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver;
-import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ConflictException;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
@@ -62,12 +61,12 @@ public class PostConfiguredTargetFunction implements SkyFunction {
       };
 
   private final SkyframeExecutor.BuildViewProvider buildViewProvider;
-  private final RuleClassProvider ruleClassProvider;
+  private final ConfiguredRuleClassProvider ruleClassProvider;
   private final BuildOptions defaultBuildOptions;
 
   public PostConfiguredTargetFunction(
       SkyframeExecutor.BuildViewProvider buildViewProvider,
-      RuleClassProvider ruleClassProvider,
+      ConfiguredRuleClassProvider ruleClassProvider,
       BuildOptions defaultBuildOptions) {
     this.buildViewProvider = Preconditions.checkNotNull(buildViewProvider);
     this.ruleClassProvider = ruleClassProvider;
@@ -108,7 +107,39 @@ public class PostConfiguredTargetFunction implements SkyFunction {
       return null;
     }
 
-    OrderedSetMultimap<Attribute, Dependency> deps;
+    // Determine what toolchains are needed by this target.
+    UnloadedToolchainContext unloadedToolchainContext = null;
+    try {
+      if (configuredTargetAndData.getTarget() instanceof Rule) {
+        Rule rule = ((Rule) configuredTargetAndData.getTarget());
+        if (rule.getRuleClassObject().useToolchainResolution()) {
+          ImmutableSet<Label> requiredToolchains =
+              rule.getRuleClassObject().getRequiredToolchains();
+
+          // Collect local (target, rule) constraints for filtering out execution platforms.
+          ImmutableSet<Label> execConstraintLabels =
+              ConfiguredTargetFunction.getExecutionPlatformConstraints(rule);
+          unloadedToolchainContext =
+              (UnloadedToolchainContext)
+                  env.getValueOrThrow(
+                      UnloadedToolchainContext.key()
+                          .configurationKey(
+                              BuildConfigurationValue.key(
+                                  configuredTargetAndData.getConfiguration()))
+                          .requiredToolchainTypeLabels(requiredToolchains)
+                          .execConstraintLabels(execConstraintLabels)
+                          .build(),
+                      ToolchainException.class);
+          if (env.valuesMissing()) {
+            return null;
+          }
+        }
+      }
+    } catch (ToolchainException e) {
+      throw new PostConfiguredTargetFunctionException(e.asConfiguredValueCreationException());
+    }
+
+    OrderedSetMultimap<DependencyKind, Dependency> deps;
     try {
       BuildConfiguration hostConfiguration =
           buildViewProvider
@@ -125,16 +156,14 @@ public class PostConfiguredTargetFunction implements SkyFunction {
               hostConfiguration,
               /*aspect=*/ null,
               configConditions,
-              /*toolchainLabels=*/ ImmutableSet.of(),
-              defaultBuildOptions,
-              ((ConfiguredRuleClassProvider) ruleClassProvider).getTrimmingTransitionFactory());
-      if (configuredTargetAndData.getConfiguration() != null) {
-        deps =
-            ConfigurationResolver.resolveConfigurations(
-                env, ctgValue, deps, hostConfiguration, ruleClassProvider, defaultBuildOptions);
-      }
-    } catch (EvalException | ConfiguredTargetFunction.DependencyEvaluationException
-        | InvalidConfigurationException | InconsistentAspectOrderException e) {
+              unloadedToolchainContext,
+              ruleClassProvider.getTrimmingTransitionFactory());
+      deps =
+          ConfigurationResolver.resolveConfigurations(
+              env, ctgValue, deps, hostConfiguration, ruleClassProvider, defaultBuildOptions);
+    } catch (EvalException
+        | ConfiguredTargetFunction.DependencyEvaluationException
+        | InconsistentAspectOrderException e) {
       throw new PostConfiguredTargetFunctionException(e);
     }
 

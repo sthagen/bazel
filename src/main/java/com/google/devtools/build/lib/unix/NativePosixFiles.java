@@ -15,14 +15,11 @@
 package com.google.devtools.build.lib.unix;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.hash.HashCode;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.UnixJniLoader;
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.util.logging.Level;
 import java.util.logging.LogManager;
-import java.util.logging.Logger;
 
 /**
  * Utility methods for access to UNIX filesystem calls not exposed by the Java
@@ -33,90 +30,6 @@ public final class NativePosixFiles {
 
   private NativePosixFiles() {}
 
-  /**
-   * Returns true iff the file identified by 'path' is a symbolic link. Has
-   * similar semantics to POSIX stat(2) syscall, with all errors being mapped to
-   * a false return.
-   *
-   * @param path the file of interest
-   * @return true iff path exists, is accessible and is a symlink
-   */
-  public static boolean isSymbolicLink(File path) {
-    try {
-      return lstat(path.toString()).isSymbolicLink();
-    } catch (IOException e) {
-      return false;
-    }
-  }
-
-
-  /**
-   * Returns true iff the file identified by 'path' is a directory. Has
-   * similar semantics to POSIX stat(2) syscall, with all errors being mapped to
-   * a false return.
-   *
-   * @param path the file of interest
-   * @return true iff path exists, is accessible and is a symlink
-   */
-  public static boolean isDirectory(String path) {
-    try {
-      return lstat(path).isDirectory();
-    } catch (IOException e) {
-      return false;
-    }
-  }
-
-
-  /**
-   * Marks the file or directory {@code path} as executable. (Non-atomic)
-   *
-   * @see File#setReadOnly
-   *
-   * @param path the file of interest
-   * @throws FileAccessException if path can't be accessed
-   * @throws FileNotFoundException if path doesn't exist
-   * @throws IOException for other filesystem or path errors
-   */
-  public static void setExecutable(File path) throws IOException {
-    String p = path.toString();
-    chmod(p, stat(p).getPermissions() | FileStatus.S_IEXEC);
-  }
-
-  /**
-   * Marks the file or directory {@code path} as owner writable. (Non-atomic)
-   *
-   * @see File#setReadOnly
-   *
-   * @param path the file of interest
-   * @throws FileAccessException if path can't be accessed
-   * @throws FileNotFoundException if path doesn't exist
-   * @throws IOException for other filesystem or path errors
-   */
-  public static void setWritable(File path) throws IOException {
-    String p = path.toString();
-    chmod(p, stat(p).getPermissions() | FileStatus.S_IWUSR);
-  }
-
-  /**
-   * Changes permissions of a file.
-   *
-   * @param path the file whose mode to change.
-   * @param mode the mode bits within 07777, interpreted according to
-   *   long-standing UNIX tradition.
-   * @throws IOException if the chmod() syscall failed.
-   */
-  public static void chmod(File path, int mode) throws IOException {
-    int mask = FileStatus.S_ISUID
-               | FileStatus.S_ISGID
-               | FileStatus.S_ISVTX
-               | FileStatus.S_IRWXA;
-    chmod(path.toString(), mode & mask);
-  }
-
-  /*
-   * Native-based implementation
-   */
-
   static {
     if (!java.nio.charset.Charset.defaultCharset().name().equals("ISO-8859-1")) {
       // Defer the Logger call, so we don't deadlock if this is called from Logger
@@ -125,11 +38,14 @@ public final class NativePosixFiles {
         @Override
         public void run() {
           // wait (if necessary) until the logging system is initialized
-          synchronized (LogManager.getLogManager()) {}
-          Logger.getLogger("com.google.devtools.build.lib.unix.FilesystemUtils").log(Level.FINE,
-              "WARNING: Default character set is not latin1; java.io.File and "
-              + "com.google.devtools.build.lib.unix.FilesystemUtils will represent some filenames "
-              + "differently.");
+          synchronized (LogManager.getLogManager()) {
+          }
+          GoogleLogger.forEnclosingClass()
+              .atFine()
+              .log(
+                  "WARNING: Default character set is not latin1; java.io.File and "
+                      + "com.google.devtools.build.lib.unix.FilesystemUtils will represent some "
+                      + "filenames differently.");
         }
       }.start();
     }
@@ -431,38 +347,32 @@ public final class NativePosixFiles {
       throws IOException;
 
   /**
-   * Returns the MD5 digest of the specified file, following symbolic links.
+   * Deletes all directory trees recursively beneath the given path, which is expected to be a
+   * directory. Does not remove the top directory.
    *
-   * @param path the file whose MD5 digest is required.
-   * @return the MD5 digest, as a 16-byte array.
-   * @throws IOException if the call failed for any reason.
+   * @param dir the directory hierarchy to remove
+   * @throws IOException if the hierarchy cannot be removed successfully or if the given path is not
+   *     a directory
    */
-  static native byte[] md5sumAsBytes(String path) throws IOException;
+  public static native void deleteTreesBelow(String dir) throws IOException;
 
   /**
-   * Returns the MD5 digest of the specified file, following symbolic links.
+   * Open a file descriptor for writing.
    *
-   * @param path the file whose MD5 digest is required.
-   * @return the MD5 digest, as a {@link HashCode}
-   * @throws IOException if the call failed for any reason.
+   * <p>This is a low level API. The caller is responsible for calling {@link close} on the returned
+   * file descriptor.
+   *
+   * @param path file to open
+   * @param append whether to open is append mode
    */
-  public static HashCode md5sum(String path) throws IOException {
-    return HashCode.fromBytes(md5sumAsBytes(path));
-  }
+  public static native int openWrite(String path, boolean append) throws FileNotFoundException;
+
+  /** Write a segment of data to a file descriptor. */
+  public static native int write(int fd, byte[] data, int off, int len) throws IOException;
 
   /**
-   * Removes entire directory tree. Doesn't follow symlinks.
-   *
-   * @param path the file or directory to remove.
-   * @throws IOException if the remove failed.
+   * Close a file descriptor. Additionally, accept and ignore an object; this can be used to keep a
+   * reference alive.
    */
-  public static void rmTree(String path) throws IOException {
-    if (isDirectory(path)) {
-      String[] contents = readdir(path);
-      for (String entry : contents) {
-        rmTree(path + "/" + entry);
-      }
-    }
-    remove(path.toString());
-  }
+  public static native int close(int fd, Object ignored) throws IOException;
 }

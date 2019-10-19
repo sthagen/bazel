@@ -20,7 +20,10 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.actions.AbstractAction;
+import com.google.devtools.build.lib.actions.ActionContinuationOrResult;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -31,19 +34,26 @@ import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionInfoSpecifier;
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit;
-import com.google.devtools.build.lib.analysis.RunfilesSupplierImpl;
+import com.google.devtools.build.lib.actions.RunfilesSupplier;
+import com.google.devtools.build.lib.actions.SpawnExecutedEvent;
+import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
+import com.google.devtools.build.lib.analysis.test.TestActionContext.FailedAttemptResult;
+import com.google.devtools.build.lib.analysis.test.TestActionContext.TestAttemptContinuation;
+import com.google.devtools.build.lib.analysis.test.TestActionContext.TestAttemptResult;
+import com.google.devtools.build.lib.analysis.test.TestActionContext.TestRunnerSpawn;
 import com.google.devtools.build.lib.buildeventstream.TestFileNameConstants;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.ImmutableIterable;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.LoggingUtil;
 import com.google.devtools.build.lib.util.Pair;
-import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -84,7 +94,7 @@ public class TestRunnerAction extends AbstractAction
   private final Artifact cacheStatus;
   private final PathFragment testWarningsPath;
   private final PathFragment unusedRunfilesLogPath;
-  private final PathFragment shExecutable;
+  @Nullable private final PathFragment shExecutable;
   private final PathFragment splitLogsPath;
   private final PathFragment splitLogsDir;
   private final PathFragment undeclaredOutputsDir;
@@ -120,6 +130,8 @@ public class TestRunnerAction extends AbstractAction
    */
   private final ImmutableIterable<String> requiredClientEnvVariables;
 
+  private final boolean cancelConcurrentTestsOnSuccess;
+
   private static ImmutableList<Artifact> list(Artifact... artifacts) {
     ImmutableList.Builder<Artifact> builder = ImmutableList.builder();
     for (Artifact artifact : artifacts) {
@@ -141,6 +153,7 @@ public class TestRunnerAction extends AbstractAction
   TestRunnerAction(
       ActionOwner owner,
       Iterable<Artifact> inputs,
+      RunfilesSupplier runfilesSupplier,
       Artifact testSetupScript, // Must be in inputs
       boolean useTestWrapperInsteadOfTestSetupSh,
       Artifact testXmlGeneratorScript, // Must be in inputs
@@ -155,13 +168,13 @@ public class TestRunnerAction extends AbstractAction
       int runNumber,
       BuildConfiguration configuration,
       String workspaceName,
-      PathFragment shExecutable) {
+      @Nullable PathFragment shExecutable,
+      boolean cancelConcurrentTestsOnSuccess) {
     super(
         owner,
         /*tools=*/ ImmutableList.of(),
         inputs,
-        // Note that this action only cares about the runfiles, not the mapping.
-        new RunfilesSupplierImpl(PathFragment.create("runfiles"), executionSettings.getRunfiles()),
+        runfilesSupplier,
         list(testLog, cacheStatus, coverageArtifact),
         configuration.getActionEnvironment());
     Preconditions.checkState((collectCoverageScript == null) == (coverageArtifact == null));
@@ -211,6 +224,7 @@ public class TestRunnerAction extends AbstractAction
             Iterables.concat(
                 configuration.getActionEnvironment().getInheritedEnv(),
                 configuration.getTestActionEnvironment().getInheritedEnv()));
+    this.cancelConcurrentTestsOnSuccess = cancelConcurrentTestsOnSuccess;
   }
 
   public BuildConfiguration getConfiguration() {
@@ -258,11 +272,13 @@ public class TestRunnerAction extends AbstractAction
       builder.add(Pair.of(TestFileNameConstants.TEST_LOG, resolver.toPath(getTestLog())));
     }
     if (getCoverageData() != null && resolver.toPath(getCoverageData()).exists()) {
-      builder.add(Pair.of(TestFileNameConstants.TEST_COVERAGE,
-          resolver.toPath(getCoverageData())));
+      builder.add(Pair.of(TestFileNameConstants.TEST_COVERAGE, resolver.toPath(getCoverageData())));
     }
     if (execRoot != null) {
       ResolvedPaths resolvedPaths = resolve(execRoot);
+      if (resolvedPaths.getTestStderr().exists()) {
+        builder.add(Pair.of(TestFileNameConstants.TEST_STDERR, resolvedPaths.getTestStderr()));
+      }
       if (resolvedPaths.getXmlOutputPath().exists()) {
         builder.add(Pair.of(TestFileNameConstants.TEST_XML, resolvedPaths.getXmlOutputPath()));
       }
@@ -325,12 +341,13 @@ public class TestRunnerAction extends AbstractAction
     fp.addString(testProperties.getSize().toString());
     fp.addString(testProperties.getTimeout().toString());
     fp.addStrings(testProperties.getTags());
-    fp.addInt(testProperties.isLocal() ? 1 : 0);
+    fp.addInt(testProperties.isRemotable() ? 1 : 0);
     fp.addInt(shardNum);
     fp.addInt(executionSettings.getTotalShards());
     fp.addInt(runNumber);
-    fp.addInt(testConfiguration.getRunsPerTestForLabel(getOwner().getLabel()));
+    fp.addInt(executionSettings.getTotalRuns());
     fp.addInt(configuration.isCodeCoverageEnabled() ? 1 : 0);
+    fp.addStringMap(getExecutionInfo());
   }
 
   @Override
@@ -349,9 +366,8 @@ public class TestRunnerAction extends AbstractAction
   }
 
   /** Saves cache status to disk. */
-  public void saveCacheStatus(
-      ActionExecutionContext actionExecutionContext,
-      TestResultData data) throws IOException {
+  public void saveCacheStatus(ActionExecutionContext actionExecutionContext, TestResultData data)
+      throws IOException {
     try (OutputStream out = actionExecutionContext.getInputPath(cacheStatus).getOutputStream()) {
       data.writeTo(out);
     }
@@ -372,7 +388,7 @@ public class TestRunnerAction extends AbstractAction
         testConfiguration.cacheTestResults(),
         readCacheStatus(),
         testProperties.isExternal(),
-        testConfiguration.getRunsPerTestForLabel(getOwner().getLabel()));
+        executionSettings.getTotalRuns());
   }
 
   @VisibleForTesting
@@ -412,7 +428,7 @@ public class TestRunnerAction extends AbstractAction
     unconditionalExecution = null;
     try {
       executor
-          .getEventBus()
+          .getEventHandler()
           .post(
               executor
                   .getContext(TestActionContext.class)
@@ -435,8 +451,8 @@ public class TestRunnerAction extends AbstractAction
    * the test log base name with arbitrary prefix and extension.
    */
   @Override
-  protected void deleteOutputs(FileSystem fileSystem, Path execRoot) throws IOException {
-    super.deleteOutputs(fileSystem, execRoot);
+  protected void deleteOutputs(Path execRoot) throws IOException {
+    super.deleteOutputs(execRoot);
 
     // We do not rely on globs, as it causes quadratic behavior in --runs_per_test and test
     // shard count.
@@ -447,9 +463,9 @@ public class TestRunnerAction extends AbstractAction
     execRoot.getRelative(unusedRunfilesLogPath).delete();
     // Note that splitLogsPath points to a file inside the splitLogsDir so
     // it's not necessary to delete it explicitly.
-    FileSystemUtils.deleteTree(execRoot.getRelative(splitLogsDir));
-    FileSystemUtils.deleteTree(execRoot.getRelative(undeclaredOutputsDir));
-    FileSystemUtils.deleteTree(execRoot.getRelative(undeclaredOutputsAnnotationsDir));
+    execRoot.getRelative(splitLogsDir).deleteTree();
+    execRoot.getRelative(undeclaredOutputsDir).deleteTree();
+    execRoot.getRelative(undeclaredOutputsAnnotationsDir).deleteTree();
     execRoot.getRelative(testStderr).delete();
     execRoot.getRelative(testExitSafe).delete();
     if (testShard != null) {
@@ -476,7 +492,7 @@ public class TestRunnerAction extends AbstractAction
       // entries, which prevent removing the directory.  As a workaround, code below will throw
       // IOException if it will fail to remove something inside testAttemptsDir, but will
       // silently suppress any exceptions when deleting testAttemptsDir itself.
-      FileSystemUtils.deleteTreesBelow(testAttemptsDir);
+      testAttemptsDir.deleteTreesBelow();
       try {
         testAttemptsDir.delete();
       } catch (IOException e) {
@@ -496,8 +512,7 @@ public class TestRunnerAction extends AbstractAction
 
     // When we run test multiple times, set different TEST_RANDOM_SEED values for each run.
     // Don't override any previous setting.
-    if (testConfiguration.getRunsPerTestForLabel(getOwner().getLabel()) > 1
-        && !env.containsKey("TEST_RANDOM_SEED")) {
+    if (executionSettings.getTotalRuns() > 1 && !env.containsKey("TEST_RANDOM_SEED")) {
       env.put("TEST_RANDOM_SEED", Integer.toString(getRunNumber() + 1));
     }
 
@@ -531,6 +546,11 @@ public class TestRunnerAction extends AbstractAction
     }
     env.put("XML_OUTPUT_FILE", getXmlOutputPath().getPathString());
 
+    if (!isEnableRunfiles()) {
+      // If runfiles are disabled, tell remote-runtest.sh/local-runtest.sh about that.
+      env.put("RUNFILES_MANIFEST_ONLY", "1");
+    }
+
     if (isCoverageMode()) {
       // Instruct remote-runtest.sh/local-runtest.sh not to cd into the runfiles directory.
       // TODO(ulfjack): Find a way to avoid setting this variable.
@@ -539,19 +559,6 @@ public class TestRunnerAction extends AbstractAction
       env.put("COVERAGE_MANIFEST", getCoverageManifest().getExecPathString());
       env.put("COVERAGE_DIR", getCoverageDirectory().getPathString());
       env.put("COVERAGE_OUTPUT_FILE", getCoverageData().getExecPathString());
-      // TODO(elenairina): Remove this after it reaches a blaze release.
-      if (configuration.isExperimentalJavaCoverage()) {
-        // This value ("released") tells lcov_merger whether it should use the old or the new
-        // java  coverage implementation. The meaning of "released" is that lcov_merger will receive
-        // this value only after blaze containing this change will be released.
-        env.put("NEW_JAVA_COVERAGE_IMPL", "released");
-      } else {
-        // This value ("True") should have told lcov_merger whether it should use the old or the new
-        // java  coverage implementation. Due to several failed attempts at submitting the new
-        // implementation, this value will be treated still as the old implementation. This
-        // environment variable must be set to a value recognized by lcov_merger.
-        env.put("NEW_JAVA_COVERAGE_IMPL", "True");
-      }
     }
   }
 
@@ -572,7 +579,7 @@ public class TestRunnerAction extends AbstractAction
   public String getTestSuffix() {
     int totalShards = executionSettings.getTotalShards();
     // Use a 1-based index for user friendliness.
-    int runsPerTest = testConfiguration.getRunsPerTestForLabel(getOwner().getLabel());
+    int runsPerTest = executionSettings.getTotalRuns();
     if (totalShards > 1 && runsPerTest > 1) {
       return String.format(
           "(shard %d of %d, run %d of %d)", shardNum + 1, totalShards, runNumber + 1, runsPerTest);
@@ -731,13 +738,84 @@ public class TestRunnerAction extends AbstractAction
   }
 
   @Override
+  public ActionContinuationOrResult beginExecution(ActionExecutionContext actionExecutionContext)
+      throws InterruptedException, ActionExecutionException {
+    TestActionContext testActionContext =
+        actionExecutionContext.getContext(TestActionContext.class);
+    return beginExecution(actionExecutionContext, testActionContext);
+  }
+
+  @VisibleForTesting
+  public ActionContinuationOrResult beginExecution(
+      ActionExecutionContext actionExecutionContext, TestActionContext testActionContext)
+      throws InterruptedException, ActionExecutionException {
+    try {
+      TestRunnerSpawn testRunnerSpawn =
+          testActionContext.createTestRunnerSpawn(this, actionExecutionContext);
+      ListenableFuture<Void> cancelFuture = null;
+      if (cancelConcurrentTestsOnSuccess) {
+        cancelFuture = testActionContext.getTestCancelFuture(getOwner(), shardNum);
+      }
+      TestAttemptContinuation testAttemptContinuation =
+          beginIfNotCancelled(testRunnerSpawn, cancelFuture);
+      if (testAttemptContinuation == null) {
+        testRunnerSpawn.finalizeCancelledTest(ImmutableList.of());
+        return ActionContinuationOrResult.of(ActionResult.create(ImmutableList.of()));
+      }
+      return new RunAttemptsContinuation(
+          testRunnerSpawn,
+          testAttemptContinuation,
+          testActionContext.isTestKeepGoing(),
+          cancelFuture);
+    } catch (ExecException e) {
+      throw e.toActionExecutionException(this);
+    } catch (IOException e) {
+      throw new EnvironmentalExecException(e).toActionExecutionException(this);
+    }
+  }
+
+  @Nullable
+  private static TestAttemptContinuation beginIfNotCancelled(
+      TestRunnerSpawn testRunnerSpawn, @Nullable ListenableFuture<Void> cancelFuture)
+      throws InterruptedException, IOException {
+    if (cancelFuture != null && cancelFuture.isCancelled()) {
+      // Don't start another attempt if the action was cancelled. Note that there is a race
+      // between checking this and starting the test action. If we loose the race, then we get
+      // to cancel the action below when we register a callback with the cancelFuture. Note that
+      // cancellation only works with spawn runners supporting async execution, so currently does
+      // not work with local execution.
+      return null;
+    }
+    TestAttemptContinuation testAttemptContinuation = testRunnerSpawn.beginExecution();
+    if (!testAttemptContinuation.isDone() && cancelFuture != null) {
+      cancelFuture.addListener(
+          () -> {
+            // This is a noop if the future is already done.
+            testAttemptContinuation.getFuture().cancel(true);
+          },
+          MoreExecutors.directExecutor());
+    }
+    return testAttemptContinuation;
+  }
+
+  @Override
   public ActionResult execute(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     TestActionContext context = actionExecutionContext.getContext(TestActionContext.class);
+    return execute(actionExecutionContext, context);
+  }
+
+  @VisibleForTesting
+  public ActionResult execute(
+      ActionExecutionContext actionExecutionContext, TestActionContext testActionContext)
+      throws ActionExecutionException, InterruptedException {
     try {
-      return ActionResult.create(context.exec(this, actionExecutionContext));
-    } catch (ExecException e) {
-      throw e.toActionExecutionException(this);
+      ActionContinuationOrResult continuation =
+          beginExecution(actionExecutionContext, testActionContext);
+      while (!continuation.isDone()) {
+        continuation = continuation.execute();
+      }
+      return continuation.get();
     } finally {
       unconditionalExecution = null;
     }
@@ -770,7 +848,8 @@ public class TestRunnerAction extends AbstractAction
     return collectCoverageScript;
   }
 
-  public PathFragment getShExecutable() {
+  @Nullable
+  public PathFragment getShExecutableMaybe() {
     return shExecutable;
   }
 
@@ -864,6 +943,169 @@ public class TestRunnerAction extends AbstractAction
     /** @return path to the optionally created XML output file created by the test. */
     public Path getXmlOutputPath() {
       return getPath(xmlOutputPath);
+    }
+
+    public Path getCoverageDirectory() {
+      return getPath(TestRunnerAction.this.getCoverageDirectory());
+    }
+
+    public Path getCoverageDataPath() {
+      return getPath(getCoverageData().getExecPath());
+    }
+  }
+
+  /** Implements test retries. */
+  private final class RunAttemptsContinuation extends ActionContinuationOrResult {
+    private final TestRunnerSpawn testRunnerSpawn;
+    private final TestAttemptContinuation testContinuation;
+    private final boolean keepGoing;
+    // Careful: We can only determine this value _after_ the first attempt is done, so we initially
+    // set it to 0, but then we need to make sure not to use this value.
+    private final int maxAttempts;
+    private final List<SpawnResult> spawnResults;
+    private final List<FailedAttemptResult> failedAttempts;
+    @Nullable private final ListenableFuture<Void> cancelFuture;
+
+    private RunAttemptsContinuation(
+        TestRunnerSpawn testRunnerSpawn,
+        TestAttemptContinuation testContinuation,
+        boolean keepGoing,
+        int maxAttempts,
+        List<SpawnResult> spawnResults,
+        List<FailedAttemptResult> failedAttempts,
+        ListenableFuture<Void> cancelFuture) {
+      this.testRunnerSpawn = testRunnerSpawn;
+      this.testContinuation = testContinuation;
+      this.keepGoing = keepGoing;
+      this.maxAttempts = maxAttempts;
+      this.spawnResults = spawnResults;
+      this.failedAttempts = failedAttempts;
+      this.cancelFuture = cancelFuture;
+      if (cancelFuture != null) {
+        cancelFuture.addListener(
+            () -> {
+              // This is a noop if the future is already done.
+              testContinuation.getFuture().cancel(true);
+            },
+            MoreExecutors.directExecutor());
+      }
+    }
+
+    RunAttemptsContinuation(
+        TestRunnerSpawn testRunnerSpawn,
+        TestAttemptContinuation testContinuation,
+        boolean keepGoing,
+        @Nullable ListenableFuture<Void> cancelFuture) {
+      this(
+          testRunnerSpawn,
+          testContinuation,
+          keepGoing,
+          0,
+          new ArrayList<>(),
+          new ArrayList<>(),
+          cancelFuture);
+    }
+
+    @Nullable
+    @Override
+    public ListenableFuture<?> getFuture() {
+      return testContinuation.getFuture();
+    }
+
+    @Override
+    public ActionContinuationOrResult execute()
+        throws ActionExecutionException, InterruptedException {
+      try {
+        TestAttemptContinuation nextContinuation;
+        try {
+          nextContinuation = testContinuation.execute();
+        } catch (InterruptedException e) {
+          if (cancelFuture != null && cancelFuture.isCancelled()) {
+            // Clear the interrupt bit.
+            Thread.interrupted();
+            for (Artifact output : TestRunnerAction.this.getMandatoryOutputs()) {
+              FileSystemUtils.touchFile(output.getPath());
+            }
+            testRunnerSpawn.finalizeCancelledTest(failedAttempts);
+            return ActionContinuationOrResult.of(ActionResult.create(spawnResults));
+          }
+          throw e;
+        }
+        if (!nextContinuation.isDone()) {
+          return new RunAttemptsContinuation(
+              testRunnerSpawn,
+              nextContinuation,
+              keepGoing,
+              maxAttempts,
+              spawnResults,
+              failedAttempts,
+              cancelFuture);
+        }
+
+        TestAttemptResult result = nextContinuation.get();
+        int actualMaxAttempts =
+            failedAttempts.isEmpty() ? testRunnerSpawn.getMaxAttempts(result) : maxAttempts;
+        Preconditions.checkState(actualMaxAttempts != 0);
+        return process(result, actualMaxAttempts);
+      } catch (ExecException e) {
+        throw e.toActionExecutionException(TestRunnerAction.this);
+      } catch (IOException e) {
+        throw new EnvironmentalExecException(e).toActionExecutionException(TestRunnerAction.this);
+      }
+    }
+
+    private ActionContinuationOrResult process(TestAttemptResult result, int actualMaxAttempts)
+        throws ExecException, IOException, InterruptedException {
+      spawnResults.addAll(result.spawnResults());
+      if (result.hasPassed()) {
+        if (cancelFuture != null) {
+          cancelFuture.cancel(true);
+        }
+      } else {
+        boolean runAnotherAttempt = failedAttempts.size() + 1 < actualMaxAttempts;
+        TestRunnerSpawn nextRunner;
+        if (runAnotherAttempt) {
+          nextRunner = testRunnerSpawn;
+        } else {
+          nextRunner = testRunnerSpawn.getFallbackRunner();
+          if (nextRunner != null) {
+            // We only support one level of fallback, in which case this gets doubled once. We
+            // don't support a different number of max attempts for the fallback strategy.
+            actualMaxAttempts = 2 * actualMaxAttempts;
+          }
+        }
+        if (nextRunner != null) {
+          failedAttempts.add(
+              testRunnerSpawn.finalizeFailedTestAttempt(result, failedAttempts.size() + 1));
+
+          TestAttemptContinuation nextContinuation = beginIfNotCancelled(nextRunner, cancelFuture);
+          if (nextContinuation == null) {
+            testRunnerSpawn.finalizeCancelledTest(failedAttempts);
+            return ActionContinuationOrResult.of(ActionResult.create(spawnResults));
+          }
+
+          // Change the phase here because we are executing a rerun of the failed attempt.
+          this.testRunnerSpawn
+              .getActionExecutionContext()
+              .getEventHandler()
+              .post(new SpawnExecutedEvent.ChangePhase(TestRunnerAction.this));
+
+          return new RunAttemptsContinuation(
+              nextRunner,
+              nextContinuation,
+              keepGoing,
+              actualMaxAttempts,
+              spawnResults,
+              failedAttempts,
+              cancelFuture);
+        }
+      }
+      testRunnerSpawn.finalizeTest(result, failedAttempts);
+
+      if (!keepGoing && !result.hasPassed()) {
+        throw new TestExecException("Test failed: aborting");
+      }
+      return ActionContinuationOrResult.of(ActionResult.create(spawnResults));
     }
   }
 }

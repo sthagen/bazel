@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.actions;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import java.util.Arrays;
 import javax.annotation.Nullable;
@@ -23,33 +25,71 @@ import javax.annotation.Nullable;
  * <p>Allows {@link FileArtifactValue} lookups by exec path or {@link ActionInput}. <i>Also</i>
  * allows {@link ActionInput} to be looked up by exec path.
  *
+ * <p>This class implements a closed hash-map with the "links" of each bucket's linked list being
+ * stored in a flat array to avoid memory allocations and garbage collection.
+ *
  * <p>This class is thread-compatible.
  */
-public final class ActionInputMap implements MetadataProvider {
+public final class ActionInputMap implements MetadataProvider, ActionInputMapSink {
+  /** The number of elements contained in this map. */
+  int size;
+
   /**
-   * {@link ActionInput} keys stored in even indices
-   *
-   * <p>{@link FileArtifactValue} values stored in odd indices
+   * The hash buckets. Values are indexes into the four arrays. The number of buckets is always the
+   * smallest power of 2 that is larger than the number of elements.
    */
-  private Object[] data;
+  private int[] table;
 
-  /** Number of contained elements. */
-  private int size;
+  /** Flat array of the next pointers that make up the linked list behind each hash bucket. */
+  private int[] next;
 
-  /** Length of data = 2^(numBits+1) */
-  private int numBits;
+  /**
+   * The {@link ActionInput} keys stored in this map. For performance reasons, they need to be
+   * stored as {@link Object}s as otherwise, the JVM does not seem to be as good optimizing the
+   * store operations (maybe it does checks on the type being stored?).
+   */
+  private Object[] keys;
 
-  /** Mask to use to perform the modulo operation since the table size is a power of 2. */
-  private int mask;
+  /**
+   * Extra storage for the execPathStrings of the values in {@link #keys}. This extra storage is
+   * necessary for speed as otherwise, we'd need to cast to {@link ActionInput}, which is slow.
+   */
+  private Object[] paths;
+
+  /**
+   * The {@link FileArtifactValue} data stored in this map. Same as the other arrays, this is stored
+   * as {@link Object} for performance reasons.
+   */
+  private Object[] values;
 
   public ActionInputMap(int sizeHint) {
-    this.numBits = 1;
-    while ((1 << numBits) <= sizeHint) {
-      ++numBits;
+    sizeHint = Math.max(1, sizeHint);
+    int tableSize = Integer.highestOneBit(sizeHint) << 1;
+    size = 0;
+
+    table = new int[tableSize];
+    Arrays.fill(table, -1);
+
+    next = new int[sizeHint];
+    keys = new Object[sizeHint];
+    paths = new Object[sizeHint];
+    values = new Object[sizeHint];
+  }
+
+  private int getIndex(String execPathString) {
+    int hashCode = execPathString.hashCode();
+    int index = hashCode & (table.length - 1);
+    if (table[index] == -1) {
+      return -1;
     }
-    this.mask = (1 << numBits) - 1;
-    this.data = new Object[1 << (numBits + 1)];
-    this.size = 0;
+    index = table[index];
+    while (index != -1) {
+      if (hashCode == paths[index].hashCode() && execPathString.equals(paths[index])) {
+        return index;
+      }
+      index = next[index];
+    }
+    return -1;
   }
 
   @Nullable
@@ -60,33 +100,15 @@ public final class ActionInputMap implements MetadataProvider {
 
   @Nullable
   public FileArtifactValue getMetadata(String execPathString) {
-    int hashCode = execPathString.hashCode();
-    int probe = getProbe(hashCode);
-    ActionInput nextKey;
-    while ((nextKey = (ActionInput) data[probe]) != null) {
-      if (hashCode == nextKey.getExecPathString().hashCode()
-          && nextKey.getExecPathString().equals(execPathString)) {
-        return (FileArtifactValue) data[probe + 1];
-      }
-      probe = incProbe(probe);
-    }
-    return null;
+    int index = getIndex(execPathString);
+    return index == -1 ? null : (FileArtifactValue) values[index];
   }
 
   @Nullable
   @Override
   public ActionInput getInput(String execPathString) {
-    int hashCode = execPathString.hashCode();
-    int probe = getProbe(hashCode);
-    ActionInput nextKey;
-    while ((nextKey = (ActionInput) data[probe]) != null) {
-      if (hashCode == nextKey.getExecPathString().hashCode()
-          && nextKey.getExecPathString().equals(execPathString)) {
-        return nextKey;
-      }
-      probe = incProbe(probe);
-    }
-    return null;
+    int index = getIndex(execPathString);
+    return index == -1 ? null : (ActionInput) keys[index];
   }
 
   /** Count of contained entries. */
@@ -94,77 +116,68 @@ public final class ActionInputMap implements MetadataProvider {
     return size;
   }
 
-  /** @return true if an entry was added, false if the map already contains {@code input} */
-  public boolean put(ActionInput input, FileArtifactValue metadata) {
-    Preconditions.checkNotNull(input);
-    if (size * 4 >= data.length) {
-      resize();
-    }
-    return putImpl(input, metadata);
+  @Override
+  public boolean put(ActionInput input, FileArtifactValue metadata, @Nullable Artifact depOwner) {
+    return putWithNoDepOwner(input, metadata);
   }
 
-  public void clear() {
-    Arrays.fill(data, null);
+  public boolean putWithNoDepOwner(ActionInput input, FileArtifactValue metadata) {
+    Preconditions.checkNotNull(input);
+    if (size >= keys.length) {
+      resize();
+    }
+    String path = input.getExecPathString();
+    int hashCode = path.hashCode();
+    int index = hashCode & (table.length - 1);
+    int nextIndex = table[index];
+    if (nextIndex == -1) {
+      table[index] = size;
+    } else {
+      do {
+        index = nextIndex;
+        if (hashCode == paths[index].hashCode() && Objects.equal(path, paths[index])) {
+          return false;
+        }
+        nextIndex = next[index];
+      } while (nextIndex != -1);
+      next[index] = size;
+    }
+    next[size] = -1;
+    keys[size] = input;
+    paths[size] = input.getExecPathString();
+    values[size] = metadata;
+    size++;
+    return true;
+  }
+
+  @VisibleForTesting
+  void clear() {
+    Arrays.fill(table, -1);
+    Arrays.fill(next, -1);
+    Arrays.fill(keys, null);
+    Arrays.fill(paths, null);
+    Arrays.fill(values, null);
     size = 0;
   }
 
   private void resize() {
-    Object[] oldData = data;
-    data = new Object[data.length * 2];
-    ++numBits;
-    mask = (1 << numBits) - 1;
-    for (int i = 0; i < oldData.length; i += 2) {
-      ActionInput key = (ActionInput) oldData[i];
-      if (key == null) {
-        continue;
-      }
-      int hashCode = key.getExecPathString().hashCode();
-      int probe = getProbe(hashCode);
-      while (true) {
-        // Only checks for empty slots because all map keys are known to be unique.
-        if (data[probe] == null) {
-          data[probe] = key;
-          data[probe + 1] = oldData[i + 1];
-          break;
-        }
-        probe = incProbe(probe);
+    // Resize the data containers.
+    keys = Arrays.copyOf(keys, size * 2);
+    paths = Arrays.copyOf(paths, size * 2);
+    values = Arrays.copyOf(values, size * 2);
+    next = Arrays.copyOf(next, size * 2);
+
+    // Resize and recreate the table and links if necessary. We can take shortcuts here as we know
+    // there are no duplicate keys.
+    if (table.length < size * 2) {
+      table = new int[table.length * 2];
+      next = new int[size * 2];
+      Arrays.fill(table, -1);
+      for (int i = 0; i < size; i++) {
+        int index = paths[i].hashCode() & (table.length - 1);
+        next[i] = table[index];
+        table[index] = i;
       }
     }
-  }
-
-  /**
-   * Unlike the public version, this doesn't resize.
-   *
-   * <p>REQUIRES: there are free positions in {@link data}.
-   */
-  private boolean putImpl(ActionInput key, FileArtifactValue value) {
-    int hashCode = key.getExecPathString().hashCode();
-    int probe = getProbe(hashCode);
-    while (true) {
-      ActionInput next = (ActionInput) data[probe];
-      if (next == null) {
-        data[probe] = key;
-        data[probe + 1] = value;
-        ++size;
-        return true;
-      }
-      if (hashCode == next.getExecPathString().hashCode()
-          && next.getExecPathString().equals(key.getExecPathString())) {
-        return false; // already present
-      }
-      probe = incProbe(probe);
-    }
-  }
-
-  private int getProbe(int hashCode) {
-    return (hashCode & mask) << 1;
-  }
-
-  private int incProbe(int probe) {
-    probe += 2;
-    if (probe >= data.length) {
-      probe -= data.length;
-    }
-    return probe;
   }
 }

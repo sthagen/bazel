@@ -19,23 +19,26 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
+import com.google.devtools.build.lib.actions.ActionKeyCacher;
+import com.google.devtools.build.lib.actions.ActionKeyContext;
+import com.google.devtools.build.lib.actions.ActionLookupValue.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionTemplate;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.CommandLine;
+import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Map;
 
-/**
- * An {@link ActionTemplate} that expands into {@link SpawnAction}s at execution time.
- */
-public final class SpawnActionTemplate implements ActionTemplate<SpawnAction> {
+/** An {@link ActionTemplate} that expands into {@link SpawnAction}s at execution time. */
+public final class SpawnActionTemplate extends ActionKeyCacher
+    implements ActionTemplate<SpawnAction> {
   private final SpecialArtifact inputTreeArtifact;
   private final SpecialArtifact outputTreeArtifact;
   private final NestedSet<Artifact> commonInputs;
@@ -95,21 +98,34 @@ public final class SpawnActionTemplate implements ActionTemplate<SpawnAction> {
 
   @Override
   public Iterable<SpawnAction> generateActionForInputArtifacts(
-      Iterable<TreeFileArtifact> inputTreeFileArtifacts, ArtifactOwner artifactOwner) {
+      Iterable<TreeFileArtifact> inputTreeFileArtifacts, ActionLookupKey artifactOwner) {
     ImmutableList.Builder<SpawnAction> expandedActions = new ImmutableList.Builder<>();
     for (TreeFileArtifact inputTreeFileArtifact : inputTreeFileArtifacts) {
       PathFragment parentRelativeOutputPath =
           outputPathMapper.parentRelativeOutputPath(inputTreeFileArtifact);
 
-      TreeFileArtifact outputTreeFileArtifact = ActionInputHelper.treeFileArtifact(
-          outputTreeArtifact,
-          parentRelativeOutputPath,
-          artifactOwner);
+      TreeFileArtifact outputTreeFileArtifact =
+          ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+              outputTreeArtifact, parentRelativeOutputPath, artifactOwner);
 
       expandedActions.add(createAction(inputTreeFileArtifact, outputTreeFileArtifact));
     }
 
     return expandedActions.build();
+  }
+
+  @Override
+  protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp)
+      throws CommandLineExpansionException {
+    TreeFileArtifact inputTreeFileArtifact =
+        ActionInputHelper.treeFileArtifact(inputTreeArtifact, "dummy_for_key");
+    TreeFileArtifact outputTreeFileArtifact =
+        ActionInputHelper.treeFileArtifactWithNoGeneratingActionSet(
+            outputTreeArtifact,
+            outputPathMapper.parentRelativeOutputPath(inputTreeFileArtifact),
+            outputTreeArtifact.getArtifactOwner());
+    SpawnAction dummyAction = createAction(inputTreeFileArtifact, outputTreeFileArtifact);
+    dummyAction.computeKey(actionKeyContext, fp);
   }
 
   /**
@@ -153,6 +169,11 @@ public final class SpawnActionTemplate implements ActionTemplate<SpawnAction> {
   @Override
   public ActionOwner getOwner() {
     return actionOwner;
+  }
+
+  @Override
+  public boolean isShareable() {
+    return true;
   }
 
   @Override

@@ -31,7 +31,7 @@ bool Concatenator::Merge(const CDH *cdh, const LH *lh) {
   if (Z_NO_COMPRESSION == lh->compression_method()) {
     buffer_->ReadEntryContents(lh);
   } else if (Z_DEFLATED == lh->compression_method()) {
-    if (!inflater_.get()) {
+    if (!inflater_) {
       inflater_.reset(new Inflater());
     }
     buffer_->DecompressEntryContents(cdh, lh, inflater_.get());
@@ -42,7 +42,7 @@ bool Concatenator::Merge(const CDH *cdh, const LH *lh) {
 }
 
 void *Concatenator::OutputEntry(bool compress) {
-  if (!buffer_.get()) {
+  if (!buffer_) {
     return nullptr;
   }
 
@@ -67,8 +67,8 @@ void *Concatenator::OutputEntry(bool compress) {
   lh->signature();
   lh->version(20);
   lh->bit_flag(0x0);
-  lh->last_mod_file_time(1);   // 00:00:01
-  lh->last_mod_file_date(33);  // 1980-01-01
+  lh->last_mod_file_time(1);                     // 00:00:01
+  lh->last_mod_file_date(30 << 9 | 1 << 5 | 1);  // 2010-01-01
   lh->crc32(0x12345678);
   lh->compressed_file_size32(0);
   lh->file_name(filename_.c_str(), filename_.size());
@@ -125,7 +125,7 @@ void *NullCombiner::OutputEntry(bool /*compress*/) { return nullptr; }
 XmlCombiner::~XmlCombiner() {}
 
 bool XmlCombiner::Merge(const CDH *cdh, const LH *lh) {
-  if (!concatenator_.get()) {
+  if (!concatenator_) {
     concatenator_.reset(new Concatenator(filename_, false));
     concatenator_->Append(start_tag_);
     concatenator_->Append("\n");
@@ -136,7 +136,7 @@ bool XmlCombiner::Merge(const CDH *cdh, const LH *lh) {
   if (Z_NO_COMPRESSION == lh->compression_method()) {
     bytes_.ReadEntryContents(lh);
   } else if (Z_DEFLATED == lh->compression_method()) {
-    if (!inflater_.get()) {
+    if (!inflater_) {
       inflater_.reset(new Inflater());
     }
     bytes_.DecompressEntryContents(cdh, lh, inflater_.get());
@@ -166,7 +166,7 @@ bool XmlCombiner::Merge(const CDH *cdh, const LH *lh) {
 }
 
 void *XmlCombiner::OutputEntry(bool compress) {
-  if (!concatenator_.get()) {
+  if (!concatenator_) {
     return nullptr;
   }
   concatenator_->Append(end_tag_);

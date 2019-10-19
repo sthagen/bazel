@@ -1,3 +1,5 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
 # Description:
 #   Testing tools for the devtools-common options parser.
 package(
@@ -23,7 +25,6 @@ java_library(
         "//src/main/java/com/google/devtools/common/options",
         "//third_party:guava",
         "//third_party:guava-testlib",
-        "//third_party:junit4",
         "//third_party:truth",
     ],
 )

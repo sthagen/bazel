@@ -15,11 +15,8 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -48,14 +45,14 @@ public abstract class LocalDiffAwareness implements DiffAwareness {
    */
   public static final class Options extends OptionsBase {
     @Option(
-      name = "watchfs",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "If true, %{product} tries to use the operating system's file watch service for "
-              + "local changes instead of scanning every file for a change."
-    )
+        name = "watchfs",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "On Linux/macOS: If true, %{product} tries to use the operating system's file watch "
+                + "service for local changes instead of scanning every file for a change. On "
+                + "Windows: this flag is a non-op.")
     public boolean watchFS;
   }
 
@@ -175,25 +172,20 @@ public abstract class LocalDiffAwareness implements DiffAwareness {
     if (!areInSequence(oldSequentialView, newSequentialView)) {
       return ModifiedFileSet.EVERYTHING_MODIFIED;
     }
-    return ModifiedFileSet.builder()
-        .modifyAll(Iterables.transform(newSequentialView.modifiedAbsolutePaths,
-            nioAbsolutePathToPathFragment))
-            .build();
+
+    ModifiedFileSet.Builder resultBuilder = ModifiedFileSet.builder();
+    for (Path modifiedPath : newSequentialView.modifiedAbsolutePaths) {
+      if (!modifiedPath.startsWith(watchRootPath)) {
+        throw new BrokenDiffAwarenessException(
+            String.format("%s is not under %s", modifiedPath, watchRootPath));
+      }
+      resultBuilder.modify(PathFragment.create(watchRootPath.relativize(modifiedPath).toString()));
+    }
+    return resultBuilder.build();
   }
 
   @Override
   public String name() {
     return "local";
   }
-
-  /** Converts java.nio.file.Path objects to vfs.PathFragment. */
-  private final Function<Path, PathFragment> nioAbsolutePathToPathFragment =
-      new Function<Path, PathFragment>() {
-        @Override
-        public PathFragment apply(Path input) {
-          Preconditions.checkArgument(
-              input.startsWith(watchRootPath), "%s %s", input, watchRootPath);
-          return PathFragment.create(watchRootPath.relativize(input).toString());
-        }
-      };
 }

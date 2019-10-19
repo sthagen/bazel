@@ -26,7 +26,7 @@ import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.packages.Type;
 
 /** Implements {code proto_lang_toolchain}. */
 public class ProtoLangToolchainRule implements RuleDefinition {
@@ -52,11 +52,11 @@ public class ProtoLangToolchainRule implements RuleDefinition {
         passed to the proto-compiler:
         <code>--plugin=protoc-gen-PLUGIN=<executable>.</code>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
-        .add(attr("plugin", LABEL).exec().cfg(HostTransition.INSTANCE).allowedFileTypes())
+        .add(attr("plugin", LABEL).exec().cfg(HostTransition.createFactory()).allowedFileTypes())
 
         /* <!-- #BLAZE_RULE(proto_lang_toolchain).ATTRIBUTE(runtime) -->
         A language-specific library that the generated code is compiled against.
-        The exact behavior is LANG_proto_librar-specific.
+        The exact behavior is LANG_proto_library-specific.
         Java, for example, should compile against the runtime.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("runtime", LABEL).allowedFileTypes())
@@ -72,7 +72,7 @@ public class ProtoLangToolchainRule implements RuleDefinition {
                 .allowedFileTypes()
                 .mandatoryNativeProviders(
                     ImmutableList.<Class<? extends TransitiveInfoProvider>>of(FileProvider.class)))
-
+        .requiresConfigurationFragments(ProtoConfiguration.class)
         .advertiseProvider(ProtoLangToolchainProvider.class)
         .removeAttribute("data")
         .removeAttribute("deps")
@@ -90,6 +90,10 @@ public class ProtoLangToolchainRule implements RuleDefinition {
 }
 
 /*<!-- #BLAZE_RULE (NAME = proto_lang_toolchain, TYPE = LIBRARY, FAMILY = Protocol Buffer) -->
+
+<p>Deprecated. Please <a href="https://github.com/bazelbuild/rules_proto">
+   https://github.com/bazelbuild/rules_proto</a> instead.
+</p>
 
 <p>
 Specifies how a LANG_proto_library rule (e.g., <code>java_proto_library</code>) should invoke the

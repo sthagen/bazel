@@ -24,16 +24,21 @@ import java.util.List;
  */
 public interface CommandAction extends Action, ExecutionInfoSpecifier {
 
-  /** Returns a list of command line arguments that implements this action. */
+  /**
+   * Returns a list of command line arguments that implements this action.
+   *
+   * <p>In most cases, this expands any params files. One notable exception is C/C++ compilation
+   * with the "compiler_param_file" feature.
+   */
   List<String> getArguments() throws CommandLineExpansionException;
 
-  /** 
-   * Returns a map of command line variables to their values that constitute the environment
-   * in which this action should be run. This excludes any inherited environment variables, as this
+  /**
+   * Returns a map of command line variables to their values that constitute the environment in
+   * which this action should be run. This excludes any inherited environment variables, as this
    * method does not provide access to the client environment.
    */
   @VisibleForTesting
-  ImmutableMap<String, String> getIncompleteEnvironmentForTesting();
+  ImmutableMap<String, String> getIncompleteEnvironmentForTesting() throws ActionExecutionException;
 
   /** Returns inputs to this action, including inputs that may be pruned. */
   @VisibleForTesting // productionVisibility = Visibility.PRIVATE

@@ -14,18 +14,74 @@
 
 package com.google.devtools.build.lib.skylarkbuildapi.cpp;
 
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 
 /**
  * Interface for a store of information needed for C++ compilation aggregated across dependencies.
  */
 @SkylarkModule(
-    name = "cc_compilation_context",
-    documented = false,
+    name = "CompilationContext",
     category = SkylarkModuleCategory.PROVIDER,
     doc =
         "Immutable store of information needed for C++ compilation that is aggregated across "
-            + "dependencies."
-)
-public interface CcCompilationContextApi {}
+            + "dependencies.")
+public interface CcCompilationContextApi {
+  @SkylarkCallable(
+      name = "defines",
+      doc =
+          "Returns the set of defines needed to compile this target. Each define is a string."
+              + " These values are propagated to the target's transitive dependencies.",
+      structField = true)
+  SkylarkNestedSet getSkylarkDefines();
+
+  @SkylarkCallable(
+      name = "local_defines",
+      doc =
+          "Returns the set of defines needed to compile this target. Each define is a string."
+              + " These values are not propagated to the target's transitive dependencies.",
+      structField = true)
+  SkylarkNestedSet getSkylarkNonTransitiveDefines();
+
+  @SkylarkCallable(
+      name = "headers",
+      doc = "Returns the set of headers needed to compile this target.",
+      structField = true)
+  SkylarkNestedSet getSkylarkHeaders();
+
+  @SkylarkCallable(
+      name = "system_includes",
+      doc =
+          "Returns the set of search paths (as strings) for header files referenced by angle"
+              + " brackets, e.g. #include <foo/bar/header.h>. They can be either relative to the"
+              + " exec root or absolute. Usually passed with -isystem.",
+      structField = true)
+  SkylarkNestedSet getSkylarkSystemIncludeDirs();
+
+  @SkylarkCallable(
+      name = "framework_includes",
+      doc =
+          "Returns the set of search paths (as strings) for framework header files. Usually passed"
+              + " with -F.",
+      structField = true)
+  SkylarkNestedSet getSkylarkFrameworkIncludeDirs();
+
+  @SkylarkCallable(
+      name = "includes",
+      doc =
+          "Returns the set of search paths (as strings) for header files referenced both by angle"
+              + " bracket and quotes. Usually passed with -I.",
+      structField = true)
+  SkylarkNestedSet getSkylarkIncludeDirs();
+
+  @SkylarkCallable(
+      name = "quote_includes",
+      doc =
+          "Returns the set of search paths (as strings) for header files referenced by quotes,"
+              + " e.g. #include \"foo/bar/header.h\". They can be either relative to the exec root"
+              + " or absolute. Usually passed with -iquote.",
+      structField = true)
+  SkylarkNestedSet getSkylarkQuoteIncludeDirs();
+}

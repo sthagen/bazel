@@ -13,17 +13,17 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.test;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
-import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.analysis.test.TestActionContext;
 import com.google.devtools.build.lib.analysis.test.TestResult;
 import com.google.devtools.build.lib.analysis.test.TestRunnerAction;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.view.test.TestStatus.TestResultData;
 import java.io.IOException;
-import java.util.List;
 
 /**
  * Test strategy wrapper called 'exclusive'. It should delegate to a test strategy for local
@@ -41,15 +41,27 @@ public class ExclusiveTestStrategy implements TestActionContext {
   }
 
   @Override
-  public List<SpawnResult> exec(
-      TestRunnerAction action, ActionExecutionContext actionExecutionContext)
+  public TestRunnerSpawn createTestRunnerSpawn(
+      TestRunnerAction testRunnerAction, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
-    return parent.exec(action, actionExecutionContext);
+    return parent.createTestRunnerSpawn(testRunnerAction, actionExecutionContext);
+  }
+
+  @Override
+  public boolean isTestKeepGoing() {
+    return parent.isTestKeepGoing();
   }
 
   @Override
   public TestResult newCachedTestResult(
       Path execRoot, TestRunnerAction action, TestResultData cached) throws IOException {
     return parent.newCachedTestResult(execRoot, action, cached);
+  }
+
+  @Override
+  public ListenableFuture<Void> getTestCancelFuture(ActionOwner owner, int shard) {
+    // TODO(ulfjack): Exclusive tests run sequentially, and this feature exists to allow faster
+    //  aborts of concurrent actions. It's not clear what, if anything, we should do here.
+    return null;
   }
 }

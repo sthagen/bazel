@@ -26,9 +26,10 @@ import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildIn
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.packages.RuleVisibility;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
+import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ConflictException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.skyframe.AbstractSkyKey;
 import com.google.devtools.build.skyframe.Injectable;
 import com.google.devtools.build.skyframe.SkyFunction;
@@ -45,7 +46,7 @@ import javax.annotation.Nullable;
  * (e.g. via injection).
  */
 @AutoCodec
-public final class PrecomputedValue implements SkyValue {
+public class PrecomputedValue implements SkyValue {
   /**
    * An externally-injected precomputed value. Exists so that modules can inject precomputed values
    * into Skyframe's graph.
@@ -79,30 +80,20 @@ public final class PrecomputedValue implements SkyValue {
     return new Injected(precomputed, Suppliers.ofInstance(value));
   }
 
-  public static final Precomputed<Boolean> ENABLE_DEFAULTS_PACKAGE =
-      new Precomputed<>(Key.create("enable_default_pkg"));
-
-  // TODO(dbabkin): better to move this code to PrecomputedValueUtils.
-  // It will gone soon after removing tools/defaults
-  public static boolean isInMemoryToolsDefaults(SkyFunction.Environment env)
-      throws InterruptedException {
-    Boolean enableDefaultsPackage = PrecomputedValue.ENABLE_DEFAULTS_PACKAGE.get(env);
-    return Preconditions.checkNotNull(enableDefaultsPackage);
-  }
-
-  public static final Precomputed<String> DEFAULTS_PACKAGE_CONTENTS =
-      new Precomputed<>(Key.create("default_pkg"));
-
   public static final Precomputed<RuleVisibility> DEFAULT_VISIBILITY =
       new Precomputed<>(Key.create("default_visibility"));
 
-  public static final Precomputed<SkylarkSemantics> SKYLARK_SEMANTICS =
+  public static final Precomputed<StarlarkSemantics> STARLARK_SEMANTICS =
       new Precomputed<>(Key.create("skylark_semantics"));
 
-  static final Precomputed<UUID> BUILD_ID = new Precomputed<>(Key.create("build_id"));
+  static final Precomputed<UUID> BUILD_ID =
+      new Precomputed<>(Key.create("build_id"), /*shareable=*/ false);
 
   public static final Precomputed<Map<String, String>> ACTION_ENV =
       new Precomputed<>(Key.create("action_env"));
+
+  public static final Precomputed<Map<String, String>> REPO_ENV =
+      new Precomputed<>(Key.create("repo_env"));
 
   static final Precomputed<ImmutableList<ActionAnalysisMetadata>> COVERAGE_REPORT_KEY =
       new Precomputed<>(Key.create("coverage_report_actions"));
@@ -115,6 +106,12 @@ public final class PrecomputedValue implements SkyValue {
 
   public static final Precomputed<PathPackageLocator> PATH_PACKAGE_LOCATOR =
       new Precomputed<>(Key.create("path_package_locator"));
+
+  public static final Precomputed<RemoteOutputsMode> REMOTE_OUTPUTS_MODE =
+      new Precomputed<>(Key.create("remote_outputs_mode"));
+
+  public static final Precomputed<Map<String, String>> REMOTE_DEFAULT_PLATFORM_PROPERTIES =
+      new Precomputed<>(Key.create("remote_default_platform_properties"));
 
   private final Object value;
 
@@ -160,13 +157,19 @@ public final class PrecomputedValue implements SkyValue {
    */
   public static final class Precomputed<T> {
     private final Key key;
+    private final boolean shareable;
 
     public Precomputed(Key key) {
+      this(key, /*shareable=*/ true);
+    }
+
+    private Precomputed(Key key, boolean shareable) {
       this.key = key;
+      this.shareable = shareable;
     }
 
     @VisibleForTesting
-    Key getKeyForTesting() {
+    public Key getKeyForTesting() {
       return key;
     }
 
@@ -185,11 +188,22 @@ public final class PrecomputedValue implements SkyValue {
       return (T) value.get();
     }
 
-    /**
-     * Injects a new variable value.
-     */
+    /** Injects a new variable value. */
     public void set(Injectable injectable, T value) {
-      injectable.inject(key, new PrecomputedValue(value));
+      injectable.inject(
+          key, shareable ? new PrecomputedValue(value) : new UnshareablePrecomputedValue(value));
+    }
+  }
+
+  /** An unshareable version of {@link PrecomputedValue}. */
+  private static final class UnshareablePrecomputedValue extends PrecomputedValue {
+    private UnshareablePrecomputedValue(Object value) {
+      super(value);
+    }
+
+    @Override
+    public boolean dataIsShareable() {
+      return false;
     }
   }
 

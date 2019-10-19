@@ -18,31 +18,23 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
-import com.google.devtools.build.lib.analysis.config.ConfigurationEnvironment;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkbuildapi.apple.SwiftConfigurationApi;
 
 /**
  * A configuration containing flags required for Swift tools. This is used primarily by swift_*
  * family of rules written in Skylark.
  */
-@AutoCodec
 @Immutable
 public class SwiftConfiguration extends BuildConfiguration.Fragment
     implements SwiftConfigurationApi {
   private final ImmutableList<String> copts;
 
-  public SwiftConfiguration(SwiftCommandLineOptions options) {
-    this(ImmutableList.copyOf(options.copts));
-  }
-
-  @AutoCodec.Instantiator
-  SwiftConfiguration(ImmutableList<String> copts) {
-    this.copts = copts;
+  private SwiftConfiguration(SwiftCommandLineOptions options) {
+    this.copts = ImmutableList.copyOf(options.copts);
   }
 
   /** Returns a list of options to use for compiling Swift. */
@@ -54,8 +46,8 @@ public class SwiftConfiguration extends BuildConfiguration.Fragment
   /** Loads {@link SwiftConfiguration} from build options. */
   public static class Loader implements ConfigurationFragmentFactory {
     @Override
-    public SwiftConfiguration create(ConfigurationEnvironment env, BuildOptions buildOptions)
-        throws InvalidConfigurationException, InterruptedException {
+    public SwiftConfiguration create(BuildOptions buildOptions)
+        throws InvalidConfigurationException {
       SwiftCommandLineOptions options = buildOptions.get(SwiftCommandLineOptions.class);
 
       return new SwiftConfiguration(options);

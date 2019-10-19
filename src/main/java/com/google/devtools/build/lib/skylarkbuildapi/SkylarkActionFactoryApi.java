@@ -21,11 +21,12 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkThread;
 
 /** Module providing functions to create actions. */
 @SkylarkModule(
@@ -72,14 +73,18 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
             positional = false,
             named = true,
             defaultValue = "None")
-      })
-  public FileApi declareFile(String filename, Object sibling) throws EvalException;
+      },
+      useLocation = true)
+  public FileApi declareFile(String filename, Object sibling, Location loc) throws EvalException;
 
   @SkylarkCallable(
       name = "declare_directory",
       doc =
-          "Declares that rule or aspect create a directory with the given name, in the "
-              + "current package. You must create an action that generates the directory.",
+          "Declares that the rule or aspect creates a directory with the given name, in the "
+              + "current package. You must create an action that generates the directory. "
+              + "The contents of the directory are not directly accessible from Starlark, "
+              + "but can be expanded in an action command with "
+              + "<a href=\"Args.html#add_all\"><code>Args.add_all()</code></a>.",
       parameters = {
         @Param(
             name = "filename",
@@ -98,6 +103,37 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
             defaultValue = "None")
       })
   public FileApi declareDirectory(String filename, Object sibling) throws EvalException;
+
+  @SkylarkCallable(
+      name = "declare_symlink",
+      doc =
+          "<p><b>Experimental</b>. This parameter is experimental and may change at any "
+              + "time. Please do not depend on it. It may be enabled on an experimental basis by "
+              + "setting <code>--experimental_allow_unresolved_symlinks</code></p> <p>Declares "
+              + "that the rule or aspect creates a symlink with the given name in the current "
+              + "package. You must create an action that generates this symlink. Bazel will never "
+              + "dereference this symlink and will transfer it verbatim to sandboxes or remote "
+              + "executors.",
+      parameters = {
+        @Param(
+            name = "filename",
+            type = String.class,
+            doc =
+                "If no 'sibling' provided, path of the new symlink, relative "
+                    + "to the current package. Otherwise a base name for a file "
+                    + "('sibling' defines a directory)."),
+        @Param(
+            name = "sibling",
+            doc = "A file that lives in the same directory as the newly declared symlink.",
+            type = FileApi.class,
+            noneable = true,
+            positional = false,
+            named = true,
+            defaultValue = "None")
+      },
+      useLocation = true)
+  public FileApi declareSymlink(String filename, Object sibling, Location location)
+      throws EvalException;
 
   @SkylarkCallable(
       name = "do_nothing",
@@ -122,41 +158,57 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
             positional = false,
             defaultValue = "[]",
             doc = "List of the input files of the action."),
-      })
-  public void doNothing(String mnemonic, Object inputs) throws EvalException;
+      },
+      useLocation = true)
+  public void doNothing(String mnemonic, Object inputs, Location location) throws EvalException;
 
   @SkylarkCallable(
-    name = "write",
-    doc =
-        "Creates a file write action. When the action is executed, it will write the given content "
-            + "to a file. This is used to generate files using information available in the "
-            + "analysis phase. If the file is large and with a lot of static content, consider "
-            + "using <a href=\"#expand_template\"><code>expand_template</code></a>.",
-    parameters = {
-      @Param(name = "output", type = FileApi.class, doc = "The output file.", named = true),
-      @Param(
-        name = "content",
-        type = Object.class,
-        allowedTypes = {
-          @ParamType(type = String.class),
-          @ParamType(type = CommandLineArgsApi.class)
-        },
-        doc =
-            "the contents of the file. "
-                + "May be a either a string or an "
-                + "<a href=\"actions.html#args\"><code>actions.args()</code></a> object.",
-        named = true
-      ),
-      @Param(
-        name = "is_executable",
-        type = Boolean.class,
-        defaultValue = "False",
-        doc = "Whether the output file should be executable.",
-        named = true
-      )
-    }
-  )
-  public void write(FileApi output, Object content, Boolean isExecutable) throws EvalException;
+      name = "symlink",
+      doc =
+          "<p><b>Experimental</b>. This parameter is experimental and may change at any "
+              + "time. Please do not depend on it. It may be enabled on an experimental basis by "
+              + "setting <code>--experimental_allow_unresolved_symlinks</code></p><p>"
+              + "Creates a symlink in the file system. If the output file is a regular file, the "
+              + "symlink must point to a file. If the output is an unresolved symlink, a dangling "
+              + "symlink is allowed.",
+      parameters = {
+        @Param(name = "output", type = FileApi.class, doc = "The output path.", named = true),
+        @Param(name = "target", type = String.class, doc = "The target.", named = true),
+      },
+      useLocation = true)
+  public void symlink(FileApi output, String targetPath, Location location) throws EvalException;
+
+  @SkylarkCallable(
+      name = "write",
+      doc =
+          "Creates a file write action. When the action is executed, it will write the given "
+              + "content to a file. This is used to generate files using information available in "
+              + "the analysis phase. If the file is large and with a lot of static content, "
+              + "consider using <a href=\"#expand_template\"><code>expand_template</code></a>.",
+      parameters = {
+        @Param(name = "output", type = FileApi.class, doc = "The output file.", named = true),
+        @Param(
+            name = "content",
+            type = Object.class,
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = CommandLineArgsApi.class)
+            },
+            doc =
+                "the contents of the file. "
+                    + "May be a either a string or an "
+                    + "<a href=\"actions.html#args\"><code>actions.args()</code></a> object.",
+            named = true),
+        @Param(
+            name = "is_executable",
+            type = Boolean.class,
+            defaultValue = "False",
+            doc = "Whether the output file should be executable.",
+            named = true)
+      },
+      useLocation = true)
+  public void write(FileApi output, Object content, Boolean isExecutable, Location location)
+      throws EvalException;
 
   @SkylarkCallable(
       name = "run",
@@ -184,11 +236,29 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
             positional = false,
             doc = "List or depset of the input files of the action."),
         @Param(
+            name = "unused_inputs_list",
+            type = Object.class,
+            allowedTypes = {
+              @ParamType(type = FileApi.class),
+            },
+            named = true,
+            noneable = true,
+            defaultValue = "None",
+            positional = false,
+            doc =
+                "File containing list of inputs unused by the action. "
+                    + ""
+                    + "<p>The content of this file (generally one of the outputs of the action) "
+                    + "corresponds to  the list of input files that were not used during the whole "
+                    + "action execution. Any change in those files must not affect in any way the "
+                    + "outputs of the action."),
+        @Param(
             name = "executable",
             type = Object.class,
             allowedTypes = {
               @ParamType(type = FileApi.class),
               @ParamType(type = String.class),
+              @ParamType(type = FilesToRunProviderApi.class),
             },
             named = true,
             positional = false,
@@ -199,7 +269,6 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
               @ParamType(type = SkylarkList.class),
               @ParamType(type = SkylarkNestedSet.class),
             },
-            generic1 = FileApi.class,
             defaultValue = "unbound",
             named = true,
             positional = false,
@@ -282,6 +351,7 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
   public void run(
       SkylarkList outputs,
       Object inputs,
+      Object unusedInputsList,
       Object executableUnchecked,
       Object toolsUnchecked,
       Object arguments,
@@ -299,7 +369,7 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
       doc =
           "Creates an action that runs a shell command. "
               + "<a href=\"https://github.com/bazelbuild/examples/tree/master/rules/"
-              + "shell_command/size.bzl\">See example of use</a>.",
+              + "shell_command/rules.bzl\">See example of use</a>.",
       parameters = {
         @Param(
             name = "outputs",
@@ -331,8 +401,8 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
             positional = false,
             doc =
                 "List or depset of any tools needed by the action. Tools are inputs with "
-                    + "additional "
-                    + "runfiles that are automatically made available to the action."),
+                    + "additional runfiles that are automatically made available to the action. "
+                    + "The list can contain Files or FilesToRunProvider instances."),
         @Param(
             name = "arguments",
             allowedTypes = {
@@ -391,7 +461,9 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
                     + "<p><b>(Deprecated)</b> If <code>command</code> is a sequence of strings, "
                     + "the first item is the executable to run and the remaining items are its "
                     + "arguments. If this form is used, the <code>arguments</code> parameter must "
-                    + "not be supplied."
+                    + "not be supplied. <i>Note that this form is deprecated and will soon "
+                    + "be removed. It is disabled with `--incompatible_run_shell_command_string`. "
+                    + "Use this flag to verify your code is compatible. </i>"
                     + ""
                     + "<p>Bazel uses the same shell to execute the command as it does for "
                     + "genrules."),
@@ -445,9 +517,10 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
                 "(Experimental) sets the input runfiles metadata; "
                     + "they are typically generated by resolve_command.")
       },
+      useStarlarkSemantics = true,
       useLocation = true)
   public void runShell(
-      SkylarkList outputs,
+      SkylarkList<?> outputs,
       Object inputs,
       Object toolsUnchecked,
       Object arguments,
@@ -458,7 +531,8 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
       Object envUnchecked,
       Object executionRequirementsUnchecked,
       Object inputManifestsUnchecked,
-      Location location)
+      Location location,
+      StarlarkSemantics semantics)
       throws EvalException;
 
   @SkylarkCallable(
@@ -500,18 +574,19 @@ public interface SkylarkActionFactoryApi extends SkylarkValue {
             named = true,
             positional = false,
             doc = "Whether the output file should be executable.")
-      })
+      },
+      useLocation = true)
   public void expandTemplate(
       FileApi template,
       FileApi output,
       SkylarkDict<?, ?> substitutionsUnchecked,
-      Boolean executable)
+      Boolean executable,
+      Location location)
       throws EvalException;
 
   @SkylarkCallable(
-    name = "args",
-    doc = "Returns an Args object that can be used to build memory-efficient command lines.",
-    useEnvironment = true
-  )
-  public CommandLineArgsApi args(Environment env);
+      name = "args",
+      doc = "Returns an Args object that can be used to build memory-efficient command lines.",
+      useStarlarkThread = true)
+  public CommandLineArgsApi args(StarlarkThread thread);
 }

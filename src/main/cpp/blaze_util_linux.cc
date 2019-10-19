@@ -17,6 +17,7 @@
 #include <linux/magic.h>
 #include <pwd.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>  // strerror
@@ -65,46 +66,32 @@ string GetOutputRoot() {
   return "/tmp";
 }
 
-void WarnFilesystemType(const string& output_base) {
+void WarnFilesystemType(const blaze_util::Path &output_base) {
   struct statfs buf = {};
-  if (statfs(output_base.c_str(), &buf) < 0) {
+  if (statfs(output_base.AsNativePath().c_str(), &buf) < 0) {
     BAZEL_LOG(WARNING) << "couldn't get file system type information for '"
-                       << output_base << "': " << strerror(errno);
+                       << output_base.AsPrintablePath()
+                       << "': " << strerror(errno);
     return;
   }
 
   if (buf.f_type == NFS_SUPER_MAGIC) {
-    BAZEL_LOG(WARNING) << "Output base '" << output_base
+    BAZEL_LOG(WARNING) << "Output base '" << output_base.AsPrintablePath()
                        << "' is on NFS. This may lead to surprising failures "
                           "and undetermined behavior.";
   }
 }
 
 string GetSelfPath() {
-  char buffer[PATH_MAX] = {};
-  ssize_t bytes = readlink("/proc/self/exe", buffer, sizeof(buffer));
-  if (bytes == sizeof(buffer)) {
-    // symlink contents truncated
-    bytes = -1;
-    errno = ENAMETOOLONG;
-  }
-  if (bytes == -1) {
-    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
-        << "error reading /proc/self/exe: " << GetLastErrorString();
-  }
-  buffer[bytes] = '\0';  // readlink does not NUL-terminate
-  return string(buffer);
+  // The file to which this symlink points could change contents or go missing
+  // concurrent with execution of the Bazel client, so we don't eagerly resolve
+  // it.
+  return "/proc/self/exe";
 }
 
 uint64_t GetMillisecondsMonotonic() {
   struct timespec ts = {};
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec * 1000LL + (ts.tv_nsec / 1000000LL);
-}
-
-uint64_t GetMillisecondsSinceProcessStart() {
-  struct timespec ts = {};
-  clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
   return ts.tv_sec * 1000LL + (ts.tv_nsec / 1000000LL);
 }
 
@@ -129,15 +116,15 @@ void SetScheduling(bool batch_cpu_scheduling, int io_nice_level) {
   }
 }
 
-string GetProcessCWD(int pid) {
+blaze_util::Path GetProcessCWD(int pid) {
   char server_cwd[PATH_MAX] = {};
   if (readlink(
           ("/proc/" + ToString(pid) + "/cwd").c_str(),
           server_cwd, sizeof(server_cwd)) < 0) {
-    return "";
+    return blaze_util::Path();
   }
 
-  return string(server_cwd);
+  return blaze_util::Path(string(server_cwd));
 }
 
 bool IsSharedLibrary(const string &filename) {
@@ -145,7 +132,7 @@ bool IsSharedLibrary(const string &filename) {
 }
 
 static string Which(const string &executable) {
-  string path(GetEnv("PATH"));
+  string path(GetPathEnv("PATH"));
   if (path.empty()) {
     return "";
   }
@@ -169,9 +156,14 @@ static string Which(const string &executable) {
 
 string GetSystemJavabase() {
   // if JAVA_HOME is defined, then use it as default.
-  string javahome = GetEnv("JAVA_HOME");
+  string javahome = GetPathEnv("JAVA_HOME");
   if (!javahome.empty()) {
-    return javahome;
+    string javac = blaze_util::JoinPath(javahome, "bin/javac");
+    if (access(javac.c_str(), X_OK) == 0) {
+      return javahome;
+    }
+    BAZEL_LOG(WARNING)
+        << "Ignoring JAVA_HOME, because it must point to a JDK, not a JRE.";
   }
 
   // which javac
@@ -213,8 +205,14 @@ static bool GetStartTime(const string& pid, string* start_time) {
   return true;
 }
 
-void WriteSystemSpecificProcessIdentifier(
-    const string& server_dir, pid_t server_pid) {
+int ConfigureDaemonProcess(posix_spawnattr_t* attrp,
+                           const StartupOptions &options) {
+  // No interesting platform-specific details to configure on this platform.
+  return 0;
+}
+
+void WriteSystemSpecificProcessIdentifier(const blaze_util::Path &server_dir,
+                                          pid_t server_pid) {
   string pid_string = ToString(server_pid);
 
   string start_time;
@@ -224,18 +222,18 @@ void WriteSystemSpecificProcessIdentifier(
         << GetLastErrorString();
   }
 
-  string start_time_file = blaze_util::JoinPath(server_dir, "server.starttime");
+  blaze_util::Path start_time_file = server_dir.GetRelative("server.starttime");
   if (!blaze_util::WriteFile(start_time, start_time_file)) {
     BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
-        << "Cannot write start time in server dir " << server_dir << ": "
-        << GetLastErrorString();
+        << "Cannot write start time in server dir "
+        << server_dir.AsPrintablePath() << ": " << GetLastErrorString();
   }
 }
 
 // On Linux we use a combination of PID and start time to identify the server
 // process. That is supposed to be unique unless one can start more processes
 // than there are PIDs available within a single jiffy.
-bool VerifyServerProcess(int pid, const string& output_base) {
+bool VerifyServerProcess(int pid, const blaze_util::Path &output_base) {
   string start_time;
   if (!GetStartTime(ToString(pid), &start_time)) {
     // Cannot read PID file from /proc . Process died meantime, all is good. No
@@ -245,8 +243,7 @@ bool VerifyServerProcess(int pid, const string& output_base) {
 
   string recorded_start_time;
   bool file_present = blaze_util::ReadFile(
-      blaze_util::JoinPath(output_base, "server/server.starttime"),
-      &recorded_start_time);
+      output_base.GetRelative("server/server.starttime"), &recorded_start_time);
 
   // If start time file got deleted, but PID file didn't, assume that this is an
   // old Blaze process that doesn't know how to write start time files yet.
@@ -254,8 +251,7 @@ bool VerifyServerProcess(int pid, const string& output_base) {
 }
 
 // Not supported.
-void ExcludePathFromBackup(const string &path) {
-}
+void ExcludePathFromBackup(const blaze_util::Path &path) {}
 
 int32_t GetExplicitSystemLimit(const int resource) {
   return -1;

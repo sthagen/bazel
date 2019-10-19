@@ -13,12 +13,18 @@
 // limitations under the License.
 package com.google.devtools.build.lib.query2;
 
+
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
@@ -27,16 +33,14 @@ import com.google.devtools.build.lib.collect.compacthashset.CompactHashSet;
 import com.google.devtools.build.lib.concurrent.MultisetSemaphore;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.packages.DependencyFilter;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.RuleTransitionFactory;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.PackageManager;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
-import com.google.devtools.build.lib.pkgcache.TargetPatternEvaluator;
+import com.google.devtools.build.lib.query2.common.AbstractBlazeQueryEnvironment;
 import com.google.devtools.build.lib.query2.engine.KeyExtractor;
 import com.google.devtools.build.lib.query2.engine.MinDepthUniquifier;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment;
@@ -50,6 +54,7 @@ import com.google.devtools.build.lib.query2.engine.QueryUtil.UniquifierImpl;
 import com.google.devtools.build.lib.query2.engine.ThreadSafeOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.engine.Uniquifier;
 import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
+import com.google.devtools.build.lib.skyframe.BlacklistedPackagePrefixesValue;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetValue;
 import com.google.devtools.build.lib.skyframe.GraphBackedRecursivePackageProvider;
@@ -60,12 +65,15 @@ import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -85,7 +93,7 @@ import javax.annotation.Nullable;
  * <p>Aspects are also not supported, but probably should be in some fashion.
  */
 public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQueryEnvironment<T> {
-  protected final BuildConfiguration defaultTargetConfiguration;
+  protected final TopLevelConfigurations topLevelConfigurations;
   protected final BuildConfiguration hostConfiguration;
   private final String parserPrefix;
   private final PathPackageLocator pkgPath;
@@ -94,7 +102,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
 
   private static final Function<SkyKey, ConfiguredTargetKey> SKYKEY_TO_CTKEY =
       skyKey -> (ConfiguredTargetKey) skyKey.argument();
-  private static final ImmutableList<TargetPatternKey> ALL_PATTERNS;
+  private static final ImmutableList<TargetPattern> ALL_PATTERNS;
 
   static {
     TargetPattern targetPattern;
@@ -103,10 +111,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
     } catch (TargetParsingException e) {
       throw new IllegalStateException(e);
     }
-    ALL_PATTERNS =
-        ImmutableList.of(
-            new TargetPatternKey(
-                targetPattern, FilteringPolicies.NO_FILTER, false, "", ImmutableSet.of()));
+    ALL_PATTERNS = ImmutableList.of(targetPattern);
   }
 
   protected RecursivePackageProviderBackedTargetPatternResolver resolver;
@@ -115,14 +120,14 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
       boolean keepGoing,
       ExtendedEventHandler eventHandler,
       Iterable<QueryFunction> extraFunctions,
-      BuildConfiguration defaultTargetConfiguration,
+      TopLevelConfigurations topLevelConfigurations,
       BuildConfiguration hostConfiguration,
       String parserPrefix,
       PathPackageLocator pkgPath,
       Supplier<WalkableGraph> walkableGraphSupplier,
       Set<Setting> settings) {
     super(keepGoing, true, Rule.ALL_LABELS, eventHandler, settings, extraFunctions);
-    this.defaultTargetConfiguration = defaultTargetConfiguration;
+    this.topLevelConfigurations = topLevelConfigurations;
     this.hostConfiguration = hostConfiguration;
     this.parserPrefix = parserPrefix;
     this.pkgPath = pkgPath;
@@ -132,10 +137,11 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   public abstract ImmutableList<NamedThreadSafeOutputFormatterCallback<T>>
       getDefaultOutputFormatters(
           TargetAccessor<T> accessor,
-          Reporter reporter,
+          ExtendedEventHandler eventHandler,
+          OutputStream outputStream,
           SkyframeExecutor skyframeExecutor,
           BuildConfiguration hostConfiguration,
-          @Nullable RuleTransitionFactory trimmingTransitionFactory,
+          @Nullable TransitionFactory<Rule> trimmingTransitionFactory,
           PackageManager packageManager);
 
   public abstract String getOutputFormat();
@@ -170,7 +176,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
         || settings.contains(Setting.TESTS_EXPRESSION_STRICT)) {
       settings =
           Sets.difference(
-              settings, ImmutableSet.of(Setting.NO_HOST_DEPS, Setting.NO_IMPLICIT_DEPS));
+              settings, ImmutableSet.of(Setting.ONLY_TARGET_DEPS, Setting.NO_IMPLICIT_DEPS));
       throw new QueryException(
           String.format(
               "The following filter(s) are not currently supported by configured query: %s",
@@ -216,8 +222,15 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   protected abstract T getNullConfiguredTarget(Label label) throws InterruptedException;
 
   @Nullable
-  protected ConfiguredTargetValue getConfiguredTargetValue(SkyKey key) throws InterruptedException {
+  public ConfiguredTargetValue getConfiguredTargetValue(SkyKey key) throws InterruptedException {
     return (ConfiguredTargetValue) walkableGraphSupplier.get().getValue(key);
+  }
+
+  public ImmutableSet<PathFragment> getBlacklistedPackagePrefixesPathFragments()
+      throws InterruptedException {
+    return ((BlacklistedPackagePrefixesValue)
+            walkableGraphSupplier.get().getValue(BlacklistedPackagePrefixesValue.key()))
+        .getPatterns();
   }
 
   @Nullable
@@ -226,14 +239,11 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   protected TargetPattern getPattern(String pattern) throws TargetParsingException {
     TargetPatternKey targetPatternKey =
         ((TargetPatternKey)
-            TargetPatternValue.key(
-                    pattern, TargetPatternEvaluator.DEFAULT_FILTERING_POLICY, parserPrefix)
-                .argument());
+            TargetPatternValue.key(pattern, FilteringPolicies.NO_FILTER, parserPrefix).argument());
     return targetPatternKey.getParsedPattern();
   }
 
-  ThreadSafeMutableSet<T> getFwdDeps(Iterable<T> targets)
-      throws InterruptedException {
+  public ThreadSafeMutableSet<T> getFwdDeps(Iterable<T> targets) throws InterruptedException {
     Map<SkyKey, T> targetsByKey = Maps.newHashMapWithExpectedSize(Iterables.size(targets));
     for (T target : targets) {
       targetsByKey.put(getSkyKey(target), target);
@@ -242,8 +252,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
         targetifyValues(graph.getDirectDeps(targetsByKey.keySet()));
     if (targetsByKey.size() != directDeps.size()) {
       Iterable<ConfiguredTargetKey> missingTargets =
-          Sets.difference(targetsByKey.keySet(), directDeps.keySet())
-              .stream()
+          Sets.difference(targetsByKey.keySet(), directDeps.keySet()).stream()
               .map(SKYKEY_TO_CTKEY)
               .collect(Collectors.toList());
       eventHandler.handle(Event.warn("Targets were missing from graph: " + missingTargets));
@@ -279,8 +288,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
         targetifyValues(graph.getReverseDeps(targetsByKey.keySet()));
     if (targetsByKey.size() != reverseDepsByKey.size()) {
       Iterable<ConfiguredTargetKey> missingTargets =
-          Sets.difference(targetsByKey.keySet(), reverseDepsByKey.keySet())
-              .stream()
+          Sets.difference(targetsByKey.keySet(), reverseDepsByKey.keySet()).stream()
               .map(SKYKEY_TO_CTKEY)
               .collect(Collectors.toList());
       eventHandler.handle(Event.warn("Targets were missing from graph: " + missingTargets));
@@ -304,7 +312,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
           result.add(parent);
         }
       }
-      result.addAll(getAllowedDeps((targetAndRdeps.getKey()), ruleDeps.build()));
+      result.addAll(getAllowedDeps(targetAndRdeps.getKey(), ruleDeps.build()));
     }
     return result;
   }
@@ -315,26 +323,30 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
    */
   protected Collection<T> getAllowedDeps(T target, Collection<T> deps) {
     // It's possible to query on a target that's configured in the host configuration. In those
-    // cases if --nohost_deps is turned on, we only allow reachable targets that are ALSO in the
+    // cases if --notool_deps is turned on, we only allow reachable targets that are ALSO in the
     // host config. This is somewhat counterintuitive and subject to change in the future but seems
     // like the best option right now.
-    if (settings.contains(Setting.NO_HOST_DEPS)) {
+    if (settings.contains(Setting.ONLY_TARGET_DEPS)) {
       BuildConfiguration currentConfig = getConfiguration(target);
-      if (currentConfig != null && currentConfig.isHostConfiguration()) {
+      if (currentConfig != null && currentConfig.isToolConfiguration()) {
         deps =
             deps.stream()
                 .filter(
                     dep ->
                         getConfiguration(dep) != null
-                            && getConfiguration(dep).isHostConfiguration())
+                            && getConfiguration(dep).isToolConfiguration())
                 .collect(Collectors.toList());
       } else {
         deps =
             deps.stream()
                 .filter(
                     dep ->
-                        getConfiguration(dep) != null
-                            && !getConfiguration(dep).isHostConfiguration())
+                        // We include source files, which have null configuration, even though
+                        // they can also appear on host-configured attributes like genrule#tools.
+                        // While this may not be strictly correct, it's better to overapproximate
+                        // than underapproximate the results.
+                        getConfiguration(dep) == null
+                            || !getConfiguration(dep).isToolConfiguration())
                 .collect(Collectors.toList());
       }
     }
@@ -356,17 +368,26 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
 
   protected abstract RuleConfiguredTarget getRuleConfiguredTarget(T target);
 
+  protected Collection<T> targetifyValues(Iterable<SkyKey> dependencies)
+      throws InterruptedException {
+    Collection<T> values = new ArrayList<>();
+    for (SkyKey key : dependencies) {
+      if (key.functionName().equals(SkyFunctions.CONFIGURED_TARGET)) {
+        values.add(getValueFromKey(key));
+      } else if (key.functionName().equals(SkyFunctions.TOOLCHAIN_RESOLUTION)) {
+        // Also fetch these dependencies.
+        Collection<T> toolchainDeps = targetifyValues(graph.getDirectDeps(key));
+        values.addAll(toolchainDeps);
+      }
+    }
+    return values;
+  }
+
   protected Map<SkyKey, Collection<T>> targetifyValues(
       Map<SkyKey, ? extends Iterable<SkyKey>> input) throws InterruptedException {
     Map<SkyKey, Collection<T>> result = new HashMap<>();
     for (Map.Entry<SkyKey, ? extends Iterable<SkyKey>> entry : input.entrySet()) {
-      Collection<T> value = new ArrayList<>();
-      for (SkyKey key : entry.getValue()) {
-        if (key.functionName().equals(SkyFunctions.CONFIGURED_TARGET)) {
-          value.add(getValueFromKey(key));
-        }
-      }
-      result.put(entry.getKey(), value);
+      result.put(entry.getKey(), targetifyValues(entry.getValue()));
     }
     return result;
   }
@@ -438,4 +459,61 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
 
   @Override
   public void close() {}
+
+  /** A wrapper class for the set of top-level configurations in a query. */
+  public static class TopLevelConfigurations {
+
+    /** A map of non-null configured top-level targets sorted by configuration checksum. */
+    private final ImmutableMap<Label, BuildConfiguration> nonNulls;
+    /**
+     * {@code nonNulls} may often have many duplicate values in its value set so we store a sorted
+     * set of all the non-null configurations here.
+     */
+    private final ImmutableSortedSet<BuildConfiguration> nonNullConfigs;
+    /** A list of null configured top-level targets. */
+    private final ImmutableList<Label> nulls;
+
+    public TopLevelConfigurations(
+        Collection<TargetAndConfiguration> topLevelTargetsAndConfigurations) {
+      ImmutableMap.Builder<Label, BuildConfiguration> nonNullsBuilder =
+          ImmutableMap.builderWithExpectedSize(topLevelTargetsAndConfigurations.size());
+      ImmutableList.Builder<Label> nullsBuilder = new ImmutableList.Builder<>();
+      for (TargetAndConfiguration targetAndConfiguration : topLevelTargetsAndConfigurations) {
+        if (targetAndConfiguration.getConfiguration() == null) {
+          nullsBuilder.add(targetAndConfiguration.getLabel());
+        } else {
+          nonNullsBuilder.put(
+              targetAndConfiguration.getLabel(), targetAndConfiguration.getConfiguration());
+        }
+      }
+      nonNulls = nonNullsBuilder.build();
+      nonNullConfigs =
+          ImmutableSortedSet.copyOf(
+              Comparator.comparing(BuildConfiguration::checksum), nonNulls.values());
+      nulls = nullsBuilder.build();
+    }
+
+    public boolean isTopLevelTarget(Label label) {
+      return nonNulls.containsKey(label) || nulls.contains(label);
+    }
+
+    // This method returns the configuration of a top-level target if it's not null-configured and
+    // otherwise returns null (signifying it is null configured).
+    @Nullable
+    public BuildConfiguration getConfigurationForTopLevelTarget(Label label) {
+      Preconditions.checkArgument(
+          isTopLevelTarget(label),
+          "Attempting to get top-level configuration for non-top-level target %s.",
+          label);
+      return nonNulls.get(label);
+    }
+
+    public Iterable<BuildConfiguration> getConfigurations() {
+      if (nulls.isEmpty()) {
+        return nonNullConfigs;
+      } else {
+        return Iterables.concat(nonNullConfigs, Collections.singletonList(null));
+      }
+    }
+  }
 }

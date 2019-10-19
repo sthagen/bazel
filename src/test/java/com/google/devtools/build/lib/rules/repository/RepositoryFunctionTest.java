@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
+import com.google.devtools.build.skyframe.SkyKey;
 import java.util.Map;
 import javax.annotation.Nullable;
 import org.junit.Test;
@@ -53,8 +54,13 @@ public class RepositoryFunctionTest extends BuildViewTestCase {
   static class TestingRepositoryFunction extends RepositoryFunction {
     @Nullable
     @Override
-    public RepositoryDirectoryValue.Builder fetch(Rule rule, Path outputDirectory,
-        BlazeDirectories directories, SkyFunction.Environment env, Map<String, String> markerData)
+    public RepositoryDirectoryValue.Builder fetch(
+        Rule rule,
+        Path outputDirectory,
+        BlazeDirectories directories,
+        SkyFunction.Environment env,
+        Map<String, String> markerData,
+        SkyKey key)
         throws SkyFunctionException, InterruptedException {
       return null;
     }
@@ -76,7 +82,9 @@ public class RepositoryFunctionTest extends BuildViewTestCase {
             "    name = 'z',",
             "    path = 'a/b/c',",
             ")");
-    assertThat(TestingRepositoryFunction.getTargetPath(rule, rootDirectory))
+    assertThat(
+            TestingRepositoryFunction.getTargetPath(
+                TestingRepositoryFunction.getPathAttr(rule), rootDirectory))
         .isEqualTo(rootDirectory.getRelative("a/b/c").asFragment());
   }
 
@@ -86,7 +94,9 @@ public class RepositoryFunctionTest extends BuildViewTestCase {
         "    name = 'w',",
         "    path = '/a/b/c',",
         ")");
-    assertThat(TestingRepositoryFunction.getTargetPath(rule, rootDirectory))
+    assertThat(
+            TestingRepositoryFunction.getTargetPath(
+                TestingRepositoryFunction.getPathAttr(rule), rootDirectory))
         .isEqualTo(PathFragment.create("/a/b/c"));
   }
 

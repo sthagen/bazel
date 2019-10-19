@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.packages;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
@@ -25,7 +24,6 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType.Selector;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Type;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -71,7 +69,6 @@ public class ConfiguredAttributeMapper extends AbstractAttributeMapper {
    * <p>If you don't know how to do this, you really want to use one of the "do-it-all"
    * constructors.
    */
-  @VisibleForTesting
   public static ConfiguredAttributeMapper of(
       Rule rule, ImmutableMap<Label, ConfigMatchingProvider> configConditions) {
     return new ConfiguredAttributeMapper(rule, configConditions);
@@ -174,7 +171,7 @@ public class ConfiguredAttributeMapper extends AbstractAttributeMapper {
 
     if (matchingConditions.size() > 1) {
       throw new EvalException(
-          rule.getAttributeLocation(attributeName),
+          rule.getLocation(),
           "Illegal ambiguous match on configurable attribute \""
               + attributeName
               + "\" in "
@@ -197,7 +194,7 @@ public class ConfiguredAttributeMapper extends AbstractAttributeMapper {
           noMatchMessage += " (would a default condition help?).\nConditions checked:\n "
               + Joiner.on("\n ").join(conditionLabels);
         }
-        throw new EvalException(rule.getAttributeLocation(attributeName), noMatchMessage);
+        throw new EvalException(rule.getLocation(), noMatchMessage);
       }
       matchingResult = selector.hasDefault()
           ? new ConfigKeyAndValue<>(Selector.DEFAULT_CONDITION_LABEL, selector.getDefault())

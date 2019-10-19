@@ -91,8 +91,8 @@ directory structure:
 
 Bazel will expect `some_lib.h` to be included as
 `legacy/some_lib/include/some_lib.h`, but suppose `some_lib.cc` includes
-`"include/some_lib.h"`.  To make that include path valid,
-`legacy/some_lib/BUILD` will need to specify that the `some_lib/`
+`"some_lib.h"`.  To make that include path valid,
+`legacy/some_lib/BUILD` will need to specify that the `some_lib/include`
 directory is an include directory:
 
 ```python
@@ -110,20 +110,22 @@ must otherwise be included with a `/` prefix.
 ## Including external libraries
 
 Suppose you are using [Google Test](https://github.com/google/googletest). You
-can use one of the `new_` repository functions in the `WORKSPACE` file to
+can use one of the repository functions in the `WORKSPACE` file to
 download Google Test and make it available in your repository:
 
 ```python
-new_http_archive(
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
     name = "gtest",
     url = "https://github.com/google/googletest/archive/release-1.7.0.zip",
     sha256 = "b58cb7547a28b2c718d1e38aee18a3659c9e3ff52440297e965f5edffe34b6d0",
-    build_file = "gtest.BUILD",
+    build_file = "@//:gtest.BUILD",
 )
 ```
 
-**NOTE:** If the destination already contains a `BUILD` file, you can use one of
-the `non-new_` functions.
+**NOTE:** If the destination already contains a `BUILD` file, you can leave
+out the `build_file` attribute.
 
 Then create `gtest.BUILD`, a `BUILD` file used to compile Google Test.
 Google Test has several "special" requirements that make its `cc_library` rule
@@ -161,15 +163,17 @@ cc_library(
 ```
 
 This is somewhat messy: everything is prefixed with `googletest-release-1.7.0`
-as a byproduct of the archive's structure. You can make `new_http_archive` strip
+as a byproduct of the archive's structure. You can make `http_archive` strip
 this prefix by adding the `strip_prefix` attribute:
 
 ```python
-new_http_archive(
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
     name = "gtest",
     url = "https://github.com/google/googletest/archive/release-1.7.0.zip",
     sha256 = "b58cb7547a28b2c718d1e38aee18a3659c9e3ff52440297e965f5edffe34b6d0",
-    build_file = "gtest.BUILD",
+    build_file = "@//:gtest.BUILD",
     strip_prefix = "googletest-release-1.7.0",
 )
 ```
@@ -217,13 +221,13 @@ cc_test(
     copts = ["-Iexternal/gtest/include"],
     deps = [
         "@gtest//:main",
-        "//lib:hello-greet",
+        "//main:hello-greet",
     ],
 )
 ```
 
 Note that in order to make `hello-greet` visible to `hello-test`, we have to add
-`"//test:__pkg__",` to the `visibility` attribute in `./lib/BUILD`.
+`"//test:__pkg__",` to the `visibility` attribute in `./main/BUILD`.
 
 Now you can use `bazel test` to run the test.
 
@@ -258,4 +262,3 @@ cc_library(
 ```
 
 This way, other C++ targets in your workspace can depend on this rule.
-

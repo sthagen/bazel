@@ -13,6 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildeventservice.client;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.devtools.build.v1.PublishBuildEventGrpc.PublishBuildEventBlockingStub;
+import com.google.devtools.build.v1.PublishBuildEventGrpc.PublishBuildEventStub;
 import io.grpc.CallCredentials;
 import io.grpc.Channel;
 import javax.annotation.Nullable;
@@ -27,8 +30,14 @@ public class UnmanagedBuildEventServiceGrpcClient extends BuildEventServiceGrpcC
     super(channel, callCredentials);
   }
 
+  @VisibleForTesting
+  public UnmanagedBuildEventServiceGrpcClient(
+      PublishBuildEventStub besAsync, PublishBuildEventBlockingStub besBlocking) {
+    super(besAsync, besBlocking);
+  }
+
   @Override
-  public void shutdown() throws InterruptedException {
+  public void shutdown() {
     // Nothing to do. We handle an unmanaged channel so it's not our responsibility to shut it down.
   }
 }

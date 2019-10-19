@@ -26,11 +26,16 @@ class BazelStartupOptions : public StartupOptions {
  public:
   explicit BazelStartupOptions(const WorkspaceLayout *workspace_layout);
 
+  void AddExtraOptions(std::vector<std::string> *result) const override;
+
   blaze_exit_code::ExitCode ProcessArgExtra(
       const char *arg, const char *next_arg, const std::string &rcfile,
       const char **value, bool *is_processed, std::string *error) override;
 
   void MaybeLogStartupOptionWarnings() const override;
+
+ protected:
+  std::string GetRcFileBaseName() const override { return ".bazelrc"; }
 
  private:
   std::string user_bazelrc_;

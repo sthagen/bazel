@@ -18,6 +18,8 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.blackbox.bazel.PythonToolsSetup;
+import com.google.devtools.build.lib.blackbox.framework.BlackBoxTestEnvironment;
+import com.google.devtools.build.lib.blackbox.framework.BuilderRunner;
 import com.google.devtools.build.lib.blackbox.framework.ProcessResult;
 import com.google.devtools.build.lib.blackbox.framework.ToolsSetup;
 import com.google.devtools.build.lib.blackbox.junit.AbstractBlackBoxTest;
@@ -39,16 +41,18 @@ public class PythonBlackBoxTest extends AbstractBlackBoxTest {
   public void testCompileAndRunHelloWorldStub() throws Exception {
     writeHelloWorldFiles();
 
-    context().bazel().build("//python/hello:hello");
+    BuilderRunner bazel = context().bazel();
+    bazel.build("//python/hello:hello");
 
-    ProcessResult result = context().runBuiltBinary("python/hello/hello", -1);
+    ProcessResult result = context().runBuiltBinary(bazel, "python/hello/hello", -1);
     assertThat(result.outString()).isEqualTo(HELLO);
 
-    Path binaryPath = context().resolveBinPath("python/hello/hello.par");
+    Path binaryPath = context().resolveBinPath(bazel, "python/hello/hello.par");
     assertThat(Files.exists(binaryPath)).isFalse();
   }
 
   private void writeHelloWorldFiles() throws IOException {
+    context().write("WORKSPACE", BlackBoxTestEnvironment.getWorkspaceWithDefaultRepos());
     context().write("python/hello/BUILD", "py_binary(name = 'hello', srcs = ['hello.py'])");
     context().write("python/hello/hello.py", String.format("print ('%s')", HELLO));
   }

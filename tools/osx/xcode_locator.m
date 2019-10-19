@@ -116,13 +116,14 @@ static NSString *ExpandVersion(NSString *version) {
 // and returns nil.
 static NSMutableDictionary<NSString *, XcodeVersionEntry *> *FindXcodes()
   __attribute((ns_returns_retained)) {
-  CFStringRef bundleID = CFSTR("com.apple.dt.Xcode");
+  CFStringRef cfBundleID = CFSTR("com.apple.dt.Xcode");
+  NSString *bundleID = (__bridge NSString *)cfBundleID;
 
   NSMutableDictionary<NSString *, XcodeVersionEntry *> *dict =
       [[NSMutableDictionary alloc] init];
   CFErrorRef cfError;
   NSArray *array = CFBridgingRelease(LSCopyApplicationURLsForBundleIdentifier(
-      bundleID, &cfError));
+      cfBundleID, &cfError));
   if (array == nil) {
     NSError *nsError = (__bridge NSError *)cfError;
     fprintf(stderr, "error: %s\n", nsError.description.UTF8String);
@@ -150,6 +151,19 @@ static NSMutableDictionary<NSString *, XcodeVersionEntry *> *FindXcodes()
       continue;
     }
 
+    // LSCopyApplicationURLsForBundleIdentifier seems to sometimes return
+    // invalid bundles (e.g. an arbitrary folder), which we should ignore (but
+    // don't treat as an error).
+    //
+    // To work around this issue, we double check to make sure the NSBundle's
+    // bundleIdentifier is that of Xcode's, as invalid bundles won't match.
+    if (![bundle.bundleIdentifier isEqualToString:bundleID]) {
+      NSLog(@"WARNING: Ignoring bundle %@ due to bundleID mismatch "
+            @"(got \"%@\" but expected \"%@\"); info: %@",
+            url, bundle.bundleIdentifier, bundleID, bundle.infoDictionary);
+      continue;
+    }
+
     NSString *versionKey = @"CFBundleShortVersionString";
     NSString *version = [bundle.infoDictionary objectForKey:versionKey];
     if (version == nil) {
@@ -161,6 +175,14 @@ static NSMutableDictionary<NSString *, XcodeVersionEntry *> *FindXcodes()
     NSString *expandedVersion = ExpandVersion(version);
     NSLog(@"Version strings for %@: short=%@, expanded=%@",
           url, version, expandedVersion);
+
+    NSURL *versionPlistUrl = [url URLByAppendingPathComponent:@"Contents/version.plist"];
+    NSDictionary *versionPlistContents =
+        [[NSDictionary alloc] initWithContentsOfURL:versionPlistUrl];
+    NSString *productVersion = [versionPlistContents objectForKey:@"ProductBuildVersion"];
+    if (productVersion) {
+      expandedVersion = [expandedVersion stringByAppendingFormat:@".%@", productVersion];
+    }
 
     NSURL *developerDir =
         [url URLByAppendingPathComponent:@"Contents/Developer"];
@@ -177,8 +199,6 @@ static NSMutableDictionary<NSString *, XcodeVersionEntry *> *FindXcodes()
 static void DumpAsVersionsOnly(
   FILE *output,
   NSMutableDictionary<NSString *, XcodeVersionEntry *> *dict) {
-  NSSet<XcodeVersionEntry *> *distinctValues =
-      [[NSSet alloc] initWithArray:dict.allValues];
   NSMutableDictionary<NSString *, NSMutableSet <NSString *> *> *aliasDict =
       [[NSMutableDictionary alloc] init];
   [dict enumerateKeysAndObjectsUsingBlock:^(NSString *aliasVersion,
@@ -247,12 +267,6 @@ int main(int argc, const char * argv[]) {
         versionArg = @"";
       } else {
         versionArg = firstArg;
-        NSCharacterSet *versSet =
-            [NSCharacterSet characterSetWithCharactersInString:@"0123456789."];
-        if ([versionArg rangeOfCharacterFromSet:versSet.invertedSet].length
-            != 0) {
-          versionArg = nil;
-        }
       }
     }
     if (versionArg == nil) {

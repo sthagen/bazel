@@ -39,9 +39,10 @@ import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.syntax.Type;
-import com.google.devtools.build.lib.syntax.Type.LabelClass;
-import com.google.devtools.build.lib.syntax.Type.LabelVisitor;
+import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.packages.Type.LabelClass;
+import com.google.devtools.build.lib.packages.Type.LabelVisitor;
+import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -851,7 +852,7 @@ public class ConstraintSemantics {
         if (!DependencyFilter.NO_IMPLICIT_DEPS.apply(ruleContext.getRule(), attrDef)
             // We can't identify host deps by calling BuildConfiguration.isHostConfiguration()
             // because --nodistinct_host_configuration subverts that call.
-            || attrDef.getConfigurationTransition().isHostTransition()) {
+            || attrDef.getTransitionFactory().isHost()) {
           continue;
         }
       }
@@ -870,7 +871,15 @@ public class ConstraintSemantics {
         // checking, but for now just pass them by.
         if (dep.getProvider(SupportedEnvironmentsProvider.class) != null) {
           depsToCheck.add(dep);
-          if (!selectOnlyDepsForThisAttribute.contains(dep.getLabel())) {
+          // For normal configured targets the target's label is the same label appearing in the
+          // select(). But for AliasConfiguredTargets the label in the select() refers to the alias,
+          // while dep.getLabel() refers to the target the alias points to. So add this quick check
+          // to make sure we're comparing the same labels.
+          Label depLabelInSelect =
+              (dep instanceof AliasConfiguredTarget)
+                  ? ((AliasConfiguredTarget) dep).getOriginalLabel()
+                  : dep.getLabel();
+          if (!selectOnlyDepsForThisAttribute.contains(depLabelInSelect)) {
             depsOutsideSelects.add(dep);
           }
         }
@@ -923,20 +932,9 @@ public class ConstraintSemantics {
    */
   private static void addSelectValuesToSet(BuildType.Selector<?> select, final Set<Label> set) {
     Type<?> type = select.getOriginalType();
-    LabelVisitor<?> visitor = new LabelVisitor<Object>() {
-      @Override
-      public void visit(Label label, Object dummy) {
-        set.add(label);
-      }
-    };
+    LabelVisitor<?> visitor = (label, dummy) -> set.add(label);
     for (Object value : select.getEntries().values()) {
-      try {
-        type.visitLabels(visitor, value, /*context=*/ null);
-      } catch (InterruptedException ex) {
-        // Because the LabelVisitor does not throw InterruptedException, it should not be thrown
-        // by visitLabels here.
-        throw new AssertionError(ex);
-      }
+      type.visitLabels(visitor, value, /*context=*/ null);
     }
   }
 }

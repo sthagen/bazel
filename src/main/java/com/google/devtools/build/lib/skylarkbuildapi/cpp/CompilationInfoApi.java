@@ -17,8 +17,6 @@ package com.google.devtools.build.lib.skylarkbuildapi.cpp;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
-import java.util.Map;
 
 /**
  * Interface for a helper class containing CC compilation providers.
@@ -30,12 +28,9 @@ import java.util.Map;
     doc = "Helper class containing CC compilation providers."
 )
 public interface CompilationInfoApi {
-  @SkylarkCallable(name = "cc_output_groups", documented = false)
-  public Map<String, SkylarkNestedSet> getSkylarkOutputGroups();
+  @SkylarkCallable(name = "cc_compilation_outputs", structField = true, documented = false)
+  CcCompilationOutputsApi getCcCompilationOutputs();
 
-  @SkylarkCallable(name = "cc_compilation_outputs", documented = false)
-  public CcCompilationOutputsApi getCcCompilationOutputs();
-
-  @SkylarkCallable(name = "cc_compilation_info", documented = false)
-  public CcCompilationInfoApi getCcCompilationInfo();
+  @SkylarkCallable(name = "compilation_context", structField = true, documented = false)
+  CcCompilationContextApi getCcCompilationContext();
 }

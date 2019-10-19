@@ -26,14 +26,15 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.devtools.build.lib.cmdline.LabelValidator.BadLabelException;
 import com.google.devtools.build.lib.cmdline.LabelValidator.PackageAndTarget;
-import com.google.devtools.build.lib.util.BatchCallback;
+import com.google.devtools.build.lib.concurrent.BatchCallback;
+import com.google.devtools.build.lib.concurrent.ThreadSafeBatchCallback;
 import com.google.devtools.build.lib.util.StringUtilities;
-import com.google.devtools.build.lib.util.ThreadSafeBatchCallback;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Pattern;
 import javax.annotation.concurrent.Immutable;
@@ -474,9 +475,7 @@ public abstract class TargetPattern implements Serializable {
       }
 
       callback.process(
-          resolver
-              .getTargetsInPackage(getOriginalPattern(), packageIdentifier, rulesOnly)
-              .getTargets());
+          resolver.getTargetsInPackage(getOriginalPattern(), packageIdentifier, rulesOnly));
     }
 
     @Override
@@ -517,10 +516,10 @@ public abstract class TargetPattern implements Serializable {
 
     /**
      * There's a potential ambiguity if '//foo/bar:all' refers to an actual target. In this case, we
-     * use the the target but print a warning.
+     * use the target but print a warning.
      *
      * @return the Target corresponding to the given pattern, if the pattern is absolute and there
-     *         is such a target. Otherwise, return null.
+     *     is such a target. Otherwise, return null.
      */
     private <T> ResolvedTargets<T> getWildcardConflict(TargetPatternResolver<T> resolver)
         throws InterruptedException {
@@ -642,6 +641,36 @@ public abstract class TargetPattern implements Serializable {
     public int hashCode() {
       return Objects.hash(getType(), getOriginalPattern(), directory, rulesOnly);
     }
+  }
+
+  /**
+   * Apply a renaming to the repository part of a pattern string, returning the renamed pattern
+   * string. This function only looks at the repository part of the pattern string, not the rest; so
+   * any syntactic errors will not be handled here, but simply remain. Similarly, if the repository
+   * part of the pattern is not syntactically valid, the renaming simply does not match and the
+   * string is returned unchanged.
+   */
+  public static String renameRepository(
+      String pattern, Map<RepositoryName, RepositoryName> renaming) {
+    if (!pattern.startsWith("@")) {
+      return pattern;
+    }
+    int pkgStart = pattern.indexOf("//");
+    if (pkgStart < 0) {
+      return pattern;
+    }
+    RepositoryName repository;
+    try {
+      repository = RepositoryName.create(pattern.substring(0, pkgStart));
+    } catch (LabelSyntaxException e) {
+      return pattern;
+    }
+    RepositoryName newRepository = renaming.get(repository);
+    if (newRepository == null) {
+      // No renaming required
+      return pattern;
+    }
+    return newRepository.getName() + pattern.substring(pkgStart);
   }
 
   @Immutable
@@ -822,14 +851,14 @@ public abstract class TargetPattern implements Serializable {
         String fullLabel = repository.getName() + "//" + pattern;
         try {
           PackageAndTarget packageAndTarget = LabelValidator.validateAbsoluteLabel(fullLabel);
-          packageIdentifier = PackageIdentifier.create(repository,
-              PathFragment.create(packageAndTarget.getPackageName()));
+          packageIdentifier =
+              PackageIdentifier.create(
+                  repository, PathFragment.create(packageAndTarget.getPackageName()));
         } catch (BadLabelException e) {
           String error = "invalid target format '" + originalPattern + "': " + e.getMessage();
           throw new TargetParsingException(error);
         }
-        return new SingleTarget(
-            fullLabel, packageIdentifier, originalPattern, relativeDirectory);
+        return new SingleTarget(fullLabel, packageIdentifier, originalPattern, relativeDirectory);
       }
 
       // This is a stripped-down version of interpretPathAsTarget that does no I/O.  We have a basic

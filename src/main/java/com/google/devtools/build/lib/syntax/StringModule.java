@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.syntax;
 
+import com.google.common.base.Ascii;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -25,9 +26,9 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
-import com.google.devtools.build.lib.syntax.Type.ConversionException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -71,8 +72,8 @@ public final class StringModule {
 
   // Emulate Python substring function
   // It converts out of range indices, and never fails
-  private static String pythonSubstring(String str, int start, Object end, String msg)
-      throws ConversionException {
+  private static String pythonSubstring(String str, int start, Object end, String what)
+      throws EvalException {
     if (start == 0 && EvalUtils.isNullOrNone(end)) {
       return str;
     }
@@ -80,8 +81,11 @@ public final class StringModule {
     int stop;
     if (EvalUtils.isNullOrNone(end)) {
       stop = str.length();
+    } else if (end instanceof Integer) {
+      stop = EvalUtils.clampRangeEndpoint((Integer) end, str.length());
     } else {
-      stop = EvalUtils.clampRangeEndpoint(Type.INTEGER.convert(end, msg), str.length());
+      throw new EvalException(
+          null, "expected int for " + what + ", got " + EvalUtils.getDataTypeName(end));
     }
     if (start >= stop) {
       return "";
@@ -98,11 +102,31 @@ public final class StringModule {
               + "</pre>",
       parameters = {
         @Param(name = "self", type = String.class),
-        @Param(name = "elements", legacyNamed = true, type = SkylarkList.class,
+        @Param(
+            name = "elements",
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
+            type = Object.class,
             doc = "The objects to join.")
-      })
-  public String join(String self, SkylarkList<?> elements) throws ConversionException {
-    return Joiner.on(self).join(elements);
+      },
+      useLocation = true,
+      useStarlarkThread = true)
+  public String join(String self, Object elements, Location loc, StarlarkThread thread)
+      throws EvalException {
+    Collection<?> items = EvalUtils.toCollection(elements, loc, thread);
+    if (thread.getSemantics().incompatibleStringJoinRequiresStrings()) {
+      for (Object item : items) {
+        if (!(item instanceof String)) {
+          throw new EvalException(
+              loc,
+              "sequence element must be a string (got '"
+                  + EvalUtils.getDataTypeName(item)
+                  + "'). See https://github.com/bazelbuild/bazel/issues/7802 for information about "
+                  + "--incompatible_string_join_requires_strings.");
+        }
+      }
+    }
+    return Joiner.on(self).join(items);
   }
 
   @SkylarkCallable(
@@ -110,7 +134,7 @@ public final class StringModule {
       doc = "Returns the lower case version of this string.",
       parameters = {@Param(name = "self", type = String.class)})
   public String lower(String self) {
-    return self.toLowerCase();
+    return Ascii.toLowerCase(self);
   }
 
   @SkylarkCallable(
@@ -118,7 +142,7 @@ public final class StringModule {
       doc = "Returns the upper case version of this string.",
       parameters = {@Param(name = "self", type = String.class)})
   public String upper(String self) {
-    return self.toUpperCase();
+    return Ascii.toUpperCase(self);
   }
 
   /**
@@ -161,7 +185,8 @@ public final class StringModule {
       name = "lstrip",
       doc =
           "Returns a copy of the string where leading characters that appear in "
-              + "<code>chars</code> are removed."
+              + "<code>chars</code> are removed. Note that <code>chars</code> "
+              + "is not a prefix: all combinations of its value are removed:"
               + "<pre class=\"language-python\">"
               + "\"abcba\".lstrip(\"ba\") == \"cba\""
               + "</pre>",
@@ -170,6 +195,7 @@ public final class StringModule {
         @Param(
             name = "chars",
             type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             doc = "The characters to remove, or all whitespace if None.",
@@ -184,7 +210,8 @@ public final class StringModule {
       name = "rstrip",
       doc =
           "Returns a copy of the string where trailing characters that appear in "
-              + "<code>chars</code> are removed."
+              + "<code>chars</code> are removed. Note that <code>chars</code> "
+              + "is not a suffix: all combinations of its value are removed:"
               + "<pre class=\"language-python\">"
               + "\"abcbaa\".rstrip(\"ab\") == \"abc\""
               + "</pre>",
@@ -193,6 +220,7 @@ public final class StringModule {
         @Param(
             name = "chars",
             type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             doc = "The characters to remove, or all whitespace if None.",
@@ -207,7 +235,9 @@ public final class StringModule {
       name = "strip",
       doc =
           "Returns a copy of the string where leading or trailing characters that appear in "
-              + "<code>chars</code> are removed."
+              + "<code>chars</code> are removed. Note that <code>chars</code> "
+              + "is neither a prefix nor a suffix: all combinations of its value "
+              + "are removed:"
               + "<pre class=\"language-python\">"
               + "\"aabcbcbaa\".strip(\"ab\") == \"cbc\""
               + "</pre>",
@@ -216,6 +246,7 @@ public final class StringModule {
         @Param(
             name = "chars",
             type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             doc = "The characters to remove, or all whitespace if None.",
@@ -234,35 +265,53 @@ public final class StringModule {
               + "restricting the number of replacements to <code>maxsplit</code>.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "old", legacyNamed = true, type = String.class,
+        @Param(
+            name = "old",
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
+            type = String.class,
             doc = "The string to be replaced."),
-        @Param(name = "new", legacyNamed = true,
-            type = String.class, doc = "The string to replace with."),
+        @Param(
+            name = "new",
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
+            type = String.class,
+            doc = "The string to replace with."),
         @Param(
             name = "maxsplit",
             type = Integer.class,
             noneable = true,
             defaultValue = "None",
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             doc = "The maximum number of replacements.")
-      },
-      useLocation = true)
-  public String replace(
-      String self, String oldString, String newString, Object maxSplitO, Location loc)
+      })
+  public String replace(String self, String oldString, String newString, Object maxSplitO)
       throws EvalException {
-    StringBuffer sb = new StringBuffer();
-    Integer maxSplit =
-        Type.INTEGER.convertOptional(
-            maxSplitO, "'maxsplit' argument of 'replace'", /*label*/ null, Integer.MAX_VALUE);
-    try {
-      Matcher m = Pattern.compile(oldString, Pattern.LITERAL).matcher(self);
-      for (int i = 0; i < maxSplit && m.find(); i++) {
-        m.appendReplacement(sb, Matcher.quoteReplacement(newString));
-      }
-      m.appendTail(sb);
-    } catch (IllegalStateException e) {
-      throw new EvalException(loc, e.getMessage() + " in call to replace");
+    int maxSplit = Integer.MAX_VALUE;
+    if (maxSplitO != Runtime.NONE) {
+      maxSplit = Math.max(0, (Integer) maxSplitO);
     }
+    StringBuilder sb = new StringBuilder();
+    int start = 0;
+    for (int i = 0; i < maxSplit; i++) {
+      if (oldString.isEmpty()) {
+        sb.append(newString);
+        if (start < self.length()) {
+          sb.append(self.charAt(start++));
+        } else {
+          break;
+        }
+      } else {
+        int end = self.indexOf(oldString, start);
+        if (end < 0) {
+          break;
+        }
+        sb.append(self, start, end).append(newString);
+        start = end + oldString.length();
+      }
+    }
+    sb.append(self, start, self.length());
     return sb.toString();
   }
 
@@ -273,27 +322,45 @@ public final class StringModule {
               + "separator, optionally limiting the number of splits to <code>maxsplit</code>.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sep", legacyNamed = true, type = String.class,
+        @Param(
+            name = "sep",
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
+            type = String.class,
             doc = "The string to split on."),
         @Param(
             name = "maxsplit",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "The maximum number of splits.")
       },
-      useEnvironment = true,
+      useStarlarkThread = true,
       useLocation = true)
   public MutableList<String> split(
-      String self, String sep, Object maxSplitO, Location loc, Environment env)
+      String self, String sep, Object maxSplitO, Location loc, StarlarkThread thread)
       throws EvalException {
-    int maxSplit =
-        Type.INTEGER.convertOptional(maxSplitO, "'split' argument of 'split'", /*label*/ null, -2);
-    // + 1 because the last result is the remainder. The default is -2 so that after +1,
-    // it becomes -1.
-    String[] ss = Pattern.compile(sep, Pattern.LITERAL).split(self, maxSplit + 1);
-    return MutableList.of(env, ss);
+    if (sep.isEmpty()) {
+      throw new EvalException(loc, "Empty separator");
+    }
+    int maxSplit = Integer.MAX_VALUE;
+    if (maxSplitO != Runtime.NONE) {
+      maxSplit = (Integer) maxSplitO;
+    }
+    ArrayList<String> res = new ArrayList<>();
+    int start = 0;
+    while (true) {
+      int end = self.indexOf(sep, start);
+      if (end < 0 || maxSplit-- == 0) {
+        res.add(self.substring(start));
+        break;
+      }
+      res.add(self.substring(start, end));
+      start = end + sep.length();
+    }
+    return MutableList.wrapUnsafe(thread, res);
   }
 
   @SkylarkCallable(
@@ -304,73 +371,46 @@ public final class StringModule {
               + "Except for splitting from the right, this method behaves like split().",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sep", legacyNamed = true, type = String.class,
+        @Param(
+            name = "sep",
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
+            type = String.class,
             doc = "The string to split on."),
         @Param(
             name = "maxsplit",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "The maximum number of splits.")
       },
-      useEnvironment = true,
+      useStarlarkThread = true,
       useLocation = true)
   public MutableList<String> rsplit(
-      String self, String sep, Object maxSplitO, Location loc, Environment env)
+      String self, String sep, Object maxSplitO, Location loc, StarlarkThread thread)
       throws EvalException {
-    int maxSplit = Type.INTEGER.convertOptional(maxSplitO, "'split' argument of 'split'", null, -1);
-    try {
-      return stringRSplit(self, sep, maxSplit, env);
-    } catch (IllegalArgumentException ex) {
-      throw new EvalException(loc, ex);
+    if (sep.isEmpty()) {
+      throw new EvalException(loc, "Empty separator");
     }
-  }
-
-  /**
-   * Splits the given string into a list of words, using {@code separator} as a delimiter.
-   *
-   * <p>At most {@code maxSplits} will be performed, going from right to left.
-   *
-   * @param input The input string.
-   * @param separator The separator string.
-   * @param maxSplits The maximum number of splits. Negative values mean unlimited splits.
-   * @return A list of words
-   * @throws IllegalArgumentException
-   */
-  private static MutableList<String> stringRSplit(
-      String input, String separator, int maxSplits, Environment env) {
-    if (separator.isEmpty()) {
-      throw new IllegalArgumentException("Empty separator");
+    int maxSplit = Integer.MAX_VALUE;
+    if (maxSplitO != Runtime.NONE) {
+      maxSplit = (Integer) maxSplitO;
     }
-
-    if (maxSplits <= 0) {
-      maxSplits = Integer.MAX_VALUE;
+    ArrayList<String> res = new ArrayList<>();
+    int end = self.length();
+    while (true) {
+      int start = self.lastIndexOf(sep, end - 1);
+      if (start < 0 || maxSplit-- == 0) {
+        res.add(self.substring(0, end));
+        break;
+      }
+      res.add(self.substring(start + sep.length(), end));
+      end = start;
     }
-
-    ArrayDeque<String> result = new ArrayDeque<>();
-    String[] parts = input.split(Pattern.quote(separator), -1);
-    int sepLen = separator.length();
-    int remainingLength = input.length();
-    int splitsSoFar = 0;
-
-    // Copies parts from the array into the final list, starting at the end (because
-    // it's rsplit), as long as fewer than maxSplits splits are performed. The
-    // last spot in the list is reserved for the remaining string, whose length
-    // has to be tracked throughout the loop.
-    for (int pos = parts.length - 1; (pos >= 0) && (splitsSoFar < maxSplits); --pos) {
-      String current = parts[pos];
-      result.addFirst(current);
-
-      ++splitsSoFar;
-      remainingLength -= sepLen + current.length();
-    }
-
-    if (splitsSoFar == maxSplits && remainingLength >= 0)   {
-      result.addFirst(input.substring(0, remainingLength));
-    }
-
-    return MutableList.copyOf(env, result);
+    Collections.reverse(res);
+    return MutableList.wrapUnsafe(thread, res);
   }
 
   @SkylarkCallable(
@@ -383,16 +423,29 @@ public final class StringModule {
         @Param(name = "self", type = String.class),
         @Param(
             name = "sep",
-            type = String.class,
+            type = Object.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
-            defaultValue = "\" \"",
-            doc = "The string to split on, default is space (\" \").")
+            defaultValue = "unbound",
+            doc = "The string to split on.")
       },
-      useEnvironment = true,
+      useStarlarkThread = true,
       useLocation = true)
-  public Tuple<String> partition(String self, String sep, Location loc, Environment env)
+  public Tuple<String> partition(String self, Object sep, Location loc, StarlarkThread thread)
       throws EvalException {
-    return partitionWrapper(self, sep, true, loc);
+    if (sep == Runtime.UNBOUND) {
+        throw new EvalException(
+            loc,
+            "parameter 'sep' has no default value, "
+                + "for call to method partition(sep) of 'string'");
+    } else if (!(sep instanceof String)) {
+      throw new EvalException(
+          loc,
+          "expected value of type 'string' for parameter"
+              + " 'sep', for call to method partition(sep = unbound) of 'string'");
+    }
+
+    return partitionWrapper(self, (String) sep, true, loc);
   }
 
   @SkylarkCallable(
@@ -406,15 +459,27 @@ public final class StringModule {
         @Param(
             name = "sep",
             type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
-            defaultValue = "\" \"",
-            doc = "The string to split on, default is space (\" \").")
+            defaultValue = "unbound",
+            doc = "The string to split on.")
       },
-      useEnvironment = true,
+      useStarlarkThread = true,
       useLocation = true)
-  public Tuple<String> rpartition(String self, String sep, Location loc, Environment env)
+  public Tuple<String> rpartition(String self, Object sep, Location loc, StarlarkThread thread)
       throws EvalException {
-    return partitionWrapper(self, sep, false, loc);
+    if (sep == Runtime.UNBOUND) {
+        throw new EvalException(
+            loc,
+            "parameter 'sep' has no default value, "
+                + "for call to method partition(sep) of 'string'");
+    } else if (!(sep instanceof String)) {
+      throw new EvalException(
+          loc,
+          "expected value of type 'string' for parameter"
+              + " 'sep', for call to method partition(sep = unbound) of 'string'");
+    }
+    return partitionWrapper(self, (String) sep, false, loc);
   }
 
   /**
@@ -482,14 +547,14 @@ public final class StringModule {
   @SkylarkCallable(
       name = "capitalize",
       doc =
-          "Returns a copy of the string with its first character capitalized and the rest "
-              + "lowercased. This method does not support non-ascii characters.",
+          "Returns a copy of the string with its first character (if any) capitalized and the rest "
+              + "lowercased. This method does not support non-ascii characters. ",
       parameters = {@Param(name = "self", type = String.class, doc = "This string.")})
   public String capitalize(String self) throws EvalException {
     if (self.isEmpty()) {
       return self;
     }
-    return Character.toUpperCase(self.charAt(0)) + self.substring(1).toLowerCase();
+    return Character.toUpperCase(self.charAt(0)) + Ascii.toLowerCase(self.substring(1));
   }
 
   @SkylarkCallable(
@@ -523,11 +588,12 @@ public final class StringModule {
 
   /**
    * Common implementation for find, rfind, index, rindex.
+   *
    * @param forward true if we want to return the last matching index.
    */
-  private static int stringFind(boolean forward,
-      String self, String sub, int start, Object end, String msg)
-      throws ConversionException {
+  private static int stringFind(
+      boolean forward, String self, String sub, int start, Object end, String msg)
+      throws EvalException {
     String substr = pythonSubstring(self, start, end, msg);
     int subpos = forward ? substr.indexOf(sub) : substr.lastIndexOf(sub);
     start = EvalUtils.clampRangeEndpoint(start, self.length());
@@ -545,24 +611,29 @@ public final class StringModule {
               + "<code>start</code> being inclusive and <code>end</code> being exclusive.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sub", type = String.class, legacyNamed = true,
+        @Param(
+            name = "sub",
+            type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
             doc = "The substring to find."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Restrict to search from this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "optional position before which to restrict to search.")
       })
-  public Integer rfind(String self, String sub, Integer start, Object end)
-      throws ConversionException {
+  public Integer rfind(String self, String sub, Integer start, Object end) throws EvalException {
     return stringFind(false, self, sub, start, end, "'end' argument to rfind");
   }
 
@@ -574,24 +645,29 @@ public final class StringModule {
               + "<code>start</code> being inclusive and <code>end</code> being exclusive.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sub", type = String.class, legacyNamed = true,
+        @Param(
+            name = "sub",
+            type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
             doc = "The substring to find."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Restrict to search from this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "optional position before which to restrict to search.")
       })
-  public Integer invoke(String self, String sub, Integer start, Object end)
-      throws ConversionException {
+  public Integer invoke(String self, String sub, Integer start, Object end) throws EvalException {
     return stringFind(true, self, sub, start, end, "'end' argument to find");
   }
 
@@ -603,17 +679,23 @@ public final class StringModule {
               + "<code>start</code> being inclusive and <code>end</code> being exclusive.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sub", type = String.class, legacyNamed = true,
+        @Param(
+            name = "sub",
+            type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
             doc = "The substring to find."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Restrict to search from this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
@@ -637,17 +719,23 @@ public final class StringModule {
               + "<code>start</code> being inclusive and <code>end</code> being exclusive.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sub", type = String.class, legacyNamed = true,
+        @Param(
+            name = "sub",
+            type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
             doc = "The substring to find."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Restrict to search from this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
@@ -673,6 +761,7 @@ public final class StringModule {
         @Param(
             name = "keepends",
             type = Boolean.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "False",
             doc = "Whether the line breaks should be included in the resulting list.")
@@ -833,33 +922,38 @@ public final class StringModule {
               + "being inclusive and <code>end</code> being exclusive.",
       parameters = {
         @Param(name = "self", type = String.class, doc = "This string."),
-        @Param(name = "sub", type = String.class, legacyNamed = true,
+        @Param(
+            name = "sub",
+            type = String.class,
+            // TODO(cparsons): This parameter should be positional-only.
+            legacyNamed = true,
             doc = "The substring to count."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Restrict to search from this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "optional position before which to restrict to search.")
       })
-  public Integer count(String self, String sub, Integer start, Object end)
-      throws ConversionException {
+  public Integer count(String self, String sub, Integer start, Object end) throws EvalException {
     String str = pythonSubstring(self, start, end, "'end' operand of 'find'");
     if (sub.isEmpty()) {
       return str.length() + 1;
     }
     int count = 0;
-    int index = -1;
-    while ((index = str.indexOf(sub)) >= 0) {
+    int index = 0;
+    while ((index = str.indexOf(sub, index)) >= 0) {
       count++;
-      str = str.substring(index + sub.length());
+      index += sub.length();
     }
     return count;
   }
@@ -871,7 +965,7 @@ public final class StringModule {
               + "Equivalent to <code>[s[i] for i in range(len(s))]</code>, except that the "
               + "returned value might not be a list.",
       parameters = {@Param(name = "self", type = String.class, doc = "This string.")})
-  public SkylarkList<String> elems(String self) throws ConversionException {
+  public SkylarkList<String> elems(String self) throws EvalException {
     ImmutableList.Builder<String> builder = new ImmutableList.Builder<>();
     for (char c : self.toCharArray()) {
       builder.add(String.valueOf(c));
@@ -893,24 +987,26 @@ public final class StringModule {
               @ParamType(type = String.class),
               @ParamType(type = Tuple.class, generic1 = String.class),
             },
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             doc = "The substring to check."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Test beginning at this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "optional position at which to stop comparing.")
       })
-  public Boolean endsWith(String self, Object sub, Integer start, Object end)
-      throws ConversionException, EvalException {
+  public Boolean endsWith(String self, Object sub, Integer start, Object end) throws EvalException {
     String str = pythonSubstring(self, start, end, "'end' operand of 'endswith'");
     if (sub instanceof String) {
       return str.endsWith((String) sub);
@@ -984,24 +1080,27 @@ public final class StringModule {
               @ParamType(type = String.class),
               @ParamType(type = Tuple.class, generic1 = String.class),
             },
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             doc = "The substring(s) to check."),
         @Param(
             name = "start",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             defaultValue = "0",
             doc = "Test beginning at this position."),
         @Param(
             name = "end",
             type = Integer.class,
+            // TODO(cparsons): This parameter should be positional-only.
             legacyNamed = true,
             noneable = true,
             defaultValue = "None",
             doc = "Stop comparing at this position.")
       })
   public Boolean startsWith(String self, Object sub, Integer start, Object end)
-      throws ConversionException, EvalException {
+      throws EvalException {
     String str = pythonSubstring(self, start, end, "'end' operand of 'startswith'");
     if (sub instanceof String) {
       return str.startsWith((String) sub);

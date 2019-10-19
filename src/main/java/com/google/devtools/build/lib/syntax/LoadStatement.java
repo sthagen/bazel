@@ -14,38 +14,85 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
-import java.util.Map;
+import java.util.List;
 
 /** Syntax node for an import statement. */
 public final class LoadStatement extends Statement {
 
-  private final ImmutableMap<Identifier, String> symbolMap;
+  /**
+   * Binding represents a binding in a load statement. load("...", local = "orig")
+   *
+   * <p>If there's no alias, a single Identifier can be used for both local and orig.
+   */
+  public static final class Binding {
+    private final Identifier local;
+    private final Identifier orig;
+
+    public Identifier getLocalName() {
+      return local;
+    }
+
+    public Identifier getOriginalName() {
+      return orig;
+    }
+
+    // TODO(adonovan): lock down, after removing last use in skyframe serialization.
+    public Binding(Identifier localName, Identifier originalName) {
+      this.local = localName;
+      this.orig = originalName;
+    }
+  }
+
+  private final ImmutableList<Binding> bindings;
   private final StringLiteral imp;
+  private final boolean mayLoadInternalSymbols;
 
   /**
    * Constructs an import statement.
    *
-   * <p>{@code symbols} maps a symbol to the original name under which it was defined in
-   * the bzl file that should be loaded. If aliasing is used, the value differs from its key's
-   * {@code symbol.getName()}. Otherwise, both values are identical.
+   * <p>{@code bindings} maps a symbol to the original name under which it was defined in the bzl
+   * file that should be loaded. If aliasing is used, the value differs from its key's {@code
+   * symbol.getName()}. Otherwise, both values are identical.
+   *
+   * <p>Import statements generated this way are bound to the usual restriction that private symbols
+   * cannot be loaded.
    */
-  public LoadStatement(StringLiteral imp, Map<Identifier, String> symbolMap) {
+  // TODO(adonovan): lock down, after removing last use in skyframe serialization.
+  public LoadStatement(StringLiteral imp, List<Binding> bindings) {
     this.imp = imp;
-    this.symbolMap = ImmutableMap.copyOf(symbolMap);
+    this.bindings = ImmutableList.copyOf(bindings);
+    this.mayLoadInternalSymbols = false;
   }
 
-  public ImmutableMap<Identifier, String> getSymbolMap() {
-    return symbolMap;
+  private LoadStatement(StringLiteral imp, List<Binding> bindings, boolean mayLoadInternalSymbols) {
+    this.imp = imp;
+    this.bindings = ImmutableList.copyOf(bindings);
+    this.mayLoadInternalSymbols = mayLoadInternalSymbols;
   }
 
-  public ImmutableList<Identifier> getSymbols() {
-    return ImmutableList.copyOf(symbolMap.keySet());
+  /**
+   * Out of a {@code LoadStatement} construct a new one loading the same symbols, but free from the
+   * usual visibility restriction of not being able to load private symbols.
+   */
+  public static LoadStatement allowLoadingOfInternalSymbols(LoadStatement load) {
+    return new LoadStatement(load.getImport(), load.getBindings(), true);
+  }
+
+  public ImmutableList<Binding> getBindings() {
+    return bindings;
   }
 
   public StringLiteral getImport() {
     return imp;
+  }
+
+  /**
+   * Indicate whether this import statement is exempt from the restriction that private symbols may
+   * not be loaded.
+   */
+  public boolean mayLoadInternalSymbols() {
+    return mayLoadInternalSymbols;
   }
 
   @Override
@@ -53,15 +100,16 @@ public final class LoadStatement extends Statement {
     printIndent(buffer, indentLevel);
     buffer.append("load(");
     imp.prettyPrint(buffer);
-    for (Identifier symbol : symbolMap.keySet()) {
+    for (Binding binding : bindings) {
       buffer.append(", ");
-      String origName = symbolMap.get(symbol);
-      if (origName.equals(symbol.getName())) {
+      Identifier local = binding.getLocalName();
+      String origName = binding.getOriginalName().getName();
+      if (origName.equals(local.getName())) {
         buffer.append('"');
-        symbol.prettyPrint(buffer);
+        local.prettyPrint(buffer);
         buffer.append('"');
       } else {
-        symbol.prettyPrint(buffer);
+        local.prettyPrint(buffer);
         buffer.append("=\"");
         buffer.append(origName);
         buffer.append('"');
@@ -71,7 +119,7 @@ public final class LoadStatement extends Statement {
   }
 
   @Override
-  public void accept(SyntaxTreeVisitor visitor) {
+  public void accept(NodeVisitor visitor) {
     visitor.visit(this);
   }
 

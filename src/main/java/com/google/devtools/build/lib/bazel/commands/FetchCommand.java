@@ -21,7 +21,7 @@ import com.google.devtools.build.lib.analysis.NoBuildRequestFinishedEvent;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.PackageCacheOptions;
-import com.google.devtools.build.lib.query2.AbstractBlazeQueryEnvironment;
+import com.google.devtools.build.lib.query2.common.AbstractBlazeQueryEnvironment;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Setting;
 import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryException;
@@ -29,10 +29,10 @@ import com.google.devtools.build.lib.query2.engine.QueryExpression;
 import com.google.devtools.build.lib.query2.engine.ThreadSafeOutputFormatterCallback;
 import com.google.devtools.build.lib.runtime.BlazeCommand;
 import com.google.devtools.build.lib.runtime.BlazeCommandResult;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.KeepGoingOption;
+import com.google.devtools.build.lib.runtime.LoadingPhaseThreadsOption;
 import com.google.devtools.build.lib.runtime.commands.QueryCommand;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
@@ -43,13 +43,12 @@ import java.util.EnumSet;
 
 /** Fetches external repositories. Which is so fetch. */
 @Command(
-  name = FetchCommand.NAME,
-  options = {PackageCacheOptions.class, KeepGoingOption.class},
-  help = "resource:fetch.txt",
-  shortDescription = "Fetches external repositories that are prerequisites to the targets.",
-  allowResidue = true,
-  completion = "label"
-)
+    name = FetchCommand.NAME,
+    options = {PackageCacheOptions.class, KeepGoingOption.class, LoadingPhaseThreadsOption.class},
+    help = "resource:fetch.txt",
+    shortDescription = "Fetches external repositories that are prerequisites to the targets.",
+    allowResidue = true,
+    completion = "label")
 public final class FetchCommand implements BlazeCommand {
   // TODO(kchodorow): add an option to force-fetch targets, even if they're already downloaded.
   // TODO(kchodorow): this would be a great time to check for difference and invalidate the upward
@@ -62,7 +61,6 @@ public final class FetchCommand implements BlazeCommand {
 
   @Override
   public BlazeCommandResult exec(CommandEnvironment env, OptionsParsingResult options) {
-    BlazeRuntime runtime = env.getRuntime();
     if (options.getResidue().isEmpty()) {
       env.getReporter().handle(Event.error(String.format(
           "missing fetch expression. Type '%s help fetch' for syntax and help",
@@ -71,7 +69,7 @@ public final class FetchCommand implements BlazeCommand {
     }
 
     try {
-      env.setupPackageCache(options, runtime.getDefaultsPackageContent());
+      env.setupPackageCache(options);
     } catch (InterruptedException e) {
       env.getReporter().handle(Event.error("fetch interrupted"));
       return BlazeCommandResult.exitCode(ExitCode.INTERRUPTED);
@@ -95,14 +93,17 @@ public final class FetchCommand implements BlazeCommand {
     String query = Joiner.on(" union ").join(labelsToLoad.build());
     query = "deps(" + query + ")";
 
+    LoadingPhaseThreadsOption threadsOption = options.getOptions(LoadingPhaseThreadsOption.class);
     AbstractBlazeQueryEnvironment<Target> queryEnv =
         QueryCommand.newQueryEnvironment(
             env,
             options.getOptions(KeepGoingOption.class).keepGoing,
             false,
             Lists.<String>newArrayList(),
-            200,
-            EnumSet.noneOf(Setting.class));
+            threadsOption.threads,
+            EnumSet.noneOf(Setting.class),
+            // TODO(ulfjack): flip this flag for improved performance.
+            /* useGraphlessQuery= */ false);
 
     // 1. Parse query:
     QueryExpression expr;
@@ -155,7 +156,7 @@ public final class FetchCommand implements BlazeCommand {
     }
 
     if (queryEvalResult.getSuccess()) {
-      env.getReporter().handle(Event.progress("All external dependencies fetched successfully."));
+      env.getReporter().handle(Event.info("All external dependencies fetched successfully."));
     }
     ExitCode exitCode =
         queryEvalResult.getSuccess() ? ExitCode.SUCCESS : ExitCode.COMMAND_LINE_ERROR;

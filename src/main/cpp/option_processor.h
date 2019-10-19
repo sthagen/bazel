@@ -18,6 +18,7 @@
 #include <list>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "src/main/cpp/rc_file.h"
@@ -33,19 +34,19 @@ class WorkspaceLayout;
 // breakdown should suffice to access the parts of the command line that the
 // client cares about, notably the binary and startup startup options.
 struct CommandLine {
-  const std::string path_to_binary;
-  const std::vector<std::string> startup_args;
-  const std::string command;
-  const std::vector<std::string> command_args;
+  std::string path_to_binary;
+  std::vector<std::string> startup_args;
+  std::string command;
+  std::vector<std::string> command_args;
 
-  CommandLine(const std::string& path_to_binary_arg,
-              const std::vector<std::string>& startup_args_arg,
-              const std::string& command_arg,
-              const std::vector<std::string>& command_args_arg)
-      : path_to_binary(path_to_binary_arg),
-        startup_args(startup_args_arg),
-        command(command_arg),
-        command_args(command_args_arg) {}
+  CommandLine(std::string path_to_binary_arg,
+              std::vector<std::string> startup_args_arg,
+              std::string command_arg,
+              std::vector<std::string> command_args_arg)
+      : path_to_binary(std::move(path_to_binary_arg)),
+        startup_args(std::move(startup_args_arg)),
+        command(std::move(command_arg)),
+        command_args(std::move(command_args_arg)) {}
 };
 
 // This class is responsible for parsing the command line of the Blaze binary,
@@ -56,7 +57,14 @@ class OptionProcessor {
   OptionProcessor(const WorkspaceLayout* workspace_layout,
                   std::unique_ptr<StartupOptions> default_startup_options);
 
+  OptionProcessor(const WorkspaceLayout* workspace_layout,
+                  std::unique_ptr<StartupOptions> default_startup_options,
+                  const std::string& system_bazelrc_path);
+
   virtual ~OptionProcessor() {}
+
+  // Returns the lower-case product name associated with this options processor.
+  std::string GetLowercaseProductName() const;
 
   // Splits the arguments of a command line invocation.
   //
@@ -78,8 +86,7 @@ class OptionProcessor {
   // If the method fails then error will contain the cause, otherwise error
   // remains untouched.
   virtual std::unique_ptr<CommandLine> SplitCommandLine(
-      const std::vector<std::string>& args,
-      std::string* error) const;
+      std::vector<std::string> args, std::string* error) const;
 
   // Parse a command line and the appropriate blazerc files and stores the
   // results. This should be invoked only once per OptionProcessor object.
@@ -101,6 +108,8 @@ class OptionProcessor {
   // Gets the arguments explicitly provided by the user's command line.
   std::vector<std::string> GetExplicitCommandArguments() const;
 
+  // Returns the underlying StartupOptions object with parsed values. Must
+  // only be called after ParseOptions.
   virtual StartupOptions* GetParsedStartupOptions() const;
 
   // Prints a message about the origin of startup options. This should be called
@@ -141,9 +150,16 @@ class OptionProcessor {
 
   const WorkspaceLayout* workspace_layout_;
 
-  // The startup options parsed from args, this field is initialized by
-  // ParseOptions.
-  std::unique_ptr<StartupOptions> parsed_startup_options_;
+  // The StartupOptions object defining the startup options which are accepted,
+  // and, after ParseOptions has been called, their values.
+  const std::unique_ptr<StartupOptions> startup_options_;
+
+  // Whether or not ParseOptions has been called.
+  bool parse_options_called_;
+
+  // Path to the system-wide bazelrc configuration file.
+  // This is configurable for testing purposes only.
+  const std::string system_bazelrc_path_;
 };
 
 // Parses and returns the contents of the rc file.

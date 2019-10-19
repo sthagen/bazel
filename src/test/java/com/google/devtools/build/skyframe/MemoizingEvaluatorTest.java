@@ -16,6 +16,7 @@ package com.google.devtools.build.skyframe;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.devtools.build.lib.testutil.EventIterableSubjectFactory.assertThatEvents;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static com.google.devtools.build.skyframe.ErrorInfoSubjectFactory.assertThatErrorInfo;
 import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
 import static com.google.devtools.build.skyframe.GraphTester.CONCATENATE;
@@ -35,6 +36,8 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.eventbus.EventBus;
 import com.google.common.testing.GcFinalization;
+import com.google.common.truth.IterableSubject;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.events.DelegatingEventHandler;
 import com.google.devtools.build.lib.events.Event;
@@ -53,6 +56,7 @@ import com.google.devtools.build.skyframe.NotifyingHelper.Listener;
 import com.google.devtools.build.skyframe.NotifyingHelper.Order;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
+import com.google.devtools.build.skyframe.ThinNodeEntry.DirtyType;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -64,7 +68,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import javax.annotation.Nullable;
 import org.junit.After;
 import org.junit.Before;
@@ -77,7 +80,7 @@ import org.junit.runners.JUnit4;
 public class MemoizingEvaluatorTest {
 
   protected MemoizingEvaluatorTester tester;
-  private EventCollector eventCollector;
+  protected EventCollector eventCollector;
   private ExtendedEventHandler reporter;
   protected MemoizingEvaluator.EmittedEventState emittedEventState;
 
@@ -92,11 +95,6 @@ public class MemoizingEvaluatorTest {
     initializeReporter();
   }
 
-  @After
-  public void assertNoTrackedErrors() {
-    TrackingAwaiter.INSTANCE.assertNoErrors();
-  }
-
   private void initializeTester(@Nullable TrackingProgressReceiver customProgressReceiver) {
     emittedEventState = new MemoizingEvaluator.EmittedEventState();
     tester = new MemoizingEvaluatorTester();
@@ -104,6 +102,16 @@ public class MemoizingEvaluatorTest {
       tester.setProgressReceiver(customProgressReceiver);
     }
     tester.initialize(true);
+  }
+
+  protected TrackingProgressReceiver createTrackingProgressReceiver(
+      boolean checkEvaluationResults) {
+    return new TrackingProgressReceiver(checkEvaluationResults);
+  }
+
+  @After
+  public void assertNoTrackedErrors() {
+    TrackingAwaiter.INSTANCE.assertNoErrors();
   }
 
   protected RecordingDifferencer getRecordingDifferencer() {
@@ -147,7 +155,7 @@ public class MemoizingEvaluatorTest {
     return true;
   }
 
-  private void initializeReporter() {
+  protected void initializeReporter() {
     eventCollector = new EventCollector();
     reporter = new Reporter(new EventBus(), eventCollector);
     tester.resetPlayedEvents();
@@ -167,15 +175,30 @@ public class MemoizingEvaluatorTest {
   protected Set<InconsistencyData> setupGraphInconsistencyReceiver(boolean allowDuplicates) {
     Set<InconsistencyData> inconsistencies = Sets.newConcurrentHashSet();
     tester.setGraphInconsistencyReceiver(
-        (key, otherKey, inconsistency) ->
+        (key, otherKeys, inconsistency) -> {
+          if (otherKeys == null) {
             Preconditions.checkState(
-                inconsistencies.add(InconsistencyData.create(key, otherKey, inconsistency))
+                inconsistencies.add(
+                        InconsistencyData.create(key, /*otherKey=*/ null, inconsistency))
                     || allowDuplicates,
                 "Duplicate inconsistency: (%s, %s, %s)\nexisting = %s",
                 key,
-                otherKey,
+                null,
                 inconsistency,
-                inconsistencies));
+                inconsistencies);
+          } else {
+            for (SkyKey otherKey : otherKeys) {
+              Preconditions.checkState(
+                  inconsistencies.add(InconsistencyData.create(key, otherKey, inconsistency))
+                      || allowDuplicates,
+                  "Duplicate inconsistency: (%s, %s, %s)\nexisting = %s",
+                  key,
+                  otherKey,
+                  inconsistency,
+                  inconsistencies);
+            }
+          }
+        });
     // #initialize must be called after setting the GraphInconsistencyReceiver for the receiver to
     // be registered with the test's memoizing evaluator.
     tester.initialize(/*keepEdges=*/ true);
@@ -191,6 +214,12 @@ public class MemoizingEvaluatorTest {
     tester.set("x", new StringValue("y"));
     StringValue value = (StringValue) tester.evalAndGet("x");
     assertThat(value.getValue()).isEqualTo("y");
+  }
+
+  @Test
+  public void evaluateEmptySet() throws InterruptedException {
+    tester.eval(false, new SkyKey[0]);
+    tester.eval(true, new SkyKey[0]);
   }
 
   @Test
@@ -313,12 +342,7 @@ public class MemoizingEvaluatorTest {
   public void interruptBitCleared() throws Exception {
     SkyKey interruptKey = GraphTester.skyKey("interrupt");
     tester.getOrCreate(interruptKey).setBuilder(INTERRUPT_BUILDER);
-    try {
-      tester.eval(/*keepGoing=*/ true, interruptKey);
-      fail("Expected interrupt");
-    } catch (InterruptedException e) {
-      // Expected.
-    }
+    assertThrows(InterruptedException.class, () -> tester.eval(/*keepGoing=*/ true, interruptKey));
     assertThat(Thread.interrupted()).isFalse();
   }
 
@@ -341,7 +365,7 @@ public class MemoizingEvaluatorTest {
                   Thread.sleep(TestUtils.WAIT_TIMEOUT_MILLISECONDS);
                   throw new AssertionError("Shouldn't have slept so long");
                 } catch (InterruptedException e) {
-                  throw new RuntimeException("I don't like being woken up!");
+                  throw new RuntimeException("I don't like being woken up!", e);
                 }
               }
 
@@ -363,17 +387,15 @@ public class MemoizingEvaluatorTest {
                 null,
                 ImmutableList.<SkyKey>of()));
 
-    try {
-      // When it is interrupted during evaluation (here, caused by the failure of the throwing
-      // SkyFunction during a no-keep-going evaluation),
-      EvaluationResult<StringValue> unexpectedResult =
-          tester.eval(/*keepGoing=*/ false, badInterruptkey, failKey);
-      fail(unexpectedResult.toString());
-    } catch (RuntimeException e) {
-      // Then the Evaluator#evaluate call throws a RuntimeException e where e.getCause() is the
-      // RuntimeException thrown by that SkyFunction.
-      assertThat(e).hasCauseThat().hasMessage("I don't like being woken up!");
-    }
+    // When it is interrupted during evaluation (here, caused by the failure of the throwing
+    // SkyFunction during a no-keep-going evaluation), then the Evaluator#evaluate call throws a
+    // RuntimeException e where e.getCause() is the
+    // RuntimeException thrown by that SkyFunction.
+    RuntimeException e =
+        assertThrows(
+            RuntimeException.class,
+            () -> tester.eval(/*keepGoing=*/ false, badInterruptkey, failKey));
+    assertThat(e).hasCauseThat().hasMessageThat().isEqualTo("I don't like being woken up!");
   }
 
   @Test
@@ -1344,7 +1366,9 @@ public class MemoizingEvaluatorTest {
       } else {
         assertThatErrorInfo(errorInfo).isNotTransient();
       }
-      assertThat(errorInfo.getException()).hasMessage(NODE_TYPE.getName() + ":errorKey");
+      assertThat(errorInfo.getException())
+          .hasMessageThat()
+          .isEqualTo(NODE_TYPE.getName() + ":errorKey");
       assertThat(errorInfo.getRootCauseOfException()).isEqualTo(errorKey);
     } else {
       // When errors are not stored alongside values, transient errors that are recovered from do
@@ -1366,9 +1390,12 @@ public class MemoizingEvaluatorTest {
       assertThatErrorInfo(errorInfo).hasCycleInfoThat().hasSize(1);
     }
     // But the parent itself shouldn't have a direct dep on the special error transience node.
-    assertThatEvaluationResult(evalResult)
-        .hasDirectDepsInGraphThat(top)
-        .doesNotContain(ErrorTransienceValue.KEY);
+    verifyParentDepsForParentOfCycleAndError(
+        assertThatEvaluationResult(evalResult).hasDirectDepsInGraphThat(top));
+  }
+
+  protected void verifyParentDepsForParentOfCycleAndError(IterableSubject parentDeps) {
+    parentDeps.doesNotContain(ErrorTransienceValue.KEY);
   }
 
   @Test
@@ -1610,6 +1637,7 @@ public class MemoizingEvaluatorTest {
     assertThatEvaluationResult(result3).hasNoError();
   }
 
+  @SuppressWarnings("PreferJavaTimeOverload")
   @Test
   public void limitEvaluatorThreads() throws Exception {
     initializeTester();
@@ -1623,21 +1651,24 @@ public class MemoizingEvaluatorTest {
     TestFunction topLevelBuilder = tester.getOrCreate(topLevel);
     for (int i = 0; i < numKeys; i++) {
       topLevelBuilder.addDependency("subKey" + i);
-      tester.getOrCreate("subKey" + i).setComputedValue(new ValueComputer() {
-        @Override
-        public SkyValue compute(Map<SkyKey, SkyValue> deps, SkyFunction.Environment env) {
-          int val = inProgressCount.incrementAndGet();
-          synchronized (lock) {
-            if (val > maxValue[0]) {
-              maxValue[0] = val;
-            }
-          }
-          Uninterruptibles.sleepUninterruptibly(5, TimeUnit.SECONDS);
+      tester
+          .getOrCreate("subKey" + i)
+          .setComputedValue(
+              new ValueComputer() {
+                @Override
+                public SkyValue compute(Map<SkyKey, SkyValue> deps, SkyFunction.Environment env) {
+                  int val = inProgressCount.incrementAndGet();
+                  synchronized (lock) {
+                    if (val > maxValue[0]) {
+                      maxValue[0] = val;
+                    }
+                  }
+                  Uninterruptibles.sleepUninterruptibly(5, TimeUnit.SECONDS);
 
-          inProgressCount.decrementAndGet();
-          return new StringValue("abc");
-        }
-      });
+                  inProgressCount.decrementAndGet();
+                  return new StringValue("abc");
+                }
+              });
     }
     topLevelBuilder.setConstantValue(new StringValue("xyz"));
 
@@ -2531,8 +2562,13 @@ public class MemoizingEvaluatorTest {
     SkyKey missingChild = GraphTester.skyKey("missing");
     AtomicInteger numInconsistencyCalls = new AtomicInteger(0);
     tester.setGraphInconsistencyReceiver(
-        (key, otherKey, inconsistency) -> {
-          Preconditions.checkState(missingChild.equals(otherKey), otherKey);
+        (key, otherKeys, inconsistency) -> {
+          Preconditions.checkState(otherKeys.size() == 1, otherKeys);
+          Preconditions.checkState(
+              missingChild.equals(Iterables.getOnlyElement(otherKeys)),
+              "%s %s",
+              missingChild,
+              otherKeys);
           Preconditions.checkState(
               inconsistency == Inconsistency.CHILD_MISSING_FOR_DIRTY_NODE, inconsistency);
           Preconditions.checkState(topKey.equals(key), key);
@@ -2609,7 +2645,8 @@ public class MemoizingEvaluatorTest {
           public void accept(SkyKey key, EventType type, Order order, Object context) {
             if (shouldNotBuildLeaf4.get()
                 && key.equals(leaf4)
-                && type != EventType.REMOVE_REVERSE_DEP) {
+                && type != EventType.REMOVE_REVERSE_DEP
+                && type != EventType.GET_BATCH) {
               throw new IllegalStateException(
                   "leaf4 should not have been considered this build: "
                       + type
@@ -2732,14 +2769,19 @@ public class MemoizingEvaluatorTest {
             if (type == EventType.MARK_DIRTY) {
               TrackingAwaiter.INSTANCE.awaitLatchAndTrackExceptions(
                   threadsStarted, "Both threads did not query if value isChanged in time");
-              boolean isChanged = (Boolean) context;
-              if (order == Order.BEFORE && !isChanged) {
-                TrackingAwaiter.INSTANCE.awaitLatchAndTrackExceptions(
-                    waitForChanged, "'changed' thread did not mark value changed in time");
-                return;
+              if (order == Order.BEFORE) {
+                DirtyType dirtyType = (DirtyType) context;
+                if (dirtyType.equals(DirtyType.DIRTY)) {
+                  TrackingAwaiter.INSTANCE.awaitLatchAndTrackExceptions(
+                      waitForChanged, "'changed' thread did not mark value changed in time");
+                  return;
+                }
               }
-              if (order == Order.AFTER && isChanged) {
-                waitForChanged.countDown();
+              if (order == Order.AFTER) {
+                DirtyType dirtyType = ((NotifyingHelper.MarkDirtyAfterContext) context).dirtyType();
+                if (dirtyType.equals(DirtyType.CHANGE)) {
+                  waitForChanged.countDown();
+                }
               }
             }
           }
@@ -2764,51 +2806,6 @@ public class MemoizingEvaluatorTest {
     assertThat(result.get(parent).getValue()).isEqualTo("leafother2");
     assertThat(waitForChanged.getCount()).isEqualTo(0);
     assertThat(threadsStarted.getCount()).isEqualTo(0);
-  }
-
-  @Test
-  public void childVersionRespectedForChangePruning() throws Exception {
-    SkyKey leaf = skyKey("leaf");
-    SkyKey mid = skyKey("mid");
-    SkyKey top = skyKey("top");
-    SkyKey invalidator = GraphTester.nonHermeticKey("invalidator");
-    StringValue value = new StringValue("value");
-    Set<InconsistencyData> inconsistencyData = setupGraphInconsistencyReceiver();
-    AtomicInteger topEvalCount = new AtomicInteger(0);
-    tester
-        .getOrCreate(top)
-        .setBuilder(
-            (TaglessSkyFunction)
-                (skykey, env) -> {
-                  assertThat(skykey).isEqualTo(top);
-                  Map<SkyKey, SkyValue> values = env.getValues(ImmutableList.of(mid, invalidator));
-                  if (env.valuesMissing()) {
-                    return null;
-                  }
-                  topEvalCount.incrementAndGet();
-                  return Preconditions.checkNotNull(values.get(mid));
-                });
-    // When top depends on mid depends on leaf, and also depends on invalidator,
-    tester.getOrCreate(mid).addDependency(leaf).setComputedValue(CONCATENATE);
-    tester.getOrCreate(leaf).setConstantValue(value);
-    tester.getOrCreate(invalidator).setConstantValue(value);
-    // And top is evaluated at the first version,
-    assertThat(tester.evalAndGet(/*keepGoing=*/ true, top)).isEqualTo(value);
-    assertThat(topEvalCount.get()).isEqualTo(1);
-    // And mid is deleted from the graph,
-    deleteKeyFromGraph(mid);
-    assertThat(inconsistencyData).isEmpty();
-    // And top is invalidated (by invalidator) but not actually changed,
-    tester.getOrCreate(invalidator, /*markAsModified=*/ true);
-    tester.invalidate();
-    // Then we re-evaluate successfully,
-    assertThat(tester.evalAndGet(/*keepGoing=*/ true, top)).isEqualTo(value);
-    // And we noticed the missing dep,
-    assertThat(inconsistencyData)
-        .containsExactly(
-            InconsistencyData.create(top, mid, Inconsistency.CHILD_MISSING_FOR_DIRTY_NODE));
-    // And top was not actually re-evaluated on the incremental build (it was change-pruned).
-    assertWithMessage("Top should have been change-pruned").that(topEvalCount.get()).isEqualTo(1);
   }
 
   @Test
@@ -3021,17 +3018,12 @@ public class MemoizingEvaluatorTest {
             }
           });
       tester.invalidate();
-      TestThread evalThread = new TestThread() {
-        @Override
-        public void runTest() {
-          try {
-            tester.eval(/*keepGoing=*/false, tops.toArray(new SkyKey[0]));
-            fail();
-          } catch (InterruptedException e) {
-            // Expected.
-          }
-        }
-      };
+      TestThread evalThread =
+          new TestThread(
+              () ->
+                  assertThrows(
+                      InterruptedException.class,
+                      () -> tester.eval(/*keepGoing=*/ false, tops.toArray(new SkyKey[0]))));
       evalThread.start();
       assertThat(notifyStart.await(TestUtils.WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
       evalThread.interrupt();
@@ -3079,26 +3071,7 @@ public class MemoizingEvaluatorTest {
     manyDirtyValuesClearChildrenOnFail(/*interrupt=*/true);
   }
 
-  /**
-   * Regression test for case where the user requests that we delete nodes that are already in the
-   * queue to be dirtied. We should handle that gracefully and not complain.
-   */
-  @Test
-  public void deletingDirtyNodes() throws Exception {
-    final Thread thread = Thread.currentThread();
-    final AtomicBoolean interruptInvalidation = new AtomicBoolean(false);
-    initializeTester(new TrackingProgressReceiver() {
-      private final AtomicBoolean firstInvalidation = new AtomicBoolean(true);
-
-      @Override
-      public void invalidated(SkyKey skyKey, InvalidationState state) {
-        if (interruptInvalidation.get() && !firstInvalidation.getAndSet(false)) {
-          thread.interrupt();
-        }
-        super.invalidated(skyKey, state);
-      }
-    });
-    SkyKey node0 = GraphTester.nonHermeticKey("node0");
+  private SkyKey makeTestKey(SkyKey node0) {
     SkyKey key = null;
     // Create a long chain of nodes. Most of them will not actually be dirtied, but the last one to
     // be dirtied will enqueue its parent for dirtying, so it will be in the queue for the next run.
@@ -3112,23 +3085,35 @@ public class MemoizingEvaluatorTest {
         tester.set(key, new StringValue("node0"));
       }
     }
+    return key;
+  }
+
+  /**
+   * Regression test for case where the user requests that we delete nodes that are already in the
+   * queue to be dirtied. We should handle that gracefully and not complain.
+   */
+  @Test
+  public void deletingDirtyNodes() throws Exception {
+    SkyKey node0 = GraphTester.nonHermeticKey("node0");
+    SkyKey key = makeTestKey(node0);
     // Seed the graph.
     assertThat(((StringValue) tester.evalAndGet(/*keepGoing=*/ false, key)).getValue())
         .isEqualTo("node0");
     // Start the dirtying process.
     tester.set(node0, new StringValue("new"));
     tester.invalidate();
-    interruptInvalidation.set(true);
-    try {
-      tester.eval(/*keepGoing=*/false, key);
-      fail();
-    } catch (InterruptedException e) {
-      // Expected.
-    }
-    interruptInvalidation.set(false);
+
+    // Interrupt current thread on a next invalidate call
+    final Thread thread = Thread.currentThread();
+    tester.progressReceiver.setNextInvalidationCallback(thread::interrupt);
+
+    assertThrows(InterruptedException.class, () -> tester.eval(/*keepGoing=*/ false, key));
+
+    // Cleanup + paranoid check
+    tester.progressReceiver.setNextInvalidationCallback(null);
     // Now delete all the nodes. The node that was going to be dirtied is also deleted, which we
     // should handle.
-    tester.evaluator.delete(Predicates.<SkyKey>alwaysTrue());
+    tester.evaluator.delete(Predicates.alwaysTrue());
     assertThat(((StringValue) tester.evalAndGet(/*keepGoing=*/ false, key)).getValue())
         .isEqualTo("new");
   }
@@ -3401,12 +3386,7 @@ public class MemoizingEvaluatorTest {
     // Evaluator will think leaf was interrupted because it threw, so it will be cleaned from graph.
     tester.getOrCreate(value, /*markAsModified=*/true).setBuilder(INTERRUPT_BUILDER);
     tester.invalidate();
-    try {
-      tester.eval(/*keepGoing=*/false, value);
-      fail();
-    } catch (InterruptedException e) {
-      // Expected.
-    }
+    assertThrows(InterruptedException.class, () -> tester.eval(/*keepGoing=*/ false, value));
     tester.getOrCreate(value, /*markAsModified=*/false).setBuilder(null);
   }
 
@@ -3498,12 +3478,9 @@ public class MemoizingEvaluatorTest {
     // Evaluator will think leaf was interrupted because it threw, so it will be cleaned from graph.
     tester.getOrCreate(leafKey, /*markAsModified=*/true).setBuilder(INTERRUPT_BUILDER);
     tester.invalidate();
-    try {
-      tester.eval(/*keepGoing=*/false, tops.toArray(new SkyKey[0]));
-      fail();
-    } catch (InterruptedException e) {
-      // Expected.
-    }
+    assertThrows(
+        InterruptedException.class,
+        () -> tester.eval(/*keepGoing=*/ false, tops.toArray(new SkyKey[0])));
   }
 
   @Test
@@ -4061,6 +4038,78 @@ public class MemoizingEvaluatorTest {
   }
 
   @Test
+  public void changePruningWithIntermittentEvent() throws Exception {
+    String parentEvent = "parent_event";
+    String waitEvent = "wait_event";
+    String childEvent = "child_event";
+    SkyKey wait = GraphTester.toSkyKey("wait_key");
+    SkyKey parent = GraphTester.toSkyKey("parent_key");
+    SkyKey child = GraphTester.nonHermeticKey("child_key");
+    StringValue parentStringValue = new StringValue("parent_value");
+    StringValue waitStringValue = new StringValue("wait_value");
+    CountDownLatch parentEvaluated = new CountDownLatch(2);
+
+    reporter =
+        new DelegatingEventHandler(reporter) {
+          @Override
+          public void handle(Event e) {
+            super.handle(e);
+            // Release the CountDownLatch every time the parent node fires the event
+            if (e.getMessage().equals(parentEvent)) {
+              parentEvaluated.countDown();
+            }
+          }
+        };
+
+    tester
+        .getOrCreate(wait)
+        .setBuilder(
+            new SkyFunction() {
+              @Override
+              public SkyValue compute(SkyKey skyKey, Environment env) throws InterruptedException {
+                // Wait for the parent and child actions to complete before computing wait node
+                parentEvaluated.await(TestUtils.WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                assertThatEvents(eventCollector).containsExactly(childEvent, parentEvent);
+
+                env.getListener().handle(Event.progress(waitEvent));
+                return waitStringValue;
+              }
+
+              @Nullable
+              @Override
+              public String extractTag(SkyKey skyKey) {
+                return null;
+              }
+            });
+    tester
+        .getOrCreate(child)
+        .setConstantValue(new StringValue("child_value"))
+        .setWarning(childEvent);
+    tester
+        .getOrCreate(parent)
+        .addDependency(child)
+        .setConstantValue(parentStringValue)
+        .setWarning(parentEvent);
+
+    assertThat(tester.evalAndGet(/*keepGoing=*/ false, parent)).isEqualTo(parentStringValue);
+    assertThatEvents(eventCollector).containsExactly(childEvent, parentEvent);
+    assertThat(parentEvaluated.getCount()).isEqualTo(1);
+
+    // Reset the event collector and mark the child as modified without actually changing values
+    eventCollector.clear();
+    tester.resetPlayedEvents();
+    tester.getOrCreate(child, /*markAsModified=*/ true);
+    tester.invalidate();
+
+    EvaluationResult<StringValue> result = tester.eval(false, parent, wait);
+    assertThat(result.values()).containsExactly(parentStringValue, waitStringValue);
+
+    // These assertions are to check that all events fired at the end of evaluation.
+    assertThat(parentEvaluated.getCount()).isEqualTo(0);
+    assertThatEvents(eventCollector).containsExactly(childEvent, parentEvent, waitEvent);
+  }
+
+  @Test
   public void depEventPredicate() throws Exception {
     if (!eventsStored()) {
       return;
@@ -4150,12 +4199,37 @@ public class MemoizingEvaluatorTest {
         .setConstantValue(value);
     tester.invalidateTransientErrors();
     StringValue stringValue = (StringValue) tester.evalAndGet(/*keepGoing=*/true, errorKey);
-    assertThat(value).isSameAs(stringValue);
+    assertThat(value).isSameInstanceAs(stringValue);
     // Value builder will now throw, but we should never get to it because it isn't dirty.
     tester.getOrCreate(errorKey, /*markAsModified=*/false).setHasTransientError(true);
     tester.invalidateTransientErrors();
     stringValue = (StringValue) tester.evalAndGet(/*keepGoing=*/true, errorKey);
     assertThat(stringValue).isEqualTo(value);
+  }
+
+  @Test
+  public void transientErrorTurnsGoodOnSecondTry() throws Exception {
+    SkyKey leafKey = toSkyKey("leaf");
+    SkyKey errorKey = toSkyKey("error");
+    SkyKey topKey = toSkyKey("top");
+    StringValue value = new StringValue("val");
+    tester.getOrCreate(topKey).addDependency(errorKey).setConstantValue(value);
+    tester
+        .getOrCreate(errorKey)
+        .addDependency(leafKey)
+        .setConstantValue(value)
+        .setHasTransientError(true);
+    tester.getOrCreate(leafKey).setConstantValue(new StringValue("leaf"));
+    ErrorInfo errorInfo = tester.evalAndGetError(/*keepGoing=*/ true, topKey);
+    assertThat(errorInfo).isNotNull();
+    assertThatErrorInfo(errorInfo).isTransient();
+    tester.invalidateTransientErrors();
+    errorInfo = tester.evalAndGetError(/*keepGoing=*/ true, topKey);
+    assertThat(errorInfo).isNotNull();
+    assertThatErrorInfo(errorInfo).isTransient();
+    tester.invalidateTransientErrors();
+    tester.getOrCreate(errorKey, /*markAsModified=*/ false).setHasTransientError(false);
+    assertThat(tester.evalAndGet(/*keepGoing=*/ true, topKey)).isEqualTo(value);
   }
 
   @Test
@@ -4411,12 +4485,7 @@ public class MemoizingEvaluatorTest {
 
     tester.differencer.inject(ImmutableMap.of(key, val));
     Thread.currentThread().interrupt();
-    try {
-      tester.evalAndGet(/*keepGoing=*/ false, key);
-      fail();
-    } catch (InterruptedException expected) {
-      // Expected.
-    }
+    assertThrows(InterruptedException.class, () -> tester.evalAndGet(/*keepGoing=*/ false, key));
     SkyValue newVal = tester.evalAndGet(/*keepGoing=*/ false, key);
     assertThat(newVal).isEqualTo(val);
   }
@@ -4550,17 +4619,7 @@ public class MemoizingEvaluatorTest {
   @Test
   public void shutDownBuildOnCachedError_Verified() throws Exception {
     // TrackingProgressReceiver does unnecessary examination of node values.
-    initializeTester(
-        new TrackingProgressReceiver() {
-          @Override
-          public void evaluated(
-              SkyKey skyKey,
-              @Nullable SkyValue value,
-              Supplier<EvaluationSuccessState> evaluationSuccessState,
-              EvaluationState state) {
-            evaluated.add(skyKey);
-          }
-        });
+    initializeTester(createTrackingProgressReceiver(/* checkEvaluationResults= */ false));
     // errorKey will be invalidated due to its dependence on invalidatedKey, but later revalidated
     // since invalidatedKey re-evaluates to the same value on a subsequent build.
     SkyKey errorKey = GraphTester.toSkyKey("error");
@@ -4689,17 +4748,7 @@ public class MemoizingEvaluatorTest {
   @Test
   public void cachedErrorCausesRestart() throws Exception {
     // TrackingProgressReceiver does unnecessary examination of node values.
-    initializeTester(
-        new TrackingProgressReceiver() {
-          @Override
-          public void evaluated(
-              SkyKey skyKey,
-              @Nullable SkyValue value,
-              Supplier<EvaluationSuccessState> evaluationSuccessState,
-              EvaluationState state) {
-            evaluated.add(skyKey);
-          }
-        });
+    initializeTester(createTrackingProgressReceiver(/* checkEvaluationResults= */ false));
     final SkyKey errorKey = GraphTester.toSkyKey("error");
     SkyKey invalidatedKey = GraphTester.nonHermeticKey("invalidated");
     final SkyKey topKey = GraphTester.toSkyKey("top");
@@ -4991,13 +5040,7 @@ public class MemoizingEvaluatorTest {
     // And so is top,
     tester.getOrCreate(topKey, /*markAsModified=*/ true);
     tester.invalidate();
-    try {
-      // Then evaluation is interrupted,
-      tester.eval(/*keepGoing=*/ false, topKey);
-      fail();
-    } catch (InterruptedException e) {
-      // Expected.
-    }
+    assertThrows(InterruptedException.class, () -> tester.eval(/*keepGoing=*/ false, topKey));
     // But inactive is still present,
     assertThat(tester.driver.getEntryForTesting(inactiveKey)).isNotNull();
     // And still dirty,
@@ -5032,6 +5075,118 @@ public class MemoizingEvaluatorTest {
   @Test
   public void duplicateUnfinishedDeps_KeepGoing() throws Exception {
     runTestDuplicateUnfinishedDeps(/*keepGoing=*/ true);
+  }
+
+  @Test
+  public void externalDep() throws Exception {
+    externalDep(1, 0);
+    externalDep(2, 0);
+    externalDep(1, 1);
+    externalDep(1, 2);
+    externalDep(2, 1);
+    externalDep(2, 2);
+  }
+
+  private void externalDep(int firstPassCount, int secondPassCount) throws Exception {
+    final SkyKey parentKey = toSkyKey("parentKey");
+    final CountDownLatch firstPassLatch = new CountDownLatch(1);
+    final CountDownLatch secondPassLatch = new CountDownLatch(1);
+    tester
+        .getOrCreate(parentKey)
+        .setBuilder(
+            new SkyFunction() {
+              // Skyframe doesn't have native support for continuations, so we use fields here. A
+              // simple continuation API in Skyframe could be Environment providing a
+              // setContinuation(SkyContinuation) method, where SkyContinuation provides a compute
+              // method similar to SkyFunction. When restarting the node, Skyframe would then call
+              // the continuation rather than the original SkyFunction. If we do that, we should
+              // consider only allowing calls to dependOnFuture in combination with setContinuation.
+              private List<SettableFuture<SkyValue>> firstPass;
+              private List<SettableFuture<SkyValue>> secondPass;
+
+              @Override
+              public SkyValue compute(SkyKey skyKey, Environment env) {
+                if (firstPass == null) {
+                  firstPass = new ArrayList<>();
+                  for (int i = 0; i < firstPassCount; i++) {
+                    SettableFuture<SkyValue> future = SettableFuture.create();
+                    firstPass.add(future);
+                    env.dependOnFuture(future);
+                  }
+                  assertThat(env.valuesMissing()).isTrue();
+                  Thread helper =
+                      new Thread(
+                          () -> {
+                            try {
+                              firstPassLatch.await();
+                              for (int i = 0; i < firstPassCount; i++) {
+                                firstPass.get(i).set(new StringValue("value1"));
+                              }
+                            } catch (InterruptedException e) {
+                              throw new RuntimeException(e);
+                            }
+                          });
+                  helper.start();
+                  return null;
+                } else if (secondPass == null && secondPassCount > 0) {
+                  for (int i = 0; i < firstPassCount; i++) {
+                    assertThat(firstPass.get(i).isDone()).isTrue();
+                  }
+                  secondPass = new ArrayList<>();
+                  for (int i = 0; i < secondPassCount; i++) {
+                    SettableFuture<SkyValue> future = SettableFuture.create();
+                    secondPass.add(future);
+                    env.dependOnFuture(future);
+                  }
+                  assertThat(env.valuesMissing()).isTrue();
+                  Thread helper =
+                      new Thread(
+                          () -> {
+                            try {
+                              secondPassLatch.await();
+                              for (int i = 0; i < secondPassCount; i++) {
+                                secondPass.get(i).set(new StringValue("value2"));
+                              }
+                            } catch (InterruptedException e) {
+                              throw new RuntimeException(e);
+                            }
+                          });
+                  helper.start();
+                  return null;
+                }
+                for (int i = 0; i < secondPassCount; i++) {
+                  assertThat(secondPass.get(i).isDone()).isTrue();
+                }
+                return new StringValue("done!");
+              }
+
+              @Override
+              public String extractTag(SkyKey skyKey) {
+                return null;
+              }
+            });
+    tester.evaluator.injectGraphTransformerForTesting(
+        NotifyingHelper.makeNotifyingTransformer(
+            new Listener() {
+              private boolean firstPassDone;
+
+              @Override
+              public void accept(SkyKey key, EventType type, Order order, Object context) {
+                // NodeEntry.addExternalDep is called as part of bookkeeping at the end of
+                // AbstractParallelEvaluator.Evaluate#run.
+                if (key == parentKey && type == EventType.ADD_EXTERNAL_DEP) {
+                  if (!firstPassDone) {
+                    firstPassLatch.countDown();
+                    firstPassDone = true;
+                  } else {
+                    secondPassLatch.countDown();
+                  }
+                }
+              }
+            }));
+    EvaluationResult<StringValue> result = tester.eval(/*keepGoing=*/ false, parentKey);
+    assertThat(result.hasError()).isFalse();
+    assertThat(result.get(parentKey)).isEqualTo(new StringValue("done!"));
   }
 
   private void runTestDuplicateUnfinishedDeps(boolean keepGoing) throws Exception {
@@ -5087,7 +5242,9 @@ public class MemoizingEvaluatorTest {
               }
             });
 
-    assertThat(tester.evalAndGetError(keepGoing, parentKey).getException()).isSameAs(parentExn);
+    Exception exception = tester.evalAndGetError(keepGoing, parentKey).getException();
+    assertThat(exception).isInstanceOf(SomeErrorException.class);
+    assertThat(exception).hasMessageThat().isEqualTo("bad");
   }
 
   /** Data encapsulating a graph inconsistency found during evaluation. */
@@ -5111,7 +5268,8 @@ public class MemoizingEvaluatorTest {
     private RecordingDifferencer differencer;
     private MemoizingEvaluator evaluator;
     private BuildDriver driver;
-    private TrackingProgressReceiver progressReceiver = new TrackingProgressReceiver();
+    private TrackingProgressReceiver progressReceiver =
+        createTrackingProgressReceiver(/* checkEvaluationResults= */ true);
     private GraphInconsistencyReceiver graphInconsistencyReceiver =
         GraphInconsistencyReceiver.THROWING;
     private EventFilter eventFilter = InMemoryMemoizingEvaluator.DEFAULT_STORED_EVENT_FILTER;
@@ -5191,7 +5349,13 @@ public class MemoizingEvaluatorTest {
     public <T extends SkyValue> EvaluationResult<T> eval(
         boolean keepGoing, int numThreads, SkyKey... keys) throws InterruptedException {
       assertThat(getModifiedValues()).isEmpty();
-      return driver.evaluate(ImmutableList.copyOf(keys), keepGoing, numThreads, reporter);
+      EvaluationContext evaluationContext =
+          EvaluationContext.newBuilder()
+              .setKeepGoing(keepGoing)
+              .setNumThreads(numThreads)
+              .setEventHander(reporter)
+              .build();
+      return driver.evaluate(ImmutableList.copyOf(keys), evaluationContext);
     }
 
     public <T extends SkyValue> EvaluationResult<T> eval(boolean keepGoing, SkyKey... keys)

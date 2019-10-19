@@ -18,13 +18,18 @@ import static com.google.common.collect.ImmutableSetMultimap.flatteningToImmutab
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
+import com.google.devtools.build.lib.cmdline.TargetPattern;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
@@ -32,18 +37,17 @@ import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
+import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.pkgcache.AbstractRecursivePackageProvider.MissingDepException;
 import com.google.devtools.build.lib.pkgcache.CompileOneDependencyTransformer;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.LoadingPhaseCompleteEvent;
 import com.google.devtools.build.lib.pkgcache.ParsingFailedEvent;
 import com.google.devtools.build.lib.pkgcache.TargetParsingCompleteEvent;
-import com.google.devtools.build.lib.pkgcache.TargetProvider;
 import com.google.devtools.build.lib.pkgcache.TestFilter;
 import com.google.devtools.build.lib.skyframe.TargetPatternPhaseValue.TargetPatternPhaseKey;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternSkyKeyOrException;
-import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -72,8 +76,11 @@ final class TargetPatternPhaseFunction implements SkyFunction {
     PackageValue packageValue = null;
     boolean workspaceError = false;
     try {
-      packageValue = (PackageValue) env.getValueOrThrow(
-          PackageValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER), NoSuchPackageException.class);
+      packageValue =
+          (PackageValue)
+              env.getValueOrThrow(
+                  PackageValue.key(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER),
+                  NoSuchPackageException.class);
     } catch (NoSuchPackageException e) {
       env.getListener().handle(Event.error(e.getMessage()));
       workspaceError = true;
@@ -86,9 +93,17 @@ final class TargetPatternPhaseFunction implements SkyFunction {
       workspaceName = packageValue.getPackage().getWorkspaceName();
     }
 
+    RepositoryMappingValue repositoryMappingValue =
+        (RepositoryMappingValue) env.getValue(RepositoryMappingValue.key(RepositoryName.MAIN));
+    if (repositoryMappingValue == null) {
+      return null;
+    }
+
     // Determine targets to build:
     List<String> failedPatterns = new ArrayList<String>();
-    List<ExpandedPattern> expandedPatterns = getTargetsToBuild(env, options, failedPatterns);
+    List<ExpandedPattern> expandedPatterns =
+        getTargetsToBuild(
+            env, options, repositoryMappingValue.getRepositoryMapping(), failedPatterns);
     ResolvedTargets<Target> targets =
         env.valuesMissing()
             ? null
@@ -255,12 +270,21 @@ final class TargetPatternPhaseFunction implements SkyFunction {
    * @param failedPatterns a list into which failed patterns are added
    */
   private static List<ExpandedPattern> getTargetsToBuild(
-      Environment env, TargetPatternPhaseKey options, List<String> failedPatterns)
+      Environment env,
+      TargetPatternPhaseKey options,
+      ImmutableMap<RepositoryName, RepositoryName> repoMapping,
+      List<String> failedPatterns)
       throws InterruptedException {
+
+    ImmutableList.Builder<String> canonicalPatterns = new ImmutableList.Builder<>();
+    for (String rawPattern : options.getTargetPatterns()) {
+      canonicalPatterns.add(TargetPattern.renameRepository(rawPattern, repoMapping));
+    }
+
     List<TargetPatternKey> patternSkyKeys = new ArrayList<>(options.getTargetPatterns().size());
     for (TargetPatternSkyKeyOrException keyOrException :
         TargetPatternValue.keys(
-            options.getTargetPatterns(),
+            canonicalPatterns.build(),
             options.getBuildManualTests()
                 ? FilteringPolicies.NO_FILTER
                 : FilteringPolicies.FILTER_MANUAL,
@@ -344,10 +368,12 @@ final class TargetPatternPhaseFunction implements SkyFunction {
         .filter(TargetUtils.tagFilter(options.getBuildTargetFilter()))
         .build();
     if (options.getCompileOneDependency()) {
-      TargetProvider targetProvider = new EnvironmentBackedRecursivePackageProvider(env);
+      EnvironmentBackedRecursivePackageProvider environmentBackedRecursivePackageProvider =
+          new EnvironmentBackedRecursivePackageProvider(env);
       try {
-        return new CompileOneDependencyTransformer(targetProvider)
-            .transformCompileOneDependency(env.getListener(), result);
+        result =
+            new CompileOneDependencyTransformer(environmentBackedRecursivePackageProvider)
+                .transformCompileOneDependency(env.getListener(), result);
       } catch (MissingDepException e) {
         return null;
       } catch (TargetParsingException e) {
@@ -359,6 +385,9 @@ final class TargetPatternPhaseFunction implements SkyFunction {
         }
         env.getListener().handle(Event.error(e.getMessage()));
         return ResolvedTargets.failed();
+      }
+      if (environmentBackedRecursivePackageProvider.encounteredPackageErrors()) {
+        result = ResolvedTargets.<Target>builder().merge(result).setError().build();
       }
     }
     return result;
