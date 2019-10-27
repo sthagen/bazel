@@ -77,6 +77,7 @@ filegroup(
         "//src/main/java/com/google/devtools/build/lib/standalone:srcs",
         "//src/main/java/com/google/devtools/build/lib/supplier:srcs",
         "//src/main/java/com/google/devtools/build/lib/syntax:srcs",
+        "//src/main/java/com/google/devtools/build/lib/versioning:srcs",
         "//src/main/java/com/google/devtools/build/lib/vfs/inmemoryfs:srcs",
         "//src/main/java/com/google/devtools/build/lib/vfs:srcs",
         "//src/main/java/com/google/devtools/build/lib/windows/jni:srcs",
@@ -695,10 +696,22 @@ java_library(
 )
 
 java_library(
+    name = "bazel-ninja",
+    srcs = glob(["bazel/rules/ninja/**/*.java"]),
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib:util",
+        "//src/main/java/com/google/devtools/build/lib/concurrent",
+        "//third_party:guava",
+        "//third_party:jsr305",
+    ],
+)
+
+java_library(
     name = "bazel-rules",
     srcs = glob(
         [
             "bazel/rules/**/*.java",
+            "bazel/rules/ninja/**/*.java",
         ],
         exclude = [
             "bazel/rules/workspace/*.java",
