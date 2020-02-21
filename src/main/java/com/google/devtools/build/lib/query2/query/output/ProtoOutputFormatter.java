@@ -188,38 +188,39 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
 
       ImmutableMultimap<Attribute, Label> aspectsDependencies =
           aspectResolver.computeAspectDependencies(target, dependencyFilter);
-      // Add information about additional attributes from aspects.
-      List<Build.Attribute> attributes = new ArrayList<>(aspectsDependencies.asMap().size());
-      for (Map.Entry<Attribute, Collection<Label>> entry : aspectsDependencies.asMap().entrySet()) {
-        Attribute attribute = entry.getKey();
-        Collection<Label> labels = entry.getValue();
-        if (!includeAspectAttribute(attribute, labels)) {
-          continue;
+      if (!aspectsDependencies.isEmpty()) {
+        // Add information about additional attributes from aspects.
+        List<Build.Attribute> attributes = new ArrayList<>(aspectsDependencies.asMap().size());
+        for (Map.Entry<Attribute, Collection<Label>> entry :
+            aspectsDependencies.asMap().entrySet()) {
+          Attribute attribute = entry.getKey();
+          Collection<Label> labels = entry.getValue();
+          if (!includeAspectAttribute(attribute, labels)) {
+            continue;
+          }
+          Object attributeValue = getAspectAttributeValue(attribute, labels);
+          Build.Attribute serializedAttribute =
+              AttributeFormatter.getAttributeProto(
+                  attribute,
+                  attributeValue,
+                  /*explicitlySpecified=*/ false,
+                  /*encodeBooleanAndTriStateAsIntegerAndString=*/ true);
+          attributes.add(serializedAttribute);
         }
-        Object attributeValue = getAspectAttributeValue(attribute, labels);
-        Build.Attribute serializedAttribute =
-            AttributeFormatter.getAttributeProto(
-                attribute,
-                attributeValue,
-                /*explicitlySpecified=*/ false,
-                /*encodeBooleanAndTriStateAsIntegerAndString=*/ true);
-        attributes.add(serializedAttribute);
+        rulePb.addAllAttribute(
+            attributes.stream().distinct().sorted(ATTRIBUTE_NAME).collect(Collectors.toList()));
       }
-      rulePb.addAllAttribute(
-          attributes.stream().distinct().sorted(ATTRIBUTE_NAME).collect(Collectors.toList()));
       if (includeRuleInputsAndOutputs) {
         // Add all deps from aspects as rule inputs of current target.
-         aspectsDependencies
-             .values()
-             .stream()
-             .distinct()
-             .forEach(dep -> rulePb.addRuleInput(dep.toString()));
-        // Include explicit elements for all direct inputs and outputs of a rule;
-        // this goes beyond what is available from the attributes above, since it
-        // may also (depending on options) include implicit outputs,
-        // host-configuration outputs, and default values.
-        rule.getLabels(dependencyFilter)
-            .stream()
+        if (!aspectsDependencies.isEmpty()) {
+          aspectsDependencies.values().stream()
+              .distinct()
+              .forEach(dep -> rulePb.addRuleInput(dep.toString()));
+        }
+        // Include explicit elements for all direct inputs and outputs of a rule; this goes beyond
+        // what is available from the attributes above, since it may also (depending on options)
+        // include implicit outputs, host-configuration outputs, and default values.
+        rule.getLabels(dependencyFilter).stream()
             .distinct()
             .forEach(input -> rulePb.addRuleInput(input.toString()));
         rule.getOutputFiles()
@@ -365,7 +366,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
 
   protected boolean shouldIncludeAttribute(Rule rule, Attribute attr) {
     return (includeDefaultValues || rule.isAttributeValueExplicitlySpecified(attr))
-        && includeAttribute(rule, attr);
+        && ruleAttributePredicate.apply(attr.getName());
   }
 
   private static Object getAspectAttributeValue(Attribute attribute, Collection<Label> labels) {
@@ -390,11 +391,6 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
       Build.Rule.Builder rulePb,
       Map<Attribute, Build.Attribute> serializedAttributes,
       Object extraDataForPostProcess) {}
-
-  /** Filter out some attributes */
-  protected boolean includeAttribute(Rule rule, Attribute attr) {
-    return ruleAttributePredicate.apply(attr.getName());
-  }
 
   /** Allow filtering of aspect attributes. */
   protected boolean includeAspectAttribute(Attribute attr, Collection<Label> value) {

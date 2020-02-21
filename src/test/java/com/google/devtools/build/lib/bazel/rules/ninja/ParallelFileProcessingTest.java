@@ -27,7 +27,7 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.ByteBufferFragment;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.DeclarationConsumer;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.GenericParsingException;
-import com.google.devtools.build.lib.bazel.rules.ninja.file.NinjaSeparatorPredicate;
+import com.google.devtools.build.lib.bazel.rules.ninja.file.NinjaSeparatorFinder;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.ParallelFileProcessing;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.ParallelFileProcessing.BlockParameters;
 import com.google.devtools.build.lib.concurrent.ExecutorUtil;
@@ -107,7 +107,7 @@ public class ParallelFileProcessingTest {
                     () -> {
                       List<ByteBufferFragment> inner = Lists.newArrayList();
                       list.add(inner);
-                      return inner::add;
+                      return byteFragmentAtOffset -> inner.add(byteFragmentAtOffset.getFragment());
                     };
                 parseFile(file, factory, null);
                 assertThat(list).isNotEmpty();
@@ -144,7 +144,7 @@ public class ParallelFileProcessingTest {
           parameters != null ? parameters : new BlockParameters(file.length()),
           factory,
           service,
-          NinjaSeparatorPredicate.INSTANCE);
+          NinjaSeparatorFinder.INSTANCE);
     } finally {
       ExecutorUtil.interruptibleShutdown(service);
     }
@@ -183,11 +183,10 @@ public class ParallelFileProcessingTest {
       throws IOException, GenericParsingException, InterruptedException {
     File file = writeTestFile(limit);
     try {
-      // todo set parse block size
       List<String> lines = Collections.synchronizedList(Lists.newArrayListWithCapacity(limit));
       parseFile(
           file,
-          () -> s -> lines.add(s.toString()),
+          () -> (byteFragmentAtOffset) -> lines.add(byteFragmentAtOffset.getFragment().toString()),
           new BlockParameters(file.length()).setReadBlockSize(blockSize));
       // Copy to non-synchronized list for check
       assertNumbers(limit, Lists.newArrayList(lines));

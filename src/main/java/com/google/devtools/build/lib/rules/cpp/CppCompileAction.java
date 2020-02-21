@@ -13,10 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.cpp;
 
-import static java.util.Collections.unmodifiableSet;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Stopwatch;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
@@ -38,39 +37,42 @@ import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.CommandAction;
+import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.actions.CommandLines.CommandLineAndParamFileInfo;
 import com.google.devtools.build.lib.actions.CommandLines.ParamFileActionInput;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.ExecutionInfoSpecifier;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.actions.extra.CppCompileInfo;
 import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
+import com.google.devtools.build.lib.analysis.skylark.Args;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.collect.CollectionUtils;
-import com.google.devtools.build.lib.collect.IterablesChain;
-import com.google.devtools.build.lib.collect.compacthashset.CompactHashSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
-import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.rules.cpp.CcCommon.CoptsFilter;
-import com.google.devtools.build.lib.rules.cpp.CcCompilationContext.IncludeScanningHeaderDataHelper;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.IncludeScanner.IncludeScanningHeaderData;
 import com.google.devtools.build.lib.skyframe.ActionExecutionValue;
+import com.google.devtools.build.lib.skylarkbuildapi.CommandLineArgsApi;
+import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.syntax.Sequence;
+import com.google.devtools.build.lib.syntax.StarlarkList;
 import com.google.devtools.build.lib.util.DependencySet;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.ShellEscaper;
@@ -86,10 +88,9 @@ import com.google.devtools.build.skyframe.SkyValue;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -99,13 +100,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 /** Action that represents some kind of C++ compilation step. */
 @ThreadCompatible
-public class CppCompileAction extends AbstractAction
-    implements IncludeScannable, ExecutionInfoSpecifier, CommandAction {
+public class CppCompileAction extends AbstractAction implements IncludeScannable, CommandAction {
 
+  private static final Logger logger = Logger.getLogger(CppCompileAction.class.getName());
+  private static final Duration BLOCKED_NESTED_SET_EXPANSION_THRESHOLD = Duration.ofSeconds(5);
   private static final PathFragment BUILD_PATH_FRAGMENT = PathFragment.create("BUILD");
 
   private static final boolean VALIDATION_DEBUG_WARN = false;
@@ -114,7 +117,7 @@ public class CppCompileAction extends AbstractAction
   private final Artifact sourceFile;
   private final CppConfiguration cppConfiguration;
   private final NestedSet<Artifact> mandatoryInputs;
-  private final Iterable<Artifact> inputsForInvalidation;
+  private final NestedSet<Artifact> inputsForInvalidation;
 
   /**
    * The set of input files that in addition to {@link CcCompilationContext#getDeclaredIncludeSrcs}
@@ -145,7 +148,7 @@ public class CppCompileAction extends AbstractAction
    * The fingerprint of {@link #compileCommandLine}. This is computed lazily so that the command
    * line is not unnecessarily flattened outside of action execution.
    */
-  byte[] commandLineKey = null;
+  byte[] commandLineKey;
 
   private final ImmutableMap<String, String> executionInfo;
   private final String actionName;
@@ -166,13 +169,13 @@ public class CppCompileAction extends AbstractAction
    * Set when the action prepares for execution. Used to preserve state between preparation and
    * execution.
    */
-  private Iterable<Artifact> additionalInputs = null;
+  private NestedSet<Artifact> additionalInputs;
 
   /**
    * Used only during input discovery, when input discovery requires other actions to be executed
    * first.
    */
-  private Collection<Artifact.DerivedArtifact> usedModules = null;
+  private Collection<Artifact.DerivedArtifact> usedModules;
 
   /**
    * This field is set only for C++ module compiles (compiling .cppmap files into .pcm files). It
@@ -186,14 +189,12 @@ public class CppCompileAction extends AbstractAction
   private NestedSet<Artifact> discoveredModules = null;
 
   /** Used modules that are not transitively used through other topLevelModules. */
-  private NestedSet<Artifact> topLevelModules = null;
+  private NestedSet<Artifact> topLevelModules;
 
-  private CcToolchainVariables overwrittenVariables = null;
+  private CcToolchainVariables overwrittenVariables;
 
   private ParamFileActionInput paramFileActionInput;
   private PathFragment paramFilePath;
-
-  private Iterable<Artifact> alternateIncludeScanningDataInputs = null;
 
   /**
    * Creates a new action to compile C/C++ source files.
@@ -237,7 +238,7 @@ public class CppCompileAction extends AbstractAction
       boolean usePic,
       boolean useHeaderModules,
       NestedSet<Artifact> mandatoryInputs,
-      Iterable<Artifact> inputsForInvalidation,
+      NestedSet<Artifact> inputsForInvalidation,
       ImmutableList<Artifact> builtinIncludeFiles,
       NestedSet<Artifact> additionalPrunableHeaders,
       Artifact outputFile,
@@ -257,7 +258,9 @@ public class CppCompileAction extends AbstractAction
       @Nullable Artifact grepIncludes) {
     super(
         owner,
-        IterablesChain.concat(mandatoryInputs, inputsForInvalidation),
+        NestedSetBuilder.fromNestedSet(mandatoryInputs)
+            .addTransitive(inputsForInvalidation)
+            .build(),
         CollectionUtils.asSetWithoutNulls(outputFile, dotdFile, gcnoFile, dwoFile, ltoIndexingFile),
         env);
     Preconditions.checkArgument(!shouldPruneModules || shouldScanIncludes);
@@ -276,7 +279,8 @@ public class CppCompileAction extends AbstractAction
     this.useHeaderModules = useHeaderModules;
     this.ccCompilationContext = ccCompilationContext;
     this.builtinIncludeFiles = builtinIncludeFiles;
-    this.additionalIncludeScanningRoots = ImmutableList.copyOf(additionalIncludeScanningRoots);
+    this.additionalIncludeScanningRoots =
+        Preconditions.checkNotNull(additionalIncludeScanningRoots);
     this.compileCommandLine =
         buildCommandLine(
             sourceFile, coptsFilter, actionName, dotdFile, featureConfiguration, variables);
@@ -301,7 +305,6 @@ public class CppCompileAction extends AbstractAction
               .getParentDirectory()
               .getChild(outputFile.getFilename() + ".params");
     }
-    this.alternateIncludeScanningDataInputs = cppSemantics.getAlternateIncludeScanningDataInputs();
   }
 
   static CompileCommandLine buildCommandLine(
@@ -374,7 +377,7 @@ public class CppCompileAction extends AbstractAction
    * {@link #discoverInputs(ActionExecutionContext)} must be called before this method is called on
    * each action execution.
    */
-  public Iterable<Artifact> getAdditionalInputs() {
+  public NestedSet<Artifact> getAdditionalInputs() {
     return Preconditions.checkNotNull(additionalInputs);
   }
 
@@ -390,9 +393,11 @@ public class CppCompileAction extends AbstractAction
 
   @Override
   @VisibleForTesting // productionVisibility = Visibility.PRIVATE
-  public Iterable<Artifact> getPossibleInputsForTesting() {
-    return Iterables.concat(
-        getInputs(), ccCompilationContext.getDeclaredIncludeSrcs(), additionalPrunableHeaders);
+  public NestedSet<Artifact> getPossibleInputsForTesting() {
+    return NestedSetBuilder.fromNestedSet(getInputs())
+        .addTransitive(ccCompilationContext.getDeclaredIncludeSrcs())
+        .addTransitive(additionalPrunableHeaders)
+        .build();
   }
 
   /**
@@ -403,12 +408,12 @@ public class CppCompileAction extends AbstractAction
    * #mandatoryInputs}. Thus, even with include scanning turned off, we pretend that we "discover"
    * these headers.
    */
-  private Iterable<Artifact> findUsedHeaders(
+  private NestedSet<Artifact> findUsedHeaders(
       ActionExecutionContext actionExecutionContext, IncludeScanningHeaderData headerData)
       throws ActionExecutionException, InterruptedException {
     try {
       try {
-        ListenableFuture<Iterable<Artifact>> future =
+        ListenableFuture<List<Artifact>> future =
             actionExecutionContext
                 .getContext(CppIncludeScanningContext.class)
                 .findAdditionalInputs(this, actionExecutionContext, includeProcessing, headerData);
@@ -417,7 +422,7 @@ public class CppCompileAction extends AbstractAction
               .addTransitive(additionalPrunableHeaders)
               .build();
         }
-        return CollectionUtils.makeImmutable(future.get());
+        return NestedSetBuilder.wrap(Order.STABLE_ORDER, future.get());
       } catch (ExecutionException e) {
         Throwables.throwIfInstanceOf(e.getCause(), ExecException.class);
         Throwables.throwIfInstanceOf(e.getCause(), InterruptedException.class);
@@ -445,11 +450,11 @@ public class CppCompileAction extends AbstractAction
    * invalid from {@code headers}. That way, the compiler does not get access to them (assuming a
    * sand-boxed environment) and can diagnose the missing headers.
    */
-  private Iterable<Artifact> filterDiscoveredHeaders(
+  private NestedSet<Artifact> filterDiscoveredHeaders(
       ActionExecutionContext actionExecutionContext,
-      Iterable<Artifact> headers,
+      NestedSet<Artifact> headers,
       List<CcCompilationContext.HeaderInfo> headerInfo) {
-    Set<Artifact> undeclaredHeaders = Sets.newHashSet(headers);
+    Set<Artifact> undeclaredHeaders = Sets.newHashSet(headers.toList());
 
     // Remove all declared headers and find out which modules were used while at it.
     CcCompilationContext.HeadersAndModules headersAndModules =
@@ -466,7 +471,7 @@ public class CppCompileAction extends AbstractAction
     for (Artifact source : getIncludeScannerSources()) {
       undeclaredHeaders.remove(source);
     }
-    for (Artifact header : additionalPrunableHeaders) {
+    for (Artifact header : additionalPrunableHeaders.toList()) {
       undeclaredHeaders.remove(header);
     }
     if (undeclaredHeaders.isEmpty()) {
@@ -495,47 +500,9 @@ public class CppCompileAction extends AbstractAction
       return headers;
     }
 
-    return ImmutableList.copyOf(Iterables.filter(headers, header -> !missing.contains(header)));
-  }
-
-  /**
-   * This method returns null when a required SkyValue is missing and a Skyframe restart is
-   * required.
-   */
-  @Nullable
-  private static IncludeScanningHeaderData.Builder createIncludeScanningHeaderData(
-      SkyFunction.Environment env, Iterable<Artifact> inputs) throws InterruptedException {
-    Map<PathFragment, Artifact> pathToLegalOutputArtifact = new HashMap<>();
-    ArrayList<Artifact> treeArtifacts = new ArrayList<>();
-    for (Artifact a : inputs) {
-      IncludeScanningHeaderDataHelper.handleArtifact(a, pathToLegalOutputArtifact, treeArtifacts);
-    }
-    if (!IncludeScanningHeaderDataHelper.handleTreeArtifacts(
-        env, pathToLegalOutputArtifact, treeArtifacts)) {
-      return null;
-    }
-    return new IncludeScanningHeaderData.Builder(
-        Collections.unmodifiableMap(pathToLegalOutputArtifact),
-        Collections.unmodifiableSet(CompactHashSet.create()));
-  }
-
-  /**
-   * This method returns null when a required SkyValue is missing and a Skyframe restart is
-   * required.
-   */
-  @Nullable
-  public IncludeScanningHeaderData.Builder createIncludeScanningHeaderData(
-      SkyFunction.Environment env,
-      boolean usePic,
-      boolean useHeaderModules,
-      List<CcCompilationContext.HeaderInfo> headerInfo)
-      throws InterruptedException {
-    if (alternateIncludeScanningDataInputs != null) {
-      return createIncludeScanningHeaderData(env, alternateIncludeScanningDataInputs);
-    } else {
-      return ccCompilationContext.createIncludeScanningHeaderData(
-          env, usePic, useHeaderModules, headerInfo);
-    }
+    return NestedSetBuilder.wrap(
+        Order.STABLE_ORDER,
+        Iterables.filter(headers.toList(), header -> !missing.contains(header)));
   }
 
   /**
@@ -544,7 +511,7 @@ public class CppCompileAction extends AbstractAction
    */
   @Nullable
   @Override
-  public Iterable<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
+  public NestedSet<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     Preconditions.checkArgument(!sourceFile.isFileType(CppFileTypes.CPP_MODULE));
 
@@ -566,7 +533,7 @@ public class CppCompileAction extends AbstractAction
       List<CcCompilationContext.HeaderInfo> headerInfo =
           ccCompilationContext.getTransitiveHeaderInfos();
       IncludeScanningHeaderData.Builder includeScanningHeaderData =
-          createIncludeScanningHeaderData(
+          ccCompilationContext.createIncludeScanningHeaderData(
               actionExecutionContext.getEnvironmentForDiscoveringInputs(),
               usePic,
               useHeaderModules,
@@ -582,7 +549,12 @@ public class CppCompileAction extends AbstractAction
                   .setCmdlineIncludes(getCmdlineIncludes(options))
                   .build());
       if (needsIncludeValidation) {
-        verifyActionIncludePaths(systemIncludeDirs);
+        verifyActionIncludePaths(
+            systemIncludeDirs,
+            actionExecutionContext
+                .getOptions()
+                .getOptions(StarlarkSemanticsOptions.class)
+                .experimentalSiblingRepositoryLayout);
       }
 
       if (!shouldScanIncludes) {
@@ -625,7 +597,7 @@ public class CppCompileAction extends AbstractAction
       // (transitive, which is a linear scan).
       // We get a collection view of the NestedSet in a way that can throw an InterruptedException
       // because a NestedSet may contain a future.
-      for (Artifact module : transitive.toListInterruptibly()) {
+      for (Artifact module : modulesToListInterruptibly(transitive)) {
         topLevel.remove(module);
       }
     }
@@ -637,14 +609,41 @@ public class CppCompileAction extends AbstractAction
     }
     topLevelModules = topLevelModulesBuilder.build();
     discoveredModulesBuilder.addTransitive(topLevelModules);
-    NestedSet<Artifact> discoveredModules = discoveredModulesBuilder.build();
+    NestedSet<Artifact> discoveredModules = discoveredModulesBuilder.buildInterruptibly();
 
-    additionalInputs = IterablesChain.concat(additionalInputs, discoveredModules);
+    additionalInputs =
+        NestedSetBuilder.fromNestedSet(additionalInputs).addTransitive(discoveredModules).build();
     if (outputFile.isFileType(CppFileTypes.CPP_MODULE)) {
       this.discoveredModules = discoveredModules;
     }
     usedModules = null;
     return additionalInputs;
+  }
+
+  private static ImmutableList<? extends Artifact> modulesToListInterruptibly(
+      NestedSet<? extends Artifact> nestedSet) throws InterruptedException {
+    Stopwatch blockedStopwatch = Stopwatch.createStarted();
+    ImmutableList<? extends Artifact> modules;
+    try {
+      modules = nestedSet.toListInterruptibly();
+    } catch (InterruptedException e) {
+      Duration blockedDuration = blockedStopwatch.elapsed();
+      if (BLOCKED_NESTED_SET_EXPANSION_THRESHOLD.compareTo(blockedDuration) < 0) {
+        logger.info(
+            String.format(
+                "Spent %d milliseconds doing nested set expansion, interrupted",
+                blockedDuration.toMillis()));
+      }
+      throw e;
+    }
+    Duration blockedDuration = blockedStopwatch.elapsed();
+    if (BLOCKED_NESTED_SET_EXPANSION_THRESHOLD.compareTo(blockedDuration) < 0) {
+      logger.info(
+          String.format(
+              "Spent %d milliseconds doing nested set expansion, %d elements",
+              blockedDuration.toMillis(), modules.size()));
+    }
+    return modules;
   }
 
   @Override
@@ -800,7 +799,7 @@ public class CppCompileAction extends AbstractAction
    */
   @VisibleForTesting
   public ImmutableCollection<String> getDefines() {
-    return ccCompilationContext.getDefines();
+    return ccCompilationContext.getDefines().toList();
   }
 
   @Override
@@ -840,6 +839,23 @@ public class CppCompileAction extends AbstractAction
     return compileCommandLine.getArguments(paramFilePath, overwrittenVariables);
   }
 
+  @Override
+  public Sequence<CommandLineArgsApi> getStarlarkArgs() throws EvalException {
+    ImmutableSet<Artifact> directoryInputs =
+        getInputs().toList().stream()
+            .filter(artifact -> artifact.isDirectory())
+            .collect(ImmutableSet.toImmutableSet());
+
+    CommandLine commandLine = compileCommandLine.getFilteredFeatureConfigurationCommandLine(this);
+
+    CommandLineAndParamFileInfo commandLineAndParamFileInfo =
+        new CommandLineAndParamFileInfo(commandLine, /* paramFileInfo= */ null);
+
+    Args args = Args.forRegisteredAction(commandLineAndParamFileInfo, directoryInputs);
+
+    return StarlarkList.immutableCopyOf(ImmutableList.of(args));
+  }
+
   public ParamFileActionInput getParamFileActionInput() {
     return paramFileActionInput;
   }
@@ -866,11 +882,11 @@ public class CppCompileAction extends AbstractAction
     info.setOutputFile(outputFile.getExecPathString());
     info.setSourceFile(getSourceFile().getExecPathString());
     if (inputsDiscovered()) {
-      info.addAllSourcesAndHeaders(Artifact.toExecPaths(getInputs()));
+      info.addAllSourcesAndHeaders(Artifact.toExecPaths(getInputs().toList()));
     } else {
       info.addSourcesAndHeaders(getSourceFile().getExecPathString());
       info.addAllSourcesAndHeaders(
-          Artifact.toExecPaths(ccCompilationContext.getDeclaredIncludeSrcs()));
+          Artifact.toExecPaths(ccCompilationContext.getDeclaredIncludeSrcs().toList()));
     }
     // TODO(ulfjack): Extra actions currently ignore the client environment.
     for (Map.Entry<String, String> envVariable :
@@ -921,15 +937,15 @@ public class CppCompileAction extends AbstractAction
    */
   @VisibleForTesting
   public void validateInclusions(
-      ActionExecutionContext actionExecutionContext, Iterable<Artifact> inputsForValidation)
+      ActionExecutionContext actionExecutionContext, NestedSet<Artifact> inputsForValidation)
       throws ActionExecutionException {
     IncludeProblems errors = new IncludeProblems();
     Set<Artifact> allowedIncludes = new HashSet<>();
     for (Artifact input :
         Iterables.concat(
-            mandatoryInputs,
-            ccCompilationContext.getDeclaredIncludeSrcs(),
-            additionalPrunableHeaders)) {
+            mandatoryInputs.toList(),
+            ccCompilationContext.getDeclaredIncludeSrcs().toList(),
+            additionalPrunableHeaders.toList())) {
       if (input.isMiddlemanArtifact() || input.isTreeArtifact()) {
         actionExecutionContext.getArtifactExpander().expand(input, allowedIncludes);
       }
@@ -944,9 +960,14 @@ public class CppCompileAction extends AbstractAction
     // Copy the nested sets to hash sets for fast contains checking, but do so lazily.
     // Avoid immutable sets here to limit memory churn.
     Set<PathFragment> declaredIncludeDirs = null;
-    for (Artifact input : inputsForValidation) {
+    for (Artifact input : inputsForValidation.toList()) {
       // Only declared modules are added to an action and so they are always valid.
       if (input.isFileType(CppFileTypes.CPP_MODULE)) {
+        continue;
+      }
+      // TODO(b/145253507): Exclude objc module maps from check, due to bad interaction with
+      // local_objc_modules feature.
+      if (input.isFileType(CppFileTypes.OBJC_MODULE_MAP)) {
         continue;
       }
       if (allowedIncludes.contains(input)) {
@@ -957,7 +978,8 @@ public class CppCompileAction extends AbstractAction
         continue;
       }
       if (declaredIncludeDirs == null) {
-        declaredIncludeDirs = Sets.newHashSet(ccCompilationContext.getDeclaredIncludeDirs());
+        declaredIncludeDirs =
+            Sets.newHashSet(ccCompilationContext.getDeclaredIncludeDirs().toList());
       }
       if (!isDeclaredIn(cppConfiguration, actionExecutionContext, input, declaredIncludeDirs)) {
         errors.add(input.getExecPath().toString());
@@ -972,11 +994,12 @@ public class CppCompileAction extends AbstractAction
             System.err.println("INFO: Include(s) were OK for '" + getSourceFile()
                 + "', declared srcs:");
           }
-          for (Artifact a : ccCompilationContext.getDeclaredIncludeSrcs()) {
+          for (Artifact a : ccCompilationContext.getDeclaredIncludeSrcs().toList()) {
             System.err.println("  '" + a.toDetailString() + "'");
           }
           System.err.println(" or under declared dirs:");
-          for (PathFragment f : Sets.newTreeSet(ccCompilationContext.getDeclaredIncludeDirs())) {
+          for (PathFragment f :
+              Sets.newTreeSet(ccCompilationContext.getDeclaredIncludeDirs().toList())) {
             System.err.println("  '" + f + "'");
           }
           System.err.println(" with prefixes:");
@@ -995,7 +1018,8 @@ public class CppCompileAction extends AbstractAction
   }
 
   @VisibleForTesting
-  void verifyActionIncludePaths(List<PathFragment> systemIncludeDirs)
+  void verifyActionIncludePaths(
+      List<PathFragment> systemIncludeDirs, boolean siblingRepositoryLayout)
       throws ActionExecutionException {
     ImmutableSet<PathFragment> ignoredDirs = ImmutableSet.copyOf(getValidationIgnoredDirs());
     // We currently do not check the output of:
@@ -1012,9 +1036,16 @@ public class CppCompileAction extends AbstractAction
           || FileSystemUtils.startsWithAny(includePath, ignoredDirs)) {
         continue;
       }
-      // One starting ../ is okay for getting to a sibling repository.
-      if (includePath.startsWith(LabelConstants.EXTERNAL_PATH_PREFIX)) {
-        includePath = includePath.relativeTo(LabelConstants.EXTERNAL_PATH_PREFIX);
+
+      // Two conditions:
+      // 1. Paths cannot be absolute (e.g. multiple uplevels to /etc/passwd)
+      // 2. For relative paths, one starting ../ is okay for getting to a sibling repository.
+      PathFragment prefix =
+          siblingRepositoryLayout
+              ? LabelConstants.EXPERIMENTAL_EXTERNAL_PATH_PREFIX
+              : LabelConstants.EXTERNAL_PATH_PREFIX;
+      if (includePath.startsWith(prefix)) {
+        includePath = includePath.relativeTo(prefix);
       }
       if (includePath.isAbsolute() || includePath.containsUplevelReferences()) {
         throw new ActionExecutionException(
@@ -1100,13 +1131,18 @@ public class CppCompileAction extends AbstractAction
    */
   @VisibleForTesting // productionVisibility = Visibility.PRIVATE
   @ThreadCompatible
-  final void updateActionInputs(Iterable<Artifact> discoveredInputs) {
+  final void updateActionInputs(NestedSet<Artifact> discoveredInputs) {
     Preconditions.checkState(
         discoversInputs(), "Can't call if not discovering inputs: %s %s", discoveredInputs, this);
     try (SilentCloseable c = Profiler.instance().profile(ProfilerTask.ACTION_UPDATE, describe())) {
-      Iterable<Artifact> fixed = IterablesChain.concat(mandatoryInputs, inputsForInvalidation);
-      super.updateInputs(
-          discoveredInputs == null ? fixed : IterablesChain.concat(fixed, discoveredInputs));
+      NestedSetBuilder<Artifact> inputsBuilder =
+          NestedSetBuilder.<Artifact>stableOrder()
+              .addTransitive(mandatoryInputs)
+              .addTransitive(inputsForInvalidation);
+      if (discoveredInputs != null) {
+        inputsBuilder.addTransitive(discoveredInputs);
+      }
+      super.updateInputs(inputsBuilder.build());
     }
   }
 
@@ -1128,9 +1164,10 @@ public class CppCompileAction extends AbstractAction
    * Extracts all module (.pcm) files from potentialModules and returns a Variables object where
    * their exec paths are added to the value "module_files".
    */
-  private static CcToolchainVariables getOverwrittenVariables(Iterable<Artifact> potentialModules) {
+  private static CcToolchainVariables getOverwrittenVariables(
+      NestedSet<Artifact> potentialModules) {
     ImmutableList.Builder<String> usedModulePaths = ImmutableList.builder();
-    for (Artifact input : potentialModules) {
+    for (Artifact input : potentialModules.toList()) {
       if (input.isFileType(CppFileTypes.CPP_MODULE)) {
         usedModulePaths.add(input.getExecPathString());
       }
@@ -1140,19 +1177,19 @@ public class CppCompileAction extends AbstractAction
     return variableBuilder.build();
   }
 
+  public CcToolchainVariables getOverwrittenVariables() {
+    return overwrittenVariables;
+  }
+
   @Override
-  public Iterable<Artifact> getAllowedDerivedInputs() {
-    Set<Artifact> result = CompactHashSet.create();
-    addNonSources(result, mandatoryInputs);
-    addNonSources(result, additionalPrunableHeaders);
-    addNonSources(result, inputsForInvalidation);
-    addNonSources(result, getDeclaredIncludeSrcs());
-    addNonSources(result, ccCompilationContext.getTransitiveModules(usePic));
-    Artifact artifact = getSourceFile();
-    if (!artifact.isSourceArtifact()) {
-      result.add(artifact);
-    }
-    return unmodifiableSet(result);
+  public NestedSet<Artifact> getAllowedDerivedInputs() {
+    return NestedSetBuilder.fromNestedSet(mandatoryInputs)
+        .addTransitive(additionalPrunableHeaders)
+        .addTransitive(inputsForInvalidation)
+        .addTransitive(getDeclaredIncludeSrcs())
+        .addTransitive(ccCompilationContext.getTransitiveModules(usePic))
+        .add(getSourceFile())
+        .build();
   }
 
   /**
@@ -1163,21 +1200,14 @@ public class CppCompileAction extends AbstractAction
    * action cache hit.
    */
   @Override
-  public synchronized void updateInputs(Iterable<Artifact> inputs) {
+  public synchronized void updateInputs(NestedSet<Artifact> inputs) {
     super.updateInputs(inputs);
     if (outputFile.isFileType(CppFileTypes.CPP_MODULE)) {
       discoveredModules =
           NestedSetBuilder.wrap(
               Order.STABLE_ORDER,
-              Iterables.filter(inputs, input -> input.isFileType(CppFileTypes.CPP_MODULE)));
-    }
-  }
-
-  private static void addNonSources(Set<Artifact> result, Iterable<Artifact> artifacts) {
-    for (Artifact a : artifacts) {
-      if (!a.isSourceArtifact()) {
-        result.add(a);
-      }
+              Iterables.filter(
+                  inputs.toList(), input -> input.isFileType(CppFileTypes.CPP_MODULE)));
     }
   }
 
@@ -1247,7 +1277,7 @@ public class CppCompileAction extends AbstractAction
       NestedSet<Artifact> prunableHeaders,
       NestedSet<PathFragment> declaredIncludeDirs,
       List<PathFragment> builtInIncludeDirectories,
-      Iterable<Artifact> inputsForInvalidation,
+      NestedSet<Artifact> inputsForInvalidation,
       boolean validateTopLevelHeaderInclusions) {
     fp.addUUID(actionClassId);
     env.addTo(fp);
@@ -1273,9 +1303,7 @@ public class CppCompileAction extends AbstractAction
 
     // This is needed for CppLinkstampCompile.
     fp.addInt(0);
-    for (Artifact artifact : inputsForInvalidation) {
-      fp.addString(artifact.expandToCommandLine());
-    }
+    actionKeyContext.addNestedSetToFingerprint(fp, inputsForInvalidation);
   }
 
   private byte[] getCommandLineKey() throws CommandLineExpansionException {
@@ -1349,9 +1377,7 @@ public class CppCompileAction extends AbstractAction
     }
 
     SpawnContinuation spawnContinuation =
-        actionExecutionContext
-            .getContext(SpawnActionContext.class)
-            .beginExecution(spawn, spawnContext);
+        actionExecutionContext.getContext(SpawnStrategy.class).beginExecution(spawn, spawnContext);
     return new CppCompileActionContinuation(
         actionExecutionContext,
         spawnContext,
@@ -1377,19 +1403,16 @@ public class CppCompileAction extends AbstractAction
   protected Spawn createSpawn(Map<String, String> clientEnv) throws ActionExecutionException {
     // Intentionally not adding {@link CppCompileAction#inputsForInvalidation}, those are not needed
     // for execution.
-    ImmutableList.Builder<ActionInput> inputsBuilder =
-        new ImmutableList.Builder<ActionInput>()
-            .addAll(getMandatoryInputs())
-            .addAll(getAdditionalInputs());
+    NestedSetBuilder<ActionInput> inputsBuilder =
+        NestedSetBuilder.<ActionInput>stableOrder()
+            .addTransitive(getMandatoryInputs())
+            .addTransitive(getAdditionalInputs());
     if (getParamFileActionInput() != null) {
       inputsBuilder.add(getParamFileActionInput());
     }
-    ImmutableList<ActionInput> inputs = inputsBuilder.build();
+    NestedSet<ActionInput> inputs = inputsBuilder.build();
 
     ImmutableMap<String, String> executionInfo = getExecutionInfo();
-    ImmutableList.Builder<ActionInput> outputs =
-        ImmutableList.builderWithExpectedSize(getOutputs().size() + 1);
-    outputs.addAll(getOutputs());
     if (getDotdFile() != null && useInMemoryDotdFiles()) {
       /*
        * CppCompileAction does dotd file scanning locally inside the Bazel process and thus
@@ -1415,7 +1438,7 @@ public class CppCompileAction extends AbstractAction
           getEnvironment(clientEnv),
           executionInfo,
           inputs,
-          outputs.build(),
+          getOutputs(),
           estimateResourceConsumptionLocal());
     } catch (CommandLineExpansionException e) {
       throw new ActionExecutionException(
@@ -1433,7 +1456,8 @@ public class CppCompileAction extends AbstractAction
       Path execRoot,
       ArtifactResolver artifactResolver,
       ShowIncludesFilter showIncludesFilterForStdout,
-      ShowIncludesFilter showIncludesFilterForStderr)
+      ShowIncludesFilter showIncludesFilterForStderr,
+      boolean siblingRepositoryLayout)
       throws ActionExecutionException {
     if (!needsDotdInputPruning) {
       return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
@@ -1447,13 +1471,15 @@ public class CppCompileAction extends AbstractAction
             .setSourceFile(getSourceFile())
             .setDependencies(dependencies.build())
             .setPermittedSystemIncludePrefixes(getPermittedSystemIncludePrefixes(execRoot))
-            .setAllowedDerivedinputs(getAllowedDerivedInputs());
+            .setAllowedDerivedInputs(getAllowedDerivedInputs());
 
     if (needsIncludeValidation) {
       discoveryBuilder.shouldValidateInclusions();
     }
 
-    return discoveryBuilder.build().discoverInputsFromDependencies(execRoot, artifactResolver);
+    return discoveryBuilder
+        .build()
+        .discoverInputsFromDependencies(execRoot, artifactResolver, siblingRepositoryLayout);
   }
 
   @VisibleForTesting
@@ -1461,7 +1487,8 @@ public class CppCompileAction extends AbstractAction
       ActionExecutionContext actionExecutionContext,
       Path execRoot,
       ArtifactResolver artifactResolver,
-      byte[] dotDContents)
+      byte[] dotDContents,
+      boolean siblingRepositoryLayout)
       throws ActionExecutionException {
     if (!needsDotdInputPruning || getDotdFile() == null) {
       return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
@@ -1473,13 +1500,15 @@ public class CppCompileAction extends AbstractAction
             .setDependencies(
                 processDepset(actionExecutionContext, execRoot, dotDContents).getDependencies())
             .setPermittedSystemIncludePrefixes(getPermittedSystemIncludePrefixes(execRoot))
-            .setAllowedDerivedinputs(getAllowedDerivedInputs());
+            .setAllowedDerivedInputs(getAllowedDerivedInputs());
 
     if (needsIncludeValidation) {
       discoveryBuilder.shouldValidateInclusions();
     }
 
-    return discoveryBuilder.build().discoverInputsFromDependencies(execRoot, artifactResolver);
+    return discoveryBuilder
+        .build()
+        .discoverInputsFromDependencies(execRoot, artifactResolver, siblingRepositoryLayout);
   }
 
   public DependencySet processDepset(
@@ -1541,12 +1570,12 @@ public class CppCompileAction extends AbstractAction
    */
   @Nullable
   @Override
-  public Iterable<Artifact> getInputFilesForExtraAction(
+  public NestedSet<Artifact> getInputFilesForExtraAction(
       ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     try {
       IncludeScanningHeaderData.Builder includeScanningHeaderData =
-          createIncludeScanningHeaderData(
+          ccCompilationContext.createIncludeScanningHeaderData(
               actionExecutionContext.getEnvironmentForDiscoveringInputs(),
               usePic,
               useHeaderModules,
@@ -1554,15 +1583,14 @@ public class CppCompileAction extends AbstractAction
       if (includeScanningHeaderData == null) {
         return null;
       }
-      Iterable<Artifact> discoveredInputs =
+      NestedSet<Artifact> discoveredInputs =
           findUsedHeaders(
               actionExecutionContext,
               includeScanningHeaderData
                   .setSystemIncludeDirs(getSystemIncludeDirs())
                   .setCmdlineIncludes(getCmdlineIncludes(getCompilerOptions()))
                   .build());
-      return Sets.difference(
-          ImmutableSet.copyOf(discoveredInputs), ImmutableSet.copyOf(getInputs()));
+      return discoveredInputs;
     } catch (CommandLineExpansionException e) {
       throw new ActionExecutionException(
           "failed to generate compile environment variables for rule '"
@@ -1621,13 +1649,13 @@ public class CppCompileAction extends AbstractAction
       message.append('\n');
     }
 
-    for (PathFragment path : ccCompilationContext.getDeclaredIncludeDirs()) {
+    for (PathFragment path : ccCompilationContext.getDeclaredIncludeDirs().toList()) {
       message.append("  Declared include directory: ");
       message.append(ShellEscaper.escapeString(path.getPathString()));
       message.append('\n');
     }
 
-    for (Artifact src : getDeclaredIncludeSrcs()) {
+    for (Artifact src : getDeclaredIncludeSrcs().toList()) {
       message.append("  Declared include source: ");
       message.append(ShellEscaper.escapeString(src.getExecPathString()));
       message.append('\n');
@@ -1686,24 +1714,6 @@ public class CppCompileAction extends AbstractAction
       transitivelyUsedModules.put(module, value.getDiscoveredModules());
     }
     return transitivelyUsedModules.build();
-  }
-
-  private ActionExecutionException printIOExceptionAndConvertToActionExecutionException(
-      ActionExecutionContext actionExecutionContext, IOException e) {
-    // Print the stack trace, otherwise the unexpected I/O error is hard to diagnose.
-    // A stack trace could help with bugs like https://github.com/bazelbuild/bazel/issues/4924
-    String stackTrace = Throwables.getStackTraceAsString(e);
-    actionExecutionContext
-        .getEventHandler()
-        .handle(Event.error("Unexpected I/O exception:\n" + stackTrace));
-    return toActionExecutionException(
-        new EnvironmentalExecException(e), actionExecutionContext.getVerboseFailures());
-  }
-
-  private ActionExecutionException toActionExecutionException(
-      ExecException e, boolean verboseFailures) {
-    String failMessage = getRawProgressMessage();
-    return e.toActionExecutionException(failMessage, verboseFailures, this);
   }
 
   private final class CppCompileActionContinuation extends ActionContinuationOrResult {
@@ -1773,6 +1783,11 @@ public class CppCompileAction extends AbstractAction
       CppIncludeExtractionContext scanningContext =
           actionExecutionContext.getContext(CppIncludeExtractionContext.class);
       Path execRoot = actionExecutionContext.getExecRoot();
+      boolean siblingRepositoryLayout =
+          actionExecutionContext
+              .getOptions()
+              .getOptions(StarlarkSemanticsOptions.class)
+              .experimentalSiblingRepositoryLayout;
 
       NestedSet<Artifact> discoveredInputs;
       if (featureConfiguration.isEnabled(CppRuleClasses.PARSE_SHOWINCLUDES)) {
@@ -1781,14 +1796,16 @@ public class CppCompileAction extends AbstractAction
                 execRoot,
                 scanningContext.getArtifactResolver(),
                 showIncludesFilterForStdout,
-                showIncludesFilterForStderr);
+                showIncludesFilterForStderr,
+                siblingRepositoryLayout);
       } else {
         discoveredInputs =
             discoverInputsFromDotdFiles(
                 actionExecutionContext,
                 execRoot,
                 scanningContext.getArtifactResolver(),
-                dotDContents);
+                dotDContents,
+                siblingRepositoryLayout);
       }
       dotDContents = null; // Garbage collect in-memory .d contents.
 
@@ -1835,7 +1852,11 @@ public class CppCompileAction extends AbstractAction
             }
           }
         } catch (IOException e) {
-          throw printIOExceptionAndConvertToActionExecutionException(actionExecutionContext, e);
+          throw new EnvironmentalExecException(e)
+              .toActionExecutionException(
+                  getRawProgressMessage(),
+                  actionExecutionContext.getVerboseFailures(),
+                  CppCompileAction.this);
         }
       }
     }

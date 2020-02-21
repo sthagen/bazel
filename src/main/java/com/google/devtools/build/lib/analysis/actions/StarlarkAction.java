@@ -26,14 +26,19 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CommandLines;
 import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
+import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import java.io.BufferedReader;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -47,7 +52,7 @@ import javax.annotation.Nullable;
 public final class StarlarkAction extends SpawnAction {
 
   private final Optional<Artifact> unusedInputsList;
-  private final Iterable<Artifact> allInputs;
+  private final NestedSet<Artifact> allInputs;
 
   /**
    * Constructs a StarlarkAction using direct initialization arguments.
@@ -76,8 +81,8 @@ public final class StarlarkAction extends SpawnAction {
    */
   public StarlarkAction(
       ActionOwner owner,
-      Iterable<Artifact> tools,
-      Iterable<Artifact> inputs,
+      NestedSet<Artifact> tools,
+      NestedSet<Artifact> inputs,
       Iterable<Artifact> outputs,
       Artifact primaryOutput,
       ResourceSet resourceSet,
@@ -128,12 +133,12 @@ public final class StarlarkAction extends SpawnAction {
   }
 
   @Override
-  public Iterable<Artifact> getAllowedDerivedInputs() {
+  public NestedSet<Artifact> getAllowedDerivedInputs() {
     return getInputs();
   }
 
   @Override
-  public Iterable<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
+  public NestedSet<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     // We need to "re-discover" all the original inputs: the unused ones that were removed
     // might now be needed.
@@ -143,28 +148,39 @@ public final class StarlarkAction extends SpawnAction {
 
   private InputStream getUnusedInputListInputStream(
       ActionExecutionContext actionExecutionContext, List<SpawnResult> spawnResults)
-      throws IOException {
+      throws IOException, ExecException {
 
     // Check if the file is in-memory.
     // Note: SpawnActionContext guarantees that the first list entry exists and corresponds to the
     // executed spawn.
-    InputStream inputStream = spawnResults.get(0).getInMemoryOutput(unusedInputsList.get());
+    Artifact unusedInputsListArtifact = unusedInputsList.get();
+    InputStream inputStream = spawnResults.get(0).getInMemoryOutput(unusedInputsListArtifact);
     if (inputStream != null) {
       return inputStream;
     }
     // Fallback to reading from disk.
-    return actionExecutionContext.getPathResolver().toPath(unusedInputsList.get()).getInputStream();
+    try {
+      return actionExecutionContext
+          .getPathResolver()
+          .toPath(unusedInputsListArtifact)
+          .getInputStream();
+    } catch (FileNotFoundException e) {
+      throw new UserExecException(
+          "Action did not create expected output file listing unused inputs: "
+              + unusedInputsListArtifact.getExecPathString(),
+          e);
+    }
   }
 
   @Override
   protected void afterExecute(
       ActionExecutionContext actionExecutionContext, List<SpawnResult> spawnResults)
-      throws IOException {
+      throws IOException, ExecException {
     if (!unusedInputsList.isPresent()) {
       return;
     }
     Map<String, Artifact> usedInputs = new HashMap<>();
-    for (Artifact input : allInputs) {
+    for (Artifact input : allInputs.toList()) {
       usedInputs.put(input.getExecPathString(), input);
     }
     try (BufferedReader br =
@@ -180,7 +196,7 @@ public final class StarlarkAction extends SpawnAction {
         usedInputs.remove(line);
       }
     }
-    updateInputs(usedInputs.values());
+    updateInputs(NestedSetBuilder.wrap(Order.STABLE_ORDER, usedInputs.values()));
   }
 
   @Override
@@ -189,9 +205,8 @@ public final class StarlarkAction extends SpawnAction {
   }
 
   @Override
-  public Iterable<Artifact> getInputFilesForExtraAction(
-      ActionExecutionContext actionExecutionContext)
-      throws ActionExecutionException, InterruptedException {
+  public NestedSet<Artifact> getInputFilesForExtraAction(
+      ActionExecutionContext actionExecutionContext) {
     return allInputs;
   }
 

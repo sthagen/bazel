@@ -50,7 +50,8 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildSetting;
-import com.google.devtools.build.lib.packages.InfoInterface;
+import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.TargetUtils;
@@ -58,8 +59,10 @@ import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.syntax.EvalException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /**
@@ -76,12 +79,15 @@ public final class RuleConfiguredTargetBuilder {
   private final TransitiveInfoProviderMapBuilder providersBuilder =
       new TransitiveInfoProviderMapBuilder();
   private final Map<String, NestedSetBuilder<Artifact>> outputGroupBuilders = new TreeMap<>();
+  private final ImmutableList.Builder<Artifact> additionalTestActionTools =
+      new ImmutableList.Builder<>();
 
   /** These are supported by all configured targets and need to be specially handled. */
   private NestedSet<Artifact> filesToBuild = NestedSetBuilder.emptySet(Order.STABLE_ORDER);
 
   private NestedSetBuilder<Artifact> filesToRunBuilder = NestedSetBuilder.stableOrder();
   private RunfilesSupport runfilesSupport;
+  private Runfiles persistentTestRunnerRunfiles;
   private Artifact executable;
   private ImmutableSet<ActionAnalysisMetadata> actionsWithoutExtraAction = ImmutableSet.of();
 
@@ -108,24 +114,7 @@ public final class RuleConfiguredTargetBuilder {
       return null;
     }
 
-    if (ruleContext
-            .getConfiguration()
-            .getOptions()
-            .get(CoreOptions.class)
-            .includeRequiredConfigFragmentsProvider
-        != IncludeConfigFragmentsEnum.OFF) {
-      ImmutableSet.Builder<String> requiredFragments = ImmutableSet.builder();
-      requiredFragments.addAll(ruleContext.getRequiredConfigFragments());
-      if (providersBuilder.contains(ConfigMatchingProvider.class)) {
-        // config_setting discovers extra requirements through its "values = {'some_option': ...}"
-        // references. Make sure those are included here.
-        requiredFragments.addAll(
-            providersBuilder
-                .getProvider(ConfigMatchingProvider.class)
-                .getRequiredFragmentOptions());
-      }
-      addProvider(new RequiredConfigFragmentsProvider(requiredFragments.build()));
-    }
+    maybeAddRequiredConfigFragmentsProvider();
 
     NestedSetBuilder<Artifact> runfilesMiddlemenBuilder = NestedSetBuilder.stableOrder();
     if (runfilesSupport != null) {
@@ -226,7 +215,9 @@ public final class RuleConfiguredTargetBuilder {
           ruleContext
               .attributes()
               .get(SKYLARK_BUILD_SETTING_DEFAULT_ATTR_NAME, buildSetting.getType());
-      addProvider(BuildSettingProvider.class, new BuildSettingProvider(buildSetting, defaultValue));
+      addProvider(
+          BuildSettingProvider.class,
+          new BuildSettingProvider(buildSetting, defaultValue, ruleContext.getLabel()));
     }
 
     TransitiveInfoProviderMap providers = providersBuilder.build();
@@ -258,6 +249,56 @@ public final class RuleConfiguredTargetBuilder {
         providers,
         generatingActions.getActions(),
         generatingActions.getArtifactsByOutputLabel());
+  }
+
+  /**
+   * Adds {@link RequiredConfigFragmentsProvider} if {@link
+   * CoreOptions#includeRequiredConfigFragmentsProvider} isn't {@link
+   * CoreOptions.IncludeConfigFragmentsEnum#OFF}.
+   *
+   * <p>See {@link ConfiguredTargetFactory#getRequiredConfigFragments} for a description of the
+   * meaning of this provider's content. That method populates {@link
+   * RuleContext#getRequiredConfigFragments}, which we read here. We add to that any additional
+   * config state that is only known to be required after the rule's analysis function has finished.
+   * In particular, if the current rule is a {@code config_setting}, we add as a direct requirement
+   * the config state that it matches.
+   */
+  private void maybeAddRequiredConfigFragmentsProvider() {
+    if (ruleContext
+            .getConfiguration()
+            .getOptions()
+            .get(CoreOptions.class)
+            .includeRequiredConfigFragmentsProvider
+        == IncludeConfigFragmentsEnum.OFF) {
+      return;
+    }
+
+    ImmutableSet.Builder<String> requiredFragments = ImmutableSet.builder();
+    requiredFragments.addAll(ruleContext.getRequiredConfigFragments());
+
+    if (providersBuilder.contains(ConfigMatchingProvider.class)) {
+      // config_setting discovers extra requirements through its "values = {'some_option': ...}"
+      // references. Make sure those are included here.
+      requiredFragments.addAll(
+          providersBuilder.getProvider(ConfigMatchingProvider.class).getRequiredFragmentOptions());
+    }
+
+    if (ruleContext.getRule().isAttrDefined("feature_flags", BuildType.LABEL_KEYED_STRING_DICT)) {
+      // Sad hack to make android_binary rules list the feature flags they set.
+      // TODO(gregce): move this to AndroidBinary.java. This requires some more coordination to
+      // make sure we don't add a RequiredConfigFragmentsProvider both there and here, which is
+      // technically a violation of TransitiveInfoProviderMapBuilder.put.
+      requiredFragments.addAll(
+          ruleContext
+              .attributes()
+              .get("feature_flags", BuildType.LABEL_KEYED_STRING_DICT)
+              .keySet()
+              .stream()
+              .map(label -> label.toString())
+              .collect(Collectors.toList()));
+    }
+
+    addProvider(new RequiredConfigFragmentsProvider(requiredFragments.build()));
   }
 
   private NestedSet<Label> transitiveLabels() {
@@ -325,6 +366,9 @@ public final class RuleConfiguredTargetBuilder {
       NestedSet<Artifact> runfilesMiddlemen, NestedSet<Artifact> filesToBuild) {
     filesToRunBuilder.addTransitive(filesToBuild);
     filesToRunBuilder.addTransitive(runfilesMiddlemen);
+    if (executable != null && ruleContext.getRule().getRuleClassObject().isSkylark()) {
+      filesToRunBuilder.add(executable);
+    }
     return filesToRunBuilder.build();
   }
 
@@ -379,9 +423,10 @@ public final class RuleConfiguredTargetBuilder {
     TestParams testParams =
         testActionBuilder
             .setFilesToRunProvider(filesToRunProvider)
+            .setPersistentTestRunnerRunfiles(persistentTestRunnerRunfiles)
+            .addTools(additionalTestActionTools.build())
             .setExecutionRequirements(
-                (ExecutionInfo) providersBuilder
-                    .getProvider(ExecutionInfo.PROVIDER.getKey()))
+                (ExecutionInfo) providersBuilder.getProvider(ExecutionInfo.PROVIDER.getKey()))
             .setShardCount(explicitShardCount)
             .build();
     ImmutableList<String> testTags = ImmutableList.copyOf(ruleContext.getRule().getRuleTags());
@@ -457,9 +502,9 @@ public final class RuleConfiguredTargetBuilder {
    * <p>Has special handling for {@link OutputGroupInfo}: that provider is not added from Skylark
    * directly, instead its output groups are added.
    *
-   * <p>Use {@link #addNativeDeclaredProvider(InfoInterface)} in definitions of native rules.
+   * <p>Use {@link #addNativeDeclaredProvider(Info)} in definitions of native rules.
    */
-  public RuleConfiguredTargetBuilder addSkylarkDeclaredProvider(InfoInterface provider)
+  public RuleConfiguredTargetBuilder addSkylarkDeclaredProvider(Info provider)
       throws EvalException {
     Provider constructor = provider.getProvider();
     if (!constructor.isExported()) {
@@ -481,10 +526,10 @@ public final class RuleConfiguredTargetBuilder {
    * Adds "declared providers" defined in native code to the rule. Use this method for declared
    * providers in definitions of native rules.
    *
-   * <p>Use {@link #addSkylarkDeclaredProvider(InfoInterface)} for Skylark rule implementations.
+   * <p>Use {@link #addSkylarkDeclaredProvider(Info)} for Skylark rule implementations.
    */
-  public RuleConfiguredTargetBuilder addNativeDeclaredProviders(Iterable<InfoInterface> providers) {
-    for (InfoInterface provider : providers) {
+  public RuleConfiguredTargetBuilder addNativeDeclaredProviders(Iterable<Info> providers) {
+    for (Info provider : providers) {
       addNativeDeclaredProvider(provider);
     }
     return this;
@@ -494,9 +539,9 @@ public final class RuleConfiguredTargetBuilder {
    * Adds a "declared provider" defined in native code to the rule. Use this method for declared
    * providers in definitions of native rules.
    *
-   * <p>Use {@link #addSkylarkDeclaredProvider(InfoInterface)} for Skylark rule implementations.
+   * <p>Use {@link #addSkylarkDeclaredProvider(Info)} for Skylark rule implementations.
    */
-  public RuleConfiguredTargetBuilder addNativeDeclaredProvider(InfoInterface provider) {
+  public RuleConfiguredTargetBuilder addNativeDeclaredProvider(Info provider) {
     Provider constructor = provider.getProvider();
     Preconditions.checkState(constructor.isExported());
     providersBuilder.put(provider);
@@ -535,6 +580,16 @@ public final class RuleConfiguredTargetBuilder {
       RunfilesSupport runfilesSupport, Artifact executable) {
     this.runfilesSupport = runfilesSupport;
     this.executable = executable;
+    return this;
+  }
+
+  public RuleConfiguredTargetBuilder setPersistentTestRunnerRunfiles(Runfiles testSupportRunfiles) {
+    this.persistentTestRunnerRunfiles = testSupportRunfiles;
+    return this;
+  }
+
+  public RuleConfiguredTargetBuilder addTestActionTools(List<Artifact> tools) {
+    this.additionalTestActionTools.addAll(tools);
     return this;
   }
 

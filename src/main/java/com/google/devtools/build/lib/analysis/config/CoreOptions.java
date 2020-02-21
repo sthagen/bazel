@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Converters;
+import com.google.devtools.common.options.Converters.BooleanConverter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDefinition;
@@ -563,7 +564,7 @@ public class CoreOptions extends FragmentOptions implements Cloneable {
 
   @Option(
       name = "analysis_testing_deps_limit",
-      defaultValue = "500",
+      defaultValue = "600",
       documentationCategory = OptionDocumentationCategory.TESTING,
       effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
       help =
@@ -751,7 +752,7 @@ public class CoreOptions extends FragmentOptions implements Cloneable {
         OptionEffectTag.LOADING_AND_ANALYSIS
       },
       help = "Whether to use graphless query and disable output ordering.")
-  public boolean useGraphlessQuery;
+  public TriState useGraphlessQuery;
 
   @Option(
       name = "experimental_inmemory_unused_inputs_list",
@@ -789,6 +790,43 @@ public class CoreOptions extends FragmentOptions implements Cloneable {
               + "build")
   public IncludeConfigFragmentsEnum includeRequiredConfigFragmentsProvider;
 
+  @Option(
+      name = "experimental_inprocess_symlink_creation",
+      defaultValue = "false",
+      converter = BooleanConverter.class,
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.EXECUTION},
+      help = "Whether to make direct file system calls to create symlink trees")
+  public boolean inprocessSymlinkCreation;
+
+  @Option(
+      name = "experimental_skip_runfiles_manifests",
+      defaultValue = "false",
+      converter = BooleanConverter.class,
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.HIDDEN,
+      effectTags = {
+        OptionEffectTag.LOADING_AND_ANALYSIS,
+        OptionEffectTag.EXECUTION,
+        OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        OptionEffectTag.AFFECTS_OUTPUTS
+      },
+      help =
+          "If enabled, Bazel does not create runfiles symlink manifests. This flag is ignored "
+              + "if --experimental_enable_runfiles is set to false.")
+  public boolean skipRunfilesManifests;
+
+  @Option(
+      name = "experimental_remotable_source_manifests",
+      defaultValue = "false",
+      converter = BooleanConverter.class,
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.EXECUTION},
+      help = "Whether to make source manifest actions remotable")
+  public boolean remotableSourceManifestActions;
+
   /** Ways configured targets may provide the {@link BuildConfiguration.Fragment}s they require. */
   public enum IncludeConfigFragmentsEnum {
     // Don't offer the provider at all. This is best for most builds, which don't use this
@@ -813,6 +851,7 @@ public class CoreOptions extends FragmentOptions implements Cloneable {
     CoreOptions host = (CoreOptions) getDefault();
 
     host.outputDirectoryName = "host";
+    host.transitionDirectoryNameFragment = transitionDirectoryNameFragment;
     host.compilationMode = hostCompilationMode;
     host.isHost = true;
     host.isExec = false;

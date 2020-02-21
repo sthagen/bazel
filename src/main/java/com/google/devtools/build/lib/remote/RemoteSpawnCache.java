@@ -28,7 +28,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
@@ -45,7 +44,8 @@ import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
-import com.google.devtools.build.lib.remote.common.SimpleBlobStore.ActionKey;
+import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
+import com.google.devtools.build.lib.remote.common.RemoteCacheClient.ActionKey;
 import com.google.devtools.build.lib.remote.merkletree.MerkleTree;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
@@ -66,15 +66,12 @@ import javax.annotation.Nullable;
 
 /** A remote {@link SpawnCache} implementation. */
 @ThreadSafe // If the RemoteActionCache implementation is thread-safe.
-@ExecutionStrategy(
-    name = {"remote-cache"},
-    contextType = SpawnCache.class)
 final class RemoteSpawnCache implements SpawnCache {
 
   private final Path execRoot;
   private final RemoteOptions options;
 
-  private final AbstractRemoteActionCache remoteCache;
+  private final RemoteCache remoteCache;
   private final String buildRequestId;
   private final String commandId;
 
@@ -93,7 +90,7 @@ final class RemoteSpawnCache implements SpawnCache {
   RemoteSpawnCache(
       Path execRoot,
       RemoteOptions options,
-      AbstractRemoteActionCache remoteCache,
+      RemoteCache remoteCache,
       String buildRequestId,
       String commandId,
       @Nullable Reporter cmdlineReporter,
@@ -113,15 +110,10 @@ final class RemoteSpawnCache implements SpawnCache {
   public CacheHandle lookup(Spawn spawn, SpawnExecutionContext context)
       throws InterruptedException, IOException, ExecException {
     if (!Spawns.mayBeCached(spawn)
-        || (!Spawns.mayBeCachedRemotely(spawn) && isRemoteCache(options))) {
+        || (!Spawns.mayBeCachedRemotely(spawn) && useRemoteCache(options))) {
       // returning SpawnCache.NO_RESULT_NO_STORE in case the caching is disabled or in case
       // the remote caching is disabled and the only configured cache is remote.
       return SpawnCache.NO_RESULT_NO_STORE;
-    }
-    boolean checkCache = options.remoteAcceptCached;
-
-    if (checkCache) {
-      context.report(ProgressStatus.CHECKING_CACHE, "remote-cache");
     }
 
     SortedMap<PathFragment, ActionInput> inputMap = context.getInputMapping(true);
@@ -134,7 +126,11 @@ final class RemoteSpawnCache implements SpawnCache {
 
     Command command =
         RemoteSpawnRunner.buildCommand(
-            spawn.getOutputFiles(), spawn.getArguments(), spawn.getEnvironment(), platform);
+            spawn.getOutputFiles(),
+            spawn.getArguments(),
+            spawn.getEnvironment(),
+            platform,
+            /* workingDirectory= */ null);
     RemoteOutputsMode remoteOutputsMode = options.remoteOutputsMode;
     Action action =
         RemoteSpawnRunner.buildAction(
@@ -145,14 +141,16 @@ final class RemoteSpawnCache implements SpawnCache {
         TracingMetadataUtils.contextWithMetadata(buildRequestId, commandId, actionKey);
 
     Profiler prof = Profiler.instance();
-    if (checkCache) {
+    if (options.remoteAcceptCached
+        || (options.incompatibleRemoteResultsIgnoreDisk && useDiskCache(options))) {
+      context.report(ProgressStatus.CHECKING_CACHE, "remote-cache");
       // Metadata will be available in context.current() until we detach.
       // This is done via a thread-local variable.
       Context previous = withMetadata.attach();
       try {
         ActionResult result;
         try (SilentCloseable c = prof.profile(ProfilerTask.REMOTE_CACHE_CHECK, "check cache hit")) {
-          result = remoteCache.getCachedActionResult(actionKey);
+          result = remoteCache.downloadActionResult(actionKey);
         }
         // In case the remote cache returned a failed action (exit code != 0) we treat it as a
         // cache miss
@@ -206,7 +204,8 @@ final class RemoteSpawnCache implements SpawnCache {
 
     context.prefetchInputs();
 
-    if (options.remoteUploadLocalResults) {
+    if (options.remoteUploadLocalResults
+        || (options.incompatibleRemoteResultsIgnoreDisk && useDiskCache(options))) {
       return new CacheHandle() {
         @Override
         public boolean hasResult() {
@@ -292,7 +291,11 @@ final class RemoteSpawnCache implements SpawnCache {
     }
   }
 
-  private static boolean isRemoteCache(RemoteOptions options) {
+  private static boolean useRemoteCache(RemoteOptions options) {
     return !isNullOrEmpty(options.remoteCache);
+  }
+
+  private static boolean useDiskCache(RemoteOptions options) {
+    return options.diskCache != null && !options.diskCache.isEmpty();
   }
 }

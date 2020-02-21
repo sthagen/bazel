@@ -67,7 +67,7 @@ public class NodeVisitor {
     visit(node.getY());
   }
 
-  public void visit(FuncallExpression node) {
+  public void visit(CallExpression node) {
     visit(node.getFunction());
     visitAll(node.getArguments());
   }
@@ -109,11 +109,6 @@ public class NodeVisitor {
   public void visit(@SuppressWarnings("unused") StringLiteral node) {}
 
   public void visit(AssignmentStatement node) {
-    visit(node.getRHS());
-    visit(node.getLHS());
-  }
-
-  public void visit(AugmentedAssignmentStatement node) {
     visit(node.getRHS());
     visit(node.getLHS());
   }
@@ -172,8 +167,8 @@ public class NodeVisitor {
     if (node.getStart() != null) {
       visit(node.getStart());
     }
-    if (node.getEnd() != null) {
-      visit(node.getEnd());
+    if (node.getStop() != null) {
+      visit(node.getStop());
     }
     if (node.getStep() != null) {
       visit(node.getStep());

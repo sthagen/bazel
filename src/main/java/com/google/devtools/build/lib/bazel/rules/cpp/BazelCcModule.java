@@ -16,12 +16,13 @@ package com.google.devtools.build.lib.bazel.rules.cpp;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.skylark.SkylarkActionFactory;
 import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleContext;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationContext;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationOutputs;
 import com.google.devtools.build.lib.rules.cpp.CcLinkingContext;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingContext.LinkerInput;
 import com.google.devtools.build.lib.rules.cpp.CcLinkingOutputs;
 import com.google.devtools.build.lib.rules.cpp.CcModule;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainConfigInfo;
@@ -32,9 +33,10 @@ import com.google.devtools.build.lib.rules.cpp.FeatureConfigurationForStarlark;
 import com.google.devtools.build.lib.rules.cpp.LibraryToLink;
 import com.google.devtools.build.lib.skylarkbuildapi.cpp.BazelCcModuleApi;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
+import com.google.devtools.build.lib.syntax.Sequence;
+import com.google.devtools.build.lib.syntax.StarlarkList;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
+import com.google.devtools.build.lib.syntax.Tuple;
 
 /**
  * A module that contains Skylark utilities for C++ support.
@@ -46,12 +48,14 @@ public class BazelCcModule extends CcModule
     implements BazelCcModuleApi<
         SkylarkActionFactory,
         Artifact,
+        ConstraintValueInfo,
         SkylarkRuleContext,
         CcToolchainProvider,
         FeatureConfigurationForStarlark,
         CcCompilationContext,
         CcCompilationOutputs,
         CcLinkingOutputs,
+        LinkerInput,
         LibraryToLink,
         CcLinkingContext,
         CcToolchainVariables,
@@ -67,22 +71,21 @@ public class BazelCcModule extends CcModule
       SkylarkActionFactory skylarkActionFactoryApi,
       FeatureConfigurationForStarlark skylarkFeatureConfiguration,
       CcToolchainProvider skylarkCcToolchainProvider,
-      SkylarkList<?> sources, // <Artifact> expected
-      SkylarkList<?> publicHeaders, // <Artifact> expected
-      SkylarkList<?> privateHeaders, // <Artifact> expected
-      SkylarkList<?> includes, // <String> expected
-      SkylarkList<?> quoteIncludes, // <String> expected
-      SkylarkList<?> systemIncludes, // <String> expected
-      SkylarkList<?> frameworkIncludes, // <String> expected
-      SkylarkList<?> defines, // <String> expected
-      SkylarkList<?> localDefines, // <String> expected
-      SkylarkList<?> userCompileFlags, // <String> expected
-      SkylarkList<?> ccCompilationContexts, // <CcCompilationContext> expected
+      Sequence<?> sources, // <Artifact> expected
+      Sequence<?> publicHeaders, // <Artifact> expected
+      Sequence<?> privateHeaders, // <Artifact> expected
+      Sequence<?> includes, // <String> expected
+      Sequence<?> quoteIncludes, // <String> expected
+      Sequence<?> systemIncludes, // <String> expected
+      Sequence<?> frameworkIncludes, // <String> expected
+      Sequence<?> defines, // <String> expected
+      Sequence<?> localDefines, // <String> expected
+      Sequence<?> userCompileFlags, // <String> expected
+      Sequence<?> ccCompilationContexts, // <CcCompilationContext> expected
       String name,
       boolean disallowPicOutputs,
       boolean disallowNopicOutputs,
-      SkylarkList<?> additionalInputs, // <Artifact> expected
-      Location location,
+      Sequence<?> additionalInputs, // <Artifact> expected
       StarlarkThread thread)
       throws EvalException, InterruptedException {
     return compile(
@@ -105,10 +108,9 @@ public class BazelCcModule extends CcModule
         disallowNopicOutputs,
         /* grepIncludes= */ null,
         /* headersForClifDoNotUseThisParam= */ ImmutableList.of(),
-        SkylarkList.createImmutable(
+        StarlarkList.immutableCopyOf(
             additionalInputs.getContents(Artifact.class, "additional_inputs")),
-        location,
-        /* thread= */ null);
+        thread);
   }
 
   @Override
@@ -117,14 +119,14 @@ public class BazelCcModule extends CcModule
       FeatureConfigurationForStarlark skylarkFeatureConfiguration,
       CcToolchainProvider skylarkCcToolchainProvider,
       Object compilationOutputs,
-      SkylarkList<?> userLinkFlags, // <String> expected
-      SkylarkList<?> linkingContexts, // <CcLinkingContext> expected
+      Sequence<?> userLinkFlags, // <String> expected
+      Sequence<?> linkingContexts, // <CcLinkingContext> expected
       String name,
       String language,
       String outputType,
       boolean linkDepsStatically,
-      SkylarkList<?> additionalInputs, // <Artifact> expected
-      Location location,
+      Sequence<?> additionalInputs, // <Artifact> expected
+      Object grepIncludes,
       StarlarkThread thread)
       throws InterruptedException, EvalException {
     return super.link(
@@ -140,19 +142,18 @@ public class BazelCcModule extends CcModule
         linkDepsStatically,
         additionalInputs,
         /* grepIncludes= */ null,
-        location,
         thread);
   }
 
   @Override
   public CcCompilationOutputs createCompilationOutputsFromSkylark(
-      Object objectsObject, Object picObjectsObject, Location location) throws EvalException {
-    return super.createCompilationOutputsFromSkylark(objectsObject, picObjectsObject, location);
+      Object objectsObject, Object picObjectsObject) throws EvalException {
+    return super.createCompilationOutputsFromSkylark(objectsObject, picObjectsObject);
   }
 
   @Override
-  public CcCompilationOutputs mergeCcCompilationOutputsFromSkylark(
-      SkylarkList<?> compilationOutputs) throws EvalException {
+  public CcCompilationOutputs mergeCcCompilationOutputsFromSkylark(Sequence<?> compilationOutputs)
+      throws EvalException {
     CcCompilationOutputs.Builder ccCompilationOutputsBuilder = CcCompilationOutputs.builder();
     for (CcCompilationOutputs ccCompilationOutputs :
         compilationOutputs.getContents(CcCompilationOutputs.class, "compilation_outputs")) {

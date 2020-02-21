@@ -31,6 +31,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Interner;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
@@ -55,10 +56,10 @@ import com.google.devtools.build.lib.packages.RuleFactory.AttributeValues;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
-import com.google.devtools.build.lib.syntax.BaseFunction;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Runtime;
-import com.google.devtools.build.lib.syntax.SkylarkList;
+import com.google.devtools.build.lib.syntax.Sequence;
+import com.google.devtools.build.lib.syntax.Starlark;
+import com.google.devtools.build.lib.syntax.StarlarkFunction;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -134,6 +135,10 @@ public class RuleClass {
   public static final PathFragment EXPERIMENTAL_PREFIX = PathFragment.create("experimental");
   public static final String EXEC_COMPATIBLE_WITH_ATTR = "exec_compatible_with";
   public static final String EXEC_PROPERTIES = "exec_properties";
+  /*
+   * The attribute that declares the set of license labels which apply to this target.
+   */
+  public static final String APPLICABLE_LICENSES_ATTR = "applicable_licenses";
 
   /**
    * A constraint for the package name of the Rule instances.
@@ -209,52 +214,22 @@ public class RuleClass {
      * messaging should be done via {@link RuleErrorConsumer}; this exception only interrupts
      * configured target creation in cases where it can no longer continue.
      */
-    public static final class RuleErrorException extends Exception {
-      public RuleErrorException() {
+    final class RuleErrorException extends Exception {
+      RuleErrorException() {
         super();
       }
 
-      public RuleErrorException(String message) {
+      RuleErrorException(String message) {
         super(message);
       }
-    }
-  }
 
-  /**
-   * Describes in which way a rule implementation allows additional execution platform constraints.
-   */
-  public enum ExecutionPlatformConstraintsAllowed {
-    /**
-     * Allows additional execution platform constraints to be added in the rule definition, which
-     * apply to all targets of that rule.
-     */
-    PER_RULE(1),
-    /**
-     * Users are allowed to specify additional execution platform constraints for each target, using
-     * the 'exec_compatible_with' attribute. This also allows setting constraints in the rule
-     * definition, like PER_RULE.
-     */
-    PER_TARGET(2);
-
-    private final int priority;
-
-    ExecutionPlatformConstraintsAllowed(int priority) {
-      this.priority = priority;
-    }
-
-    public int priority() {
-      return priority;
-    }
-
-    public static ExecutionPlatformConstraintsAllowed highestPriority(
-        ExecutionPlatformConstraintsAllowed first, ExecutionPlatformConstraintsAllowed... rest) {
-      ExecutionPlatformConstraintsAllowed result = first;
-      for (ExecutionPlatformConstraintsAllowed value : rest) {
-        if (result == null || result.priority() < value.priority()) {
-          result = value;
-        }
+      RuleErrorException(Throwable cause) {
+        super(cause);
       }
-      return result;
+
+      RuleErrorException(String message, Throwable cause) {
+        super(message, cause);
+      }
     }
   }
 
@@ -678,7 +653,7 @@ public class RuleClass {
         PredicatesWithMessage.<Rule>alwaysTrue();
     private Predicate<String> preferredDependencyPredicate = Predicates.alwaysFalse();
     private AdvertisedProviderSet.Builder advertisedProviders = AdvertisedProviderSet.builder();
-    private BaseFunction configuredTargetFunction = null;
+    private StarlarkFunction configuredTargetFunction = null;
     private BuildSetting buildSetting = null;
     private Function<? super Rule, Map<String, Label>> externalBindingsFunction =
         NO_EXTERNAL_BINDINGS;
@@ -724,8 +699,6 @@ public class RuleClass {
     private final Map<String, Attribute> attributes = new LinkedHashMap<>();
     private final Set<Label> requiredToolchains = new HashSet<>();
     private boolean useToolchainResolution = true;
-    private ExecutionPlatformConstraintsAllowed executionPlatformConstraintsAllowed =
-        ExecutionPlatformConstraintsAllowed.PER_RULE;
     private Set<Label> executionPlatformConstraints = new HashSet<>();
     private OutputFile.Kind outputFileKind = OutputFile.Kind.FILE;
 
@@ -760,21 +733,10 @@ public class RuleClass {
 
         addRequiredToolchains(parent.getRequiredToolchains());
         useToolchainResolution = parent.useToolchainResolution;
-
-        // Make sure we use the highest priority value from all parents.
-        executionPlatformConstraintsAllowed(
-            ExecutionPlatformConstraintsAllowed.highestPriority(
-                executionPlatformConstraintsAllowed, parent.executionPlatformConstraintsAllowed()));
         addExecutionPlatformConstraints(parent.getExecutionPlatformConstraints());
 
         for (Attribute attribute : parent.getAttributes()) {
           String attrName = attribute.getName();
-          // TODO(https://github.com/bazelbuild/bazel/issues/8134): Define the attribute on a
-          // standard base class and remove this check entirely.
-          if (attrName.equals(RuleClass.EXEC_COMPATIBLE_WITH_ATTR)) {
-            // Don't inherit: this will be re-created
-            continue;
-          }
           Preconditions.checkArgument(
               !attributes.containsKey(attrName) || attributes.get(attrName).equals(attribute),
               "Attribute %s is inherited multiple times in %s ruleclass",
@@ -832,14 +794,7 @@ public class RuleClass {
       if (type == RuleClassType.PLACEHOLDER) {
         Preconditions.checkNotNull(ruleDefinitionEnvironmentHashCode, this.name);
       }
-      if (executionPlatformConstraintsAllowed == ExecutionPlatformConstraintsAllowed.PER_TARGET
-          && !this.contains(EXEC_COMPATIBLE_WITH_ATTR)) {
-        this.add(
-            attr(EXEC_COMPATIBLE_WITH_ATTR, BuildType.LABEL_LIST)
-                .allowedFileTypes()
-                .nonconfigurable("Used in toolchain resolution")
-                .value(ImmutableList.of()));
-      }
+
       if (buildSetting != null) {
         Type<?> type = buildSetting.getType();
         Attribute.Builder<?> attrBuilder =
@@ -888,7 +843,6 @@ public class RuleClass {
           thirdPartyLicenseExistencePolicy,
           requiredToolchains,
           useToolchainResolution,
-          executionPlatformConstraintsAllowed,
           executionPlatformConstraints,
           outputFileKind,
           attributes.values(),
@@ -1209,10 +1163,8 @@ public class RuleClass {
       return attributes.containsKey(name);
     }
 
-    /**
-     * Sets the rule implementation function. Meant for Skylark usage.
-     */
-    public Builder setConfiguredTargetFunction(BaseFunction func) {
+    /** Sets the rule implementation function. Meant for Skylark usage. */
+    public Builder setConfiguredTargetFunction(StarlarkFunction func) {
       this.configuredTargetFunction = func;
       return this;
     }
@@ -1398,20 +1350,6 @@ public class RuleClass {
     }
 
     /**
-     * Specifies whether targets of this rule can add additional constraints on the execution
-     * platform selected. If this is {@link ExecutionPlatformConstraintsAllowed#PER_TARGET}, there
-     * will be an attribute named {@code exec_compatible_with} that can be used to add these
-     * constraints.
-     *
-     * <p>Please note that this value is not inherited by child rules, and must be re-set on them if
-     * the same behavior is required.
-     */
-    public Builder executionPlatformConstraintsAllowed(ExecutionPlatformConstraintsAllowed value) {
-      this.executionPlatformConstraintsAllowed = value;
-      return this;
-    }
-
-    /**
      * Adds additional execution platform constraints that apply for all targets from this rule.
      *
      * <p>Please note that this value is inherited by child rules.
@@ -1467,6 +1405,7 @@ public class RuleClass {
   private final boolean hasAnalysisTestTransition;
   private final boolean hasFunctionTransitionWhitelist;
   private final boolean ignoreLicenses;
+  private final boolean hasAspects;
 
   /**
    * A (unordered) mapping from attribute names to small integers indexing into
@@ -1516,7 +1455,7 @@ public class RuleClass {
   /**
    * The Skylark rule implementation of this RuleClass. Null for non Skylark executable RuleClasses.
    */
-  @Nullable private final BaseFunction configuredTargetFunction;
+  @Nullable private final StarlarkFunction configuredTargetFunction;
 
   /**
    * The BuildSetting associated with this rule. Null for all RuleClasses except Skylark-defined
@@ -1559,7 +1498,6 @@ public class RuleClass {
 
   private final ImmutableSet<Label> requiredToolchains;
   private final boolean useToolchainResolution;
-  private final ExecutionPlatformConstraintsAllowed executionPlatformConstraintsAllowed;
   private final ImmutableSet<Label> executionPlatformConstraints;
 
   /**
@@ -1604,7 +1542,7 @@ public class RuleClass {
       PredicateWithMessage<Rule> validityPredicate,
       Predicate<String> preferredDependencyPredicate,
       AdvertisedProviderSet advertisedProviders,
-      @Nullable BaseFunction configuredTargetFunction,
+      @Nullable StarlarkFunction configuredTargetFunction,
       Function<? super Rule, Map<String, Label>> externalBindingsFunction,
       Function<? super Rule, ? extends Set<String>> optionReferenceFunction,
       @Nullable Label ruleDefinitionEnvironmentLabel,
@@ -1614,7 +1552,6 @@ public class RuleClass {
       ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy,
       Set<Label> requiredToolchains,
       boolean useToolchainResolution,
-      ExecutionPlatformConstraintsAllowed executionPlatformConstraintsAllowed,
       Set<Label> executionPlatformConstraints,
       OutputFile.Kind outputFileKind,
       Collection<Attribute> attributes,
@@ -1653,20 +1590,22 @@ public class RuleClass {
     this.thirdPartyLicenseExistencePolicy = thirdPartyLicenseExistencePolicy;
     this.requiredToolchains = ImmutableSet.copyOf(requiredToolchains);
     this.useToolchainResolution = useToolchainResolution;
-    this.executionPlatformConstraintsAllowed = executionPlatformConstraintsAllowed;
     this.executionPlatformConstraints = ImmutableSet.copyOf(executionPlatformConstraints);
     this.buildSetting = buildSetting;
 
     // Create the index and collect non-configurable attributes.
     int index = 0;
-    attributeIndex = new HashMap<>(attributes.size());
+    attributeIndex = Maps.newHashMapWithExpectedSize(attributes.size());
+    boolean computedHasAspects = false;
     ImmutableList.Builder<String> nonConfigurableAttributesBuilder = ImmutableList.builder();
     for (Attribute attribute : attributes) {
+      computedHasAspects |= attribute.hasAspects();
       attributeIndex.put(attribute.getName(), index++);
       if (!attribute.isConfigurable()) {
         nonConfigurableAttributesBuilder.add(attribute.getName());
       }
     }
+    this.hasAspects = computedHasAspects;
     this.nonConfigurableAttributes = nonConfigurableAttributesBuilder.build();
   }
 
@@ -1851,6 +1790,10 @@ public class RuleClass {
     return supportsConstraintChecking;
   }
 
+  public boolean hasAspects() {
+    return hasAspects;
+  }
+
   /**
    * Creates a new {@link Rule} {@code r} where {@code r.getPackage()} is the {@link Package}
    * associated with {@code pkgBuilder}.
@@ -1956,7 +1899,7 @@ public class RuleClass {
    * attributeValues} map.
    *
    * <p>Handles the special cases of the attribute named {@code "name"} and attributes with value
-   * {@link Runtime#NONE}.
+   * {@link Starlark#NONE}.
    *
    * <p>Returns a bitset {@code b} where {@code b.get(i)} is {@code true} if this method set a value
    * for the attribute with index {@code i} in this {@link RuleClass}. Errors are reported on {@code
@@ -1973,7 +1916,7 @@ public class RuleClass {
       String attributeName = attributeValues.getName(attributeAccessor);
       Object attributeValue = attributeValues.getValue(attributeAccessor);
       // Ignore all None values.
-      if (attributeValue == Runtime.NONE) {
+      if (attributeValue == Starlark.NONE) {
         continue;
       }
 
@@ -2133,8 +2076,8 @@ public class RuleClass {
       Object attributeValue = attributes.get(attributeName, attr.getType());
 
       boolean isEmpty = false;
-      if (attributeValue instanceof SkylarkList) {
-        isEmpty = ((SkylarkList<?>) attributeValue).isEmpty();
+      if (attributeValue instanceof Sequence) {
+        isEmpty = ((Sequence<?>) attributeValue).isEmpty();
       } else if (attributeValue instanceof List<?>) {
         isEmpty = ((List<?>) attributeValue).isEmpty();
       } else if (attributeValue instanceof Map<?, ?>) {
@@ -2244,6 +2187,11 @@ public class RuleClass {
    */
   private static Object getAttributeNoncomputedDefaultValue(Attribute attr,
       Package.Builder pkgBuilder) {
+    // TODO(b/149505729): Determine the right semantics for someone trying to define their own
+    // attribute named applicable_licenses.
+    if (attr.getName().equals("applicable_licenses")) {
+      return pkgBuilder.getDefaultApplicableLicenses();
+    }
     // Starlark rules may define their own "licenses" attributes with different types -
     // we shouldn't trigger the special "licenses" on those cases.
     if (attr.getName().equals("licenses") && attr.getType() == BuildType.LICENSE) {
@@ -2280,7 +2228,7 @@ public class RuleClass {
             eventHandler);
       }
       try {
-        rule.setVisibility(PackageFactory.getVisibility(rule.getLabel(), attrList));
+        rule.setVisibility(PackageUtils.getVisibility(rule.getLabel(), attrList));
       } catch (EvalException e) {
          rule.reportError(rule.getLabel() + " " + e.getMessage(), eventHandler);
       }
@@ -2386,32 +2334,34 @@ public class RuleClass {
 
   private static void checkAspectAllowedValues(
       Rule rule, EventHandler eventHandler) {
-    for (Attribute attrOfRule : rule.getAttributes()) {
-      for (Aspect aspect : attrOfRule.getAspects(rule)) {
-        for (Attribute attrOfAspect : aspect.getDefinition().getAttributes().values()) {
-          // By this point the AspectDefinition has been created and values assigned.
-          if (attrOfAspect.checkAllowedValues()) {
-            PredicateWithMessage<Object> allowedValues = attrOfAspect.getAllowedValues();
-            Object value = attrOfAspect.getDefaultValue(rule);
-            if (!allowedValues.apply(value)) {
-              if (RawAttributeMapper.of(rule).isConfigurable(attrOfAspect.getName())) {
-                rule.reportError(
-                    String.format(
-                        "%s: attribute '%s' has a select() and aspect %s also declares "
-                            + "'%s'. Aspect attributes don't currently support select().",
-                        rule.getLabel(),
-                        attrOfAspect.getName(),
-                        aspect.getDefinition().getName(),
-                        rule.getLabel()),
-                    eventHandler);
-              } else {
-                rule.reportError(
-                    String.format(
-                        "%s: invalid value in '%s' attribute: %s",
-                        rule.getLabel(),
-                        attrOfAspect.getName(),
-                        allowedValues.getErrorReason(value)),
-                    eventHandler);
+    if (rule.hasAspects()) {
+      for (Attribute attrOfRule : rule.getAttributes()) {
+        for (Aspect aspect : attrOfRule.getAspects(rule)) {
+          for (Attribute attrOfAspect : aspect.getDefinition().getAttributes().values()) {
+            // By this point the AspectDefinition has been created and values assigned.
+            if (attrOfAspect.checkAllowedValues()) {
+              PredicateWithMessage<Object> allowedValues = attrOfAspect.getAllowedValues();
+              Object value = attrOfAspect.getDefaultValue(rule);
+              if (!allowedValues.apply(value)) {
+                if (RawAttributeMapper.of(rule).isConfigurable(attrOfAspect.getName())) {
+                  rule.reportError(
+                      String.format(
+                          "%s: attribute '%s' has a select() and aspect %s also declares "
+                              + "'%s'. Aspect attributes don't currently support select().",
+                          rule.getLabel(),
+                          attrOfAspect.getName(),
+                          aspect.getDefinition().getName(),
+                          rule.getLabel()),
+                      eventHandler);
+                } else {
+                  rule.reportError(
+                      String.format(
+                          "%s: invalid value in '%s' attribute: %s",
+                          rule.getLabel(),
+                          attrOfAspect.getName(),
+                          allowedValues.getErrorReason(value)),
+                      eventHandler);
+                }
               }
             }
           }
@@ -2445,10 +2395,9 @@ public class RuleClass {
     return binaryOutput;
   }
 
-  /**
-   * Returns this RuleClass's custom Skylark rule implementation.
-   */
-  @Nullable public BaseFunction getConfiguredTargetFunction() {
+  /** Returns this RuleClass's custom Skylark rule implementation. */
+  @Nullable
+  public StarlarkFunction getConfiguredTargetFunction() {
     return configuredTargetFunction;
   }
 
@@ -2546,10 +2495,6 @@ public class RuleClass {
 
   public boolean useToolchainResolution() {
     return useToolchainResolution;
-  }
-
-  public ExecutionPlatformConstraintsAllowed executionPlatformConstraintsAllowed() {
-    return executionPlatformConstraintsAllowed;
   }
 
   public ImmutableSet<Label> getExecutionPlatformConstraints() {

@@ -20,13 +20,15 @@ import com.google.devtools.build.lib.windows.jni.WindowsJniLoader;
 
 /** All classes that extend this class depend on being able to load jni. */
 class JniLoader {
-  protected JniLoader() {}
+  private static final boolean JNI_ENABLED;
 
   static {
-    if (!"0".equals(System.getProperty("io.bazel.EnableJni"))) {
+    JNI_ENABLED = !"0".equals(System.getProperty("io.bazel.EnableJni"));
+    if (JNI_ENABLED) {
       switch (OS.getCurrent()) {
         case LINUX:
         case FREEBSD:
+        case OPENBSD:
         case UNKNOWN:
         case DARWIN:
           UnixJniLoader.loadJni();
@@ -34,7 +36,15 @@ class JniLoader {
         case WINDOWS:
           WindowsJniLoader.loadJni();
           break;
+        default:
+          throw new AssertionError("switch statement out of sync with OS values");
       }
     }
+  }
+
+  protected JniLoader() {}
+
+  public static boolean jniEnabled() {
+    return JNI_ENABLED;
   }
 }

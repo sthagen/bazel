@@ -13,8 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.syntax;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import java.io.IOException;
 
 /** Syntax node for a 'def' statement, which defines a function. */
 public final class DefStatement extends Statement {
@@ -26,48 +26,22 @@ public final class DefStatement extends Statement {
 
   DefStatement(
       Identifier identifier,
-      Iterable<Parameter> parameters,
+      ImmutableList<Parameter> parameters,
       FunctionSignature signature,
-      Iterable<Statement> statements) {
+      ImmutableList<Statement> statements) {
     this.identifier = identifier;
-    this.parameters = ImmutableList.copyOf(parameters);
+    this.parameters = Preconditions.checkNotNull(parameters);
     this.signature = signature;
-    this.statements = ImmutableList.copyOf(statements);
-  }
-
-  @Override
-  public void prettyPrint(Appendable buffer, int indentLevel) throws IOException {
-    printIndent(buffer, indentLevel);
-    appendSignatureTo(buffer);
-    buffer.append('\n');
-    printSuite(buffer, statements, indentLevel);
+    this.statements = Preconditions.checkNotNull(statements);
   }
 
   @Override
   public String toString() {
     // "def f(...): \n"
     StringBuilder buf = new StringBuilder();
-    try {
-      appendSignatureTo(buf);
-    } catch (IOException ex) {
-      throw new IllegalStateException(ex); // can't fail (StringBuilder)
-    }
+    new NodePrinter(buf).printDefSignature(this);
     buf.append(" ...\n");
     return buf.toString();
-  }
-
-  // Appends "def f(a, ..., z):" to the buffer.
-  private void appendSignatureTo(Appendable buf) throws IOException {
-    buf.append("def ");
-    identifier.prettyPrint(buf);
-    buf.append('(');
-    String sep = "";
-    for (Parameter param : parameters) {
-      buf.append(sep);
-      param.prettyPrint(buf);
-      sep = ", ";
-    }
-    buf.append("):");
   }
 
   public Identifier getIdentifier() {
@@ -93,6 +67,6 @@ public final class DefStatement extends Statement {
 
   @Override
   public Kind kind() {
-    return Kind.FUNCTION_DEF;
+    return Kind.DEF;
   }
 }

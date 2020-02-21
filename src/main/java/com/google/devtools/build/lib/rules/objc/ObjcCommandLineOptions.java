@@ -150,15 +150,14 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   public boolean enableModuleMaps;
 
   @Option(
-    name = "objc_enable_binary_stripping",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
-    help =
-        "Whether to perform symbol and dead-code strippings on linked binaries. Binary "
-            + "strippings will be performed if both this flag and --compilationMode=opt are "
-            + "specified."
-  )
+      name = "objc_enable_binary_stripping",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
+      help =
+          "Whether to perform symbol and dead-code strippings on linked binaries. Binary "
+              + "strippings will be performed if both this flag and --compilation_mode=opt are "
+              + "specified.")
   public boolean enableBinaryStripping;
 
   @Option(
@@ -233,27 +232,6 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   public boolean enableAppleBinaryNativeProtos;
 
   @Option(
-    name = "experimental_objc_header_thinning",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-    effectTags = {OptionEffectTag.CHANGES_INPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
-    metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-    help =
-        "If set then ObjcCompile actions will have their action inputs reduced by running a tool "
-            + "to detect which headers are actually required for compilation."
-  )
-  public boolean experimentalObjcHeaderThinning;
-
-  @Option(
-    name = "objc_header_thinning_partition_size",
-    defaultValue = "120",
-    documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-    effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS},
-    help = "The maximum number of source files to process within in each header scanning action."
-  )
-  public int objcHeaderThinningPartitionSize;
-
-  @Option(
       name = "experimental_objc_include_scanning",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
@@ -287,27 +265,4 @@ public class ObjcCommandLineOptions extends FragmentOptions {
             + "configuration."
   )
   public Label appleSdk;
-
-  @Option(
-    name = "incompatible_strict_objc_module_maps",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-    metadataTags = {
-      OptionMetadataTag.INCOMPATIBLE_CHANGE,
-      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-    },
-    effectTags = {OptionEffectTag.CHANGES_INPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
-    help =
-        "Propagates Objective-C module maps only to direct dependencies in the 'objc' provider, "
-            + "not to all transitive dependencies."
-  )
-  public boolean strictObjcModuleMaps;
-
-  @Override
-  public FragmentOptions getHost() {
-    ObjcCommandLineOptions host = (ObjcCommandLineOptions) super.getHost();
-    // This should have the same value in both target and host configurations
-    host.objcHeaderScannerTool = this.objcHeaderScannerTool;
-    return host;
-  }
 }

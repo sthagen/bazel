@@ -17,14 +17,15 @@ package com.google.devtools.build.lib.skylarkbuildapi.test;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.SkylarkDict;
+import com.google.devtools.build.lib.syntax.StarlarkValue;
 
 /** Helper module for accessing test infrastructure. */
 @SkylarkModule(
     name = "testing",
     doc = "Helper methods for Starlark to access testing infrastructure.")
-public interface TestingModuleApi {
+public interface TestingModuleApi extends StarlarkValue {
 
   // TODO(bazel-team): Change this function to be the actual ExecutionInfo.PROVIDER.
   @SkylarkCallable(
@@ -35,7 +36,7 @@ public interface TestingModuleApi {
       parameters = {
         @Param(
             name = "requirements",
-            type = SkylarkDict.class,
+            type = Dict.class,
             named = false,
             positional = true,
             doc =
@@ -44,7 +45,7 @@ public interface TestingModuleApi {
                     + " executor of the test action as parameters to configure the execution"
                     + " environment.")
       })
-  public ExecutionInfoApi executionInfo(SkylarkDict<?, ?> requirements // <String, String> expected
+  ExecutionInfoApi executionInfo(Dict<?, ?> requirements // <String, String> expected
       ) throws EvalException;
 
   // TODO(bazel-team): Change this function to be the actual TestEnvironmentInfo.PROVIDER.
@@ -56,14 +57,13 @@ public interface TestingModuleApi {
       parameters = {
         @Param(
             name = "environment",
-            type = SkylarkDict.class,
+            type = Dict.class,
             named = false,
             positional = true,
             doc =
                 "A map of string keys and values that represent environment variables and their"
                     + " values. These will be made available during the test execution.")
       })
-  public TestEnvironmentInfoApi testEnvironment(
-      SkylarkDict<?, ?> environment // <String, String> expected
+  TestEnvironmentInfoApi testEnvironment(Dict<?, ?> environment // <String, String> expected
       ) throws EvalException;
 }

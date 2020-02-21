@@ -15,14 +15,18 @@
 
 package com.google.devtools.build.lib.bazel.rules.ninja.file;
 
+import java.io.IOException;
+
 /** Generic interface to accept declarations from {@link ParallelFileProcessing} */
 public interface DeclarationConsumer {
 
   /**
    * Accepts a declaration for further processing / parsing.
    *
-   * @param fragment fragment of {@link java.nio.ByteBuffer}
+   * @param byteFragmentAtOffset a fragment of {@link java.nio.ByteBuffer} in the form of {@link
+   *     ByteBufferFragment}, starting at offset in the underlying file.
    * @throws GenericParsingException if declaration processing discovered the wrong syntax
    */
-  void declaration(ByteBufferFragment fragment) throws GenericParsingException;
+  void declaration(ByteFragmentAtOffset byteFragmentAtOffset)
+      throws GenericParsingException, IOException;
 }

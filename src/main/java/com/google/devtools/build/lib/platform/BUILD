@@ -20,6 +20,26 @@ java_library(
 )
 
 java_library(
+    name = "suspend_counter",
+    srcs = [
+        "SuspendCounter.java",
+    ],
+    deps = [
+        ":jni_loader",
+    ],
+)
+
+java_library(
+    name = "memory_pressure_counter",
+    srcs = [
+        "MemoryPressureCounter.java",
+    ],
+    deps = [
+        ":jni_loader",
+    ],
+)
+
+java_library(
     name = "jni_loader",
     srcs = ["JniLoader.java"],
     deps = [

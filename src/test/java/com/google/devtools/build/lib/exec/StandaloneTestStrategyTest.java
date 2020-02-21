@@ -33,10 +33,10 @@ import com.google.devtools.build.lib.actions.ActionInputPrefetcher;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
+import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.test.TestActionContext;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
@@ -63,6 +63,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -90,23 +91,23 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
   }
 
   private class FakeActionExecutionContext extends ActionExecutionContext {
-    private final SpawnActionContext spawnActionContext;
+    private final SpawnStrategy spawnActionContext;
 
-    public FakeActionExecutionContext(
-        FileOutErr fileOutErr, SpawnActionContext spawnActionContext) {
+    public FakeActionExecutionContext(FileOutErr fileOutErr, SpawnStrategy spawnActionContext) {
       super(
-          /* executor= */ null,
-          /* actionInputFileCache= */ null,
+          /*executor=*/ null,
+          /*actionInputFileCache=*/ null,
           ActionInputPrefetcher.NONE,
           new ActionKeyContext(),
-          /* metadataHandler= */ null,
+          /*metadataHandler=*/ null,
+          LostInputsCheck.NONE,
           fileOutErr,
           /*eventHandler=*/ null,
-          /* clientEnv= */ ImmutableMap.of(),
-          /* topLevelFilesets= */ ImmutableMap.of(),
-          /* artifactExpander= */ null,
-          /* actionFileSystem= */ null,
-          /* skyframeDepsResult= */ null);
+          /*clientEnv=*/ ImmutableMap.of(),
+          /*topLevelFilesets=*/ ImmutableMap.of(),
+          /*artifactExpander=*/ null,
+          /*actionFileSystem=*/ null,
+          /*skyframeDepsResult=*/ null);
       this.spawnActionContext = spawnActionContext;
     }
 
@@ -116,8 +117,9 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
     }
 
     @Override
-    public <T extends ActionContext> T getContext(Class<? extends T> type) {
-      return SpawnActionContext.class.equals(type) ? type.cast(spawnActionContext) : null;
+    @Nullable
+    public <T extends ActionContext> T getContext(Class<T> type) {
+      return SpawnStrategy.class.equals(type) ? type.cast(spawnActionContext) : null;
     }
 
     @Override
@@ -136,7 +138,7 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
     }
   }
 
-  @Mock private SpawnActionContext spawnActionContext;
+  @Mock private SpawnStrategy spawnActionContext;
 
   private StoredEventHandler storedEvents = new StoredEventHandler();
 
@@ -185,6 +187,26 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
       TestActionContext testActionContext)
       throws ActionExecutionException, InterruptedException {
     return testRunnerAction.execute(actionExecutionContext, testActionContext).spawnResults();
+  }
+
+  @Test
+  public void testCreateTmpDirForTest() throws Exception {
+    // setup a test action
+    scratch.file("standalone/simple_test.sh", "this does not get executed, it is mocked out");
+    scratch.file(
+        "standalone/BUILD",
+        "sh_test(",
+        "    name = \"simple_test\",",
+        "    size = \"small\",",
+        "    srcs = [\"simple_test.sh\"],",
+        ")");
+    TestRunnerAction testRunnerAction = getTestAction("//standalone:simple_test");
+
+    String tmpDirName = TestStrategy.getTmpDirName(testRunnerAction);
+    // Make sure the length of tmpDirName doesn't change unexpectedy: it cannot be too long
+    // because Windows and macOS have limitations on file path length.
+    // Note: It's OK to update 32 to a smaller number if tmpDirName gets shorter.
+    assertThat(tmpDirName.length()).isEqualTo(32);
   }
 
   @Test

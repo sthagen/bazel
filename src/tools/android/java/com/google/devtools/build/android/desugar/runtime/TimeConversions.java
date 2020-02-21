@@ -19,12 +19,21 @@ package com.google.devtools.build.android.desugar.runtime;
  */
 @SuppressWarnings("AndroidApiChecker")
 public final class TimeConversions {
-  private TimeConversions() {}  // static methods only
+  private TimeConversions() {} // static methods only
 
   public static android.view.textclassifier.TextClassification.Request.Builder setReferenceTime(
       android.view.textclassifier.TextClassification.Request.Builder builder,
       j$.time.ZonedDateTime arg) {
     return builder.setReferenceTime(toZonedDateTime(arg));
+  }
+
+  /** The factory method for the {@link android.app.admin.FreezePeriod}. */
+  @SuppressWarnings("MethodName") // synthetic method.
+  public static android.app.admin.FreezePeriod create$FreezePeriod(
+      j$.time.MonthDay jStart, j$.time.MonthDay jEnd) {
+    java.time.MonthDay start = toMonthDay(jStart);
+    java.time.MonthDay end = toMonthDay(jEnd);
+    return new android.app.admin.FreezePeriod(start, end);
   }
 
   public static j$.time.MonthDay getStart(android.app.admin.FreezePeriod freezePeriod) {
@@ -44,6 +53,12 @@ public final class TimeConversions {
     return monthDay == null
         ? null
         : j$.time.MonthDay.of(monthDay.getMonthValue(), monthDay.getDayOfMonth());
+  }
+
+  private static java.time.MonthDay toMonthDay(j$.time.MonthDay monthDay) {
+    return monthDay == null
+        ? null
+        : java.time.MonthDay.of(monthDay.getMonthValue(), monthDay.getDayOfMonth());
   }
 
   private static j$.time.ZonedDateTime fromZonedDateTime(java.time.ZonedDateTime dateTime) {

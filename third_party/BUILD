@@ -32,6 +32,7 @@ filegroup(
         "//third_party/checker_framework_javacutil:srcs",
         "//third_party/jformatstring:srcs",
         "//third_party/protobuf:srcs",
+        "//third_party/py/abseil:srcs",
         "//third_party/py/concurrent:srcs",
         "//third_party/py/gflags:srcs",
         "//third_party/py/mock:srcs",
@@ -53,24 +54,6 @@ filegroup(
     name = "gpl-srcs",
     srcs = [
         "//third_party/jformatstring:srcs",
-    ],
-)
-
-java_import(
-    name = "aether",
-    jars = [
-        "aether/aether-api-1.0.0.v20140518.jar",
-        "aether/aether-spi-1.0.0.v20140518.jar",
-        "aether/aether-transport-http-1.0.0.v20140518.jar",
-        "aether/aether-connector-basic-1.0.0.v20140518.jar",
-        "aether/aether-transport-classpath-1.0.0.v20140518.jar",
-        "aether/aether-transport-wagon-1.0.0.v20140518.jar",
-        "aether/aether-impl-1.0.0.v20140518.jar",
-        "aether/aether-transport-file-1.0.0.v20140518.jar",
-        "aether/aether-util-1.0.0.v20140518.jar",
-    ],
-    deps = [
-        ":apache_httpclient",
     ],
 )
 
@@ -123,11 +106,6 @@ java_import(
 )
 
 java_import(
-    name = "apache_commons_codec",
-    jars = ["apache_commons_codec/commons-codec-1.9.jar"],
-)
-
-java_import(
     name = "apache_commons_collections",
     jars = ["apache_commons_collections/commons-collections-3.2.2.jar"],
 )
@@ -150,21 +128,6 @@ java_import(
 java_import(
     name = "apache_commons_pool2",
     jars = ["apache_commons_pool2/commons-pool2-2.3.jar"],
-)
-
-java_import(
-    name = "apache_httpclient",
-    jars = ["apache_httpclient/httpclient-4.5.3.jar"],
-    deps = [
-        ":apache_commons_codec",
-        ":apache_commons_logging",
-        ":apache_httpcore",
-    ],
-)
-
-java_import(
-    name = "apache_httpcore",
-    jars = ["apache_httpcore/httpcore-4.4.6.jar"],
 )
 
 java_import(
@@ -336,10 +299,8 @@ java_import(
 
 java_import(
     name = "checker_framework_annotations",
-    jars = [
-        "checker_framework_annotations/checker-qual-2.6.0.jar",
-        "checker_framework_annotations/checker-compat-qual-2.6.0.jar",
-    ],
+    jars = ["checker_framework_annotations/checker-qual-3.0.0.jar"],
+    srcjar = "checker_framework_annotations/checker-qual-3.0.0-sources.jar",
 )
 
 java_import(
@@ -484,11 +445,6 @@ java_import(
 )
 
 java_import(
-    name = "jsch",
-    jars = ["jsch/jsch-0.1.54.jar"],
-)
-
-java_import(
     name = "jsr305",
     jars = ["jsr305/jsr-305.jar"],
 )
@@ -504,21 +460,6 @@ java_import(
     jars = ["jsr330_inject/javax.inject.jar"],
 )
 
-java_import(
-    name = "maven",
-    jars = glob(["maven/*.jar"]),
-)
-
-java_import(
-    name = "maven_model",
-    jars = [
-        "maven_model/maven-aether-provider-3.2.3.jar",
-        "maven_model/maven-model-3.2.3.jar",
-        "maven_model/maven-model-builder-3.2.3.jar",
-        "maven_model/maven-repository-metadata-3.2.3.jar",
-    ],
-)
-
 UNNECESSARY_DYNAMIC_LIBRARIES = select({
     "//src/conditions:windows": "*.so *.jnilib",
     "//src/conditions:darwin": "*.so *.dll",
@@ -528,9 +469,14 @@ UNNECESSARY_DYNAMIC_LIBRARIES = select({
     "//src/conditions:arm": "*.so *.jnilib *.dll",
     "//src/conditions:linux_aarch64": "*.so *.jnilib *.dll",
     "//src/conditions:linux_ppc": "*.so *.jnilib *.dll",
-    # Play it safe -- better have a big binary than a slow binary
-    # zip -d does require an argument. Supply something bogus.
-    "//conditions:default": "*.bogusextension",
+    "//src/conditions:linux_s390x": "*.so *.jnilib *.dll",
+    "//src/conditions:freebsd": "*.so *.jnilib *.dll",
+    "//src/conditions:openbsd": "*.so *.jnilib *.dll",
+    # Default is to play it safe -- better have a big binary than a slow binary
+    #   The empty string means nothing is to be removed from the library;
+    #   the rule command tests for the empty string explictly to avoid
+    #   zip erroring when it finds nothing to remove.
+    "//conditions:default": "",
 })
 
 # Remove native libraries that are for a platform different from the one we are
@@ -539,7 +485,10 @@ genrule(
     name = "filter_netty_dynamic_libs",
     srcs = ["netty_tcnative/netty-tcnative-boringssl-static-2.0.24.Final.jar"],
     outs = ["netty_tcnative/netty-tcnative-filtered.jar"],
-    cmd = "cp $< $@ && zip -qd $@ " + UNNECESSARY_DYNAMIC_LIBRARIES,
+    cmd = "cp $< $@ && " +
+      # End successfully if there is nothing to be deleted from the archive
+      "if [ -n '" + UNNECESSARY_DYNAMIC_LIBRARIES + "' ]; then " +
+      "zip -qd $@ " + UNNECESSARY_DYNAMIC_LIBRARIES + "; fi",
 )
 
 java_import(
@@ -550,29 +499,6 @@ java_import(
 java_import(
     name = "netty_tcnative",
     jars = ["netty_tcnative/netty-tcnative-filtered.jar"],
-)
-
-java_import(
-    name = "plexus_component_annotations",
-    jars = ["plexus_component_annotations/plexus-component-annotations-1.6.jar"],
-)
-
-java_import(
-    name = "plexus_interpolation",
-    jars = ["plexus_interpolation/plexus-interpolation-1.22.jar"],
-)
-
-java_import(
-    name = "plexus_utils",
-    jars = ["plexus_utils/plexus-utils-3.0.21.jar"],
-)
-
-java_import(
-    name = "slf4j",
-    jars = [
-        "slf4j/slf4j-api-1.7.7.jar",
-        "slf4j/slf4j-jdk14-1.7.7.jar",
-    ],
 )
 
 java_import(
@@ -602,7 +528,7 @@ java_import(
     name = "junit4",
     jars = [
         "hamcrest/hamcrest-core-1.3.jar",
-        "junit/junit-4.12.jar",
+        "junit/junit-4.13.jar",
     ],
 )
 
@@ -653,7 +579,7 @@ filegroup(
     name = "junit4-jars",
     srcs = [
         "hamcrest/hamcrest-core-1.3.jar",
-        "junit/junit-4.12.jar",
+        "junit/junit-4.13.jar",
     ],
 )
 
@@ -707,6 +633,11 @@ config_setting(
 config_setting(
     name = "freebsd",
     values = {"host_cpu": "freebsd"},
+)
+
+config_setting(
+    name = "openbsd",
+    values = {"host_cpu": "openbsd"},
 )
 
 config_setting(

@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.syntax;
 
-import java.io.IOException;
 import java.util.List;
 
 /** Syntax node for list and tuple expressions. */
@@ -38,21 +37,6 @@ public final class ListExpression extends Expression {
   }
 
   @Override
-  public void prettyPrint(Appendable buffer) throws IOException {
-    buffer.append(isTuple() ? '(' : '[');
-    String sep = "";
-    for (Expression e : elements) {
-      buffer.append(sep);
-      e.prettyPrint(buffer);
-      sep = ", ";
-    }
-    if (isTuple() && elements.size() == 1) {
-      buffer.append(',');
-    }
-    buffer.append(isTuple() ? ')' : ']');
-  }
-
-  @Override
   public String toString() {
     // Print [a, b, c, ...] up to a maximum of 4 elements or 32 chars.
     StringBuilder buf = new StringBuilder();
@@ -66,7 +50,7 @@ public final class ListExpression extends Expression {
   }
 
   // Appends elements to buf, comma-separated, abbreviating if they are numerous or long.
-  // (Also used by FuncallExpression.)
+  // (Also used by CallExpression.)
   static void appendNodes(StringBuilder buf, List<? extends Node> elements) {
     int n = elements.size();
     for (int i = 0; i < n; i++) {

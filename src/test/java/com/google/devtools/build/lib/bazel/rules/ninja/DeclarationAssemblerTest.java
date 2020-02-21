@@ -18,11 +18,12 @@ package com.google.devtools.build.lib.bazel.rules.ninja;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.Lists;
-import com.google.devtools.build.lib.bazel.rules.ninja.file.BufferEdge;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.ByteBufferFragment;
+import com.google.devtools.build.lib.bazel.rules.ninja.file.ByteFragmentAtOffset;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.DeclarationAssembler;
 import com.google.devtools.build.lib.bazel.rules.ninja.file.GenericParsingException;
-import com.google.devtools.build.lib.bazel.rules.ninja.file.NinjaSeparatorPredicate;
+import com.google.devtools.build.lib.bazel.rules.ninja.file.NinjaSeparatorFinder;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -35,7 +36,7 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class DeclarationAssemblerTest {
   @Test
-  public void testAssembleLines() throws GenericParsingException {
+  public void testAssembleLines() throws GenericParsingException, IOException {
     // Glue two parts of the same token together
     doSameBufferTest("0123456789", 1, 3, 3, 5, "1234");
     // The '\n' symbol happened to be the last in the buffer, we should correctly
@@ -54,19 +55,24 @@ public class DeclarationAssemblerTest {
   }
 
   private static void doTwoBuffersTest(String s1, String s2, String... expected)
-      throws GenericParsingException {
+      throws GenericParsingException, IOException {
     List<String> list = Lists.newArrayList();
-    DeclarationAssembler assembler =
-        new DeclarationAssembler(
-            item -> list.add(item.toString()), NinjaSeparatorPredicate.INSTANCE);
-
     final byte[] chars1 = s1.getBytes(StandardCharsets.ISO_8859_1);
     final byte[] chars2 = s2.getBytes(StandardCharsets.ISO_8859_1);
 
+    DeclarationAssembler assembler =
+        new DeclarationAssembler(
+            (byteFragmentAtOffset) -> {
+              list.add(byteFragmentAtOffset.getFragment().toString());
+              assertThat(byteFragmentAtOffset.getOffset()).isAnyOf(0, chars1.length);
+            },
+            NinjaSeparatorFinder.INSTANCE);
+
     assembler.wrapUp(
         Lists.newArrayList(
-            new BufferEdge(0, new ByteBufferFragment(ByteBuffer.wrap(chars1), 0, s1.length())),
-            new BufferEdge(
+            new ByteFragmentAtOffset(
+                0, new ByteBufferFragment(ByteBuffer.wrap(chars1), 0, s1.length())),
+            new ByteFragmentAtOffset(
                 chars1.length, new ByteBufferFragment(ByteBuffer.wrap(chars2), 0, s2.length()))));
 
     assertThat(list).isEqualTo(Arrays.asList(expected));
@@ -74,17 +80,23 @@ public class DeclarationAssemblerTest {
 
   private static void doSameBufferTest(
       String s, int start1, int end1, int start2, int end2, String... expected)
-      throws GenericParsingException {
+      throws GenericParsingException, IOException {
     List<String> list = Lists.newArrayList();
     DeclarationAssembler assembler =
         new DeclarationAssembler(
-            item -> list.add(item.toString()), NinjaSeparatorPredicate.INSTANCE);
+            (byteFragmentAtOffset) -> {
+              list.add(byteFragmentAtOffset.getFragment().toString());
+              assertThat(byteFragmentAtOffset.getOffset()).isEqualTo(0);
+            },
+            NinjaSeparatorFinder.INSTANCE);
 
     final byte[] chars = s.getBytes(StandardCharsets.ISO_8859_1);
     assembler.wrapUp(
         Lists.newArrayList(
-            new BufferEdge(0, new ByteBufferFragment(ByteBuffer.wrap(chars), start1, end1)),
-            new BufferEdge(0, new ByteBufferFragment(ByteBuffer.wrap(chars), start2, end2))));
+            new ByteFragmentAtOffset(
+                0, new ByteBufferFragment(ByteBuffer.wrap(chars), start1, end1)),
+            new ByteFragmentAtOffset(
+                0, new ByteBufferFragment(ByteBuffer.wrap(chars), start2, end2))));
 
     assertThat(list).isEqualTo(Arrays.asList(expected));
   }

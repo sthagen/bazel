@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2018 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,31 +33,30 @@ bazel run //tools/aquery_differ:aquery_differ -- \
 --attrs=inputs
 """
 
+from __future__ import absolute_import
+from __future__ import division
 from __future__ import print_function
 import difflib
 import os
 import sys
 
+# Do not edit this line. Copybara replaces it with PY2 migration helper.
+from absl import app
+from absl import flags
+from six.moves import map
 from google.protobuf import text_format
 from src.main.protobuf import analysis_pb2
 from tools.aquery_differ.resolvers.dep_set_resolver import DepSetResolver
-from third_party.py import gflags
 
-gflags.DEFINE_string("before", None, "Aquery output before the change")
-gflags.DEFINE_string("after", None, "Aquery output after the change")
-gflags.DEFINE_enum(
+flags.DEFINE_string("before", None, "Aquery output before the change")
+flags.DEFINE_string("after", None, "Aquery output after the change")
+flags.DEFINE_enum(
     "input_type", "proto", ["proto", "textproto"],
     "The format of the aquery proto input. One of 'proto' and 'textproto.")
-gflags.DEFINE_multistring(
-    "attrs", ["cmdline"], "Attributes of the actions to be compared. Values " +
-    "must be ones of [\"inputs\", \"cmdline\"]")
-gflags.MarkFlagAsRequired("before")
-gflags.MarkFlagAsRequired("after")
-
-gflags.RegisterValidator(
-    "attrs",
-    lambda values: all(v in ["inputs", "cmdline"] for v in values),
-    message="value should be one of [\"inputs\", \"cmdline\"]")
+flags.DEFINE_multi_enum("attrs", ["cmdline"], ["inputs", "cmdline"],
+                        "Attributes of the actions to be compared.")
+flags.mark_flag_as_required("before")
+flags.mark_flag_as_required("after")
 
 WHITE = "\033[37m%s\033[0m"
 CYAN = "\033[36m%s\033[0m"
@@ -243,11 +243,11 @@ def to_absolute_path(path):
       return path
 
 
-def main():
-  before_file = to_absolute_path(gflags.FLAGS.before)
-  after_file = to_absolute_path(gflags.FLAGS.after)
-  input_type = gflags.FLAGS.input_type
-  attrs = gflags.FLAGS.attrs
+def main(unused_argv):
+  before_file = to_absolute_path(flags.FLAGS.before)
+  after_file = to_absolute_path(flags.FLAGS.after)
+  input_type = flags.FLAGS.input_type
+  attrs = flags.FLAGS.attrs
 
   before_proto = analysis_pb2.ActionGraphContainer()
   after_proto = analysis_pb2.ActionGraphContainer()
@@ -268,4 +268,4 @@ def main():
 
 
 if __name__ == "__main__":
-  main()
+  app.run(main)

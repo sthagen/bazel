@@ -13,7 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.dynamic;
 
-import com.google.devtools.common.options.Converters.AssignmentToListOfValuesConverter;
+import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
@@ -69,7 +69,7 @@ public class DynamicExecutionOptions extends OptionsBase {
 
   @Option(
       name = "dynamic_local_strategy",
-      converter = AssignmentToListOfValuesConverter.class,
+      converter = Converters.StringToStringListConverter.class,
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {OptionEffectTag.UNKNOWN},
       defaultValue = "null",
@@ -82,7 +82,7 @@ public class DynamicExecutionOptions extends OptionsBase {
 
   @Option(
       name = "dynamic_remote_strategy",
-      converter = AssignmentToListOfValuesConverter.class,
+      converter = Converters.StringToStringListConverter.class,
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {OptionEffectTag.UNKNOWN},
       defaultValue = "",
@@ -120,4 +120,26 @@ public class DynamicExecutionOptions extends OptionsBase {
     defaultValue = "false"
   )
   public boolean debugSpawnScheduler;
+
+  @Option(
+      name = "experimental_require_availability_info",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      defaultValue = "false",
+      help =
+          "If true, fail the build if there are actions that set requires-darwin but do not have"
+              + "Xcode availability-related execution requirements set.")
+  public boolean requireAvailabilityInfo;
+
+  @Option(
+      name = "experimental_availability_info_exempt",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      defaultValue = "Genrule,TestRunner",
+      converter = Converters.CommaSeparatedOptionListConverter.class,
+      help =
+          "A comma-separated list of mnemonics that are not required to have Xcode-related "
+              + "execution info if --experimental_require_availability_info=true. No-op if "
+              + "--experimental_require_availability_info=false.")
+  public List<String> availabilityInfoExempt;
 }

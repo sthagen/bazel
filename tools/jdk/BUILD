@@ -116,6 +116,11 @@ java_runtime_files(
     srcs = ["include/freebsd/jni_md.h"],
 )
 
+java_runtime_files(
+    name = "jni_md_header-openbsd",
+    srcs = ["include/openbsd/jni_md.h"],
+)
+
 alias(
     name = "java",
     actual = "@local_jdk//:java",
@@ -242,16 +247,6 @@ remote_java_tools_filegroup(
     target = ":java_tools/Runner_deploy.jar",
 )
 
-remote_java_tools_java_import(
-    name = "ExperimentalTestRunner",
-    target = ":java_tools/ExperimentalRunner_deploy.jar",
-)
-
-remote_java_tools_filegroup(
-    name = "ExperimentalRunner_deploy.jar",
-    target = ":java_tools/ExperimentalRunner_deploy.jar",
-)
-
 alias(
     name = "proguard",
     actual = select({
@@ -313,7 +308,7 @@ alias(
 
 alias(
     name = "host_jdk",
-    actual = ":remote_jdk",
+    actual = ":remote_jdk11",
 )
 
 bootclasspath(
@@ -428,7 +423,7 @@ py_binary(
         "proguard_whitelister.py",
     ],
     deps = [
-        "//third_party/py/gflags",
+        "//third_party/py/abseil",
     ],
 )
 
@@ -459,40 +454,6 @@ test_suite(
     name = "all_windows_tests",
     tests = [":windows_tests"],
     visibility = ["//tools:__pkg__"],
-)
-
-# Replacement for the embedded JDK as host javabase.
-alias(
-    name = "remote_jdk",
-    actual = select(
-        {
-            "//src/conditions:darwin": "@remotejdk_macos//:jdk",
-            "//src/conditions:darwin_x86_64": "@remotejdk_macos//:jdk",
-            "//src/conditions:windows": "@remotejdk_win//:jdk",
-            "//src/conditions:linux_aarch64": "@remotejdk_linux_aarch64//:jdk",
-            "//src/conditions:linux_x86_64": "@remotejdk_linux//:jdk",
-        },
-        no_match_error = "Could not find a JDK for host execution environment, please explicitly" +
-                         " provide one using `--host_javabase.`",
-    ),
-    visibility = ["//visibility:public"],
-)
-
-# A JDK 10 for use as a --host_javabase.
-alias(
-    name = "remote_jdk10",
-    actual = select(
-        {
-            "//src/conditions:darwin": "@remotejdk10_macos//:jdk",
-            "//src/conditions:darwin_x86_64": "@remotejdk10_macos//:jdk",
-            "//src/conditions:windows": "@remotejdk10_win//:jdk",
-            "//src/conditions:linux_aarch64": "@remotejdk10_linux_aarch64//:jdk",
-            "//src/conditions:linux_x86_64": "@remotejdk10_linux//:jdk",
-        },
-        no_match_error = "Could not find a JDK for host execution environment, please explicitly" +
-                         " provide one using `--host_javabase.`",
-    ),
-    visibility = ["//visibility:public"],
 )
 
 # A JDK 11 for use as a --host_javabase.

@@ -1,17 +1,17 @@
 ---
 layout: documentation
-title: Query Language
+title: Query language
 ---
-<h1>The Bazel Query Reference</h1>
+<h1>The Bazel query reference</h1>
 
 
 <ul class="toc">
   <li><a href="query.html#examples">Examples</a></li>
-  <li><a href="query.html#tokens">Tokens: The Lexical Syntax</a></li>
-  <li><a href="query.html#concepts">Bazel Query Language Concepts</a></li>
-  <li><a href="query.html#expressions">Expressions: Syntax and Semantics of the Grammar</a></li>
+  <li><a href="query.html#tokens">Tokens: The lexical syntax</a></li>
+  <li><a href="query.html#concepts">Bazel query language concepts</a></li>
+  <li><a href="query.html#expressions">Expressions: Syntax and semantics of the grammar</a></li>
   <li><a href="query.html#functions">Functions</a></li>
-  <li><a href="query.html#output-formats">Output Formats</a></li>
+  <li><a href="query.html#output-formats">Output formats</a></li>
 </ul>
 
 <p>
@@ -51,7 +51,7 @@ title: Query Language
   <pre>kind("cc_library", deps(kind(".*test rule", foo/...)) except deps(//foo:foo_bin))</pre>
 
 
-<h2 id='tokens'>Tokens: The Lexical Syntax</h2>
+<h2 id='tokens'>Tokens: The lexical syntax</h2>
 
 <p>
   Expressions in the query language are composed of the following
@@ -149,7 +149,7 @@ title: Query Language
   Whitespace characters outside of a quoted word are ignored.
 </p>
 
-<h2 id='concepts'>Bazel Query Language Concepts</h2>
+<h2 id='concepts'>Bazel query language concepts</h2>
 <p>
   The Bazel query language is a language of expressions.  Every
   expression evaluates to a <b>partially-ordered set</b> of targets,
@@ -262,7 +262,7 @@ title: Query Language
   <code>dir/...</code>, etc.
 </p>
 
-<h3 id='sky-query'>Sky Query</h3>
+<h3 id='sky-query'>Sky query</h3>
 
 <p>
   Query has two different implementations, with slightly different features. The alternative one is
@@ -287,7 +287,7 @@ title: Query Language
   it is faster and uses less memory.
 </p>
 
-<h2 id='expressions'>Expressions: Syntax and Semantics of the Grammar</h2>
+<h2 id='expressions'>Expressions: Syntax and semantics of the grammar</h2>
 
 <p>
   This is the grammar of the Bazel query language, expressed in EBNF
@@ -805,7 +805,7 @@ x intersect (y union z)</pre>
     <li><code><var>ruletype</var> rule</code>
     <li><code><var>ruletype</var></code><br>
     Where <var>ruletype</var> is a build rule.  The difference between these
-    forms is that including "rule" causes the regular expression match for
+    forms is that including "rule" causes the <a href="#regex">regular expression</a> match for
     <var>ruletype</var> to be anchored.
   </ul>
 <li><b>package group</b> patterns should simply be:
@@ -849,7 +849,7 @@ genrule(
 
 <p>
   Quotation of the <var>pattern</var> argument is often required
-  because without it, many regular expressions, such as <code>source
+  because without it, many <a href="#regex">regular expressions</a>, such as <code>source
   file</code> and <code>.*_test</code>, are not considered words by
   the parser.
 </p>
@@ -871,7 +871,7 @@ genrule(
 
 <p>
   The first argument, <var>pattern</var> is a word containing a
-  regular expression over target names.  A <code>filter</code> expression
+  <a href="#regex">regular expression</a> over target names.  A <code>filter</code> expression
   evaluates to the set containing all targets <var>x</var> such that
   <var>x</var> is a member of the set <var>input</var> and the
   label (in absolute form, e.g. <code>//foo:bar</code>)
@@ -919,12 +919,12 @@ genrule(
   operator applies a filter to a set of targets, and discards targets that
   are not rules, rule targets that do not have attribute <var>name</var>
   defined or rule targets where the attribute value does not match the provided
-  regular expression <var>pattern</var>; it evaluates to a subset of its input.
+  <a href="#regex">regular expression</a> <var>pattern</var>; it evaluates to a subset of its input.
 </p>
 
 <p>
   The first argument, <var>name</var> is the name of the rule attribute that
-  should be matched against the provided regular expression pattern. The second
+  should be matched against the provided <a href="#regex">regular expression</a> pattern. The second
   argument, <var>pattern</var> is a regular expression over the attribute
   values. An <code>attr</code> expression evaluates to the set containing all
   targets <var>x</var> such that  <var>x</var> is a member of the set
@@ -1103,7 +1103,7 @@ genrule(
   .bzl files that are referenced from its BUILD files.
 </p>
 
-<h2 id='output-formats'>Output Formats</h2>
+<h2 id='output-formats'>Output formats</h2>
 
 <p>
   <code>bazel query</code> generates a graph.
@@ -1512,6 +1512,12 @@ maxrank
   be included in the XML output.
 </p>
 
+
+<h3 id="regex">Regular expressions</h3>
+
+Regular expressions in the query language are implemented using the Java
+regex library, so they support the full syntax documented
+for <a href="https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html"><code>java.util.regex.Pattern</code></a>.
 
 <h3 id="external-repos">Querying with external repositories</h3>
 
