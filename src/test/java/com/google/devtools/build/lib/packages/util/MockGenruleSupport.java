@@ -1,4 +1,4 @@
-// Copyright 2015 The Bazel Authors. All Rights Reserved.
+// Copyright 2020 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,30 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.devtools.build.lib.packages.util;
 
-package com.google.testing.junit.runner.testbed;
-
-import static org.junit.Assert.fail;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import java.io.IOException;
 
 /**
- * A JUnit4-style test meant to be invoked by junit4_testbridge_tests.sh.
+ * Creates mock BUILD files required for the genrule rule.
  */
-@RunWith(JUnit4.class)
-public class JUnit4TestbridgeExercises {
-  @Test
-  public void testPass() {}
-
-  @Test
-  public void testFailOnce() {
-    fail();
-  }
-
-  @Test
-  public void testFailAgain() {
-    fail();
+public final class MockGenruleSupport {
+  /**
+   * Sets up mocking support for genrules.
+   */
+  public static void setup(MockToolsConfig config) throws IOException {
+    config.create(
+        "tools/genrule/BUILD",
+        "exports_files(['genrule-setup.sh'])");
+    config.create("tools/genrule/genrule-setup.sh");
   }
 }
