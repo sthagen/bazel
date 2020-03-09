@@ -104,7 +104,7 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   private final Path processWrapper;
   private final Path sandboxBase;
   private final Duration timeoutKillDelay;
-  private final @Nullable SandboxfsProcess sandboxfsProcess;
+  @Nullable private final SandboxfsProcess sandboxfsProcess;
   private final boolean sandboxfsMapSymlinkTargets;
   private final TreeDeleter treeDeleter;
 
@@ -218,7 +218,8 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
     // b/64689608: The execroot of the sandboxed process must end with the workspace name, just like
     // the normal execroot does.
-    Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(execRoot.getBaseName());
+    String workspaceName = execRoot.getBaseName();
+    Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(workspaceName);
     sandboxExecRoot.getParentDirectory().createDirectory();
     sandboxExecRoot.createDirectory();
 
@@ -271,6 +272,7 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       return new SandboxfsSandboxedSpawn(
           sandboxfsProcess,
           sandboxPath,
+          workspaceName,
           commandLine,
           environment,
           inputs,
