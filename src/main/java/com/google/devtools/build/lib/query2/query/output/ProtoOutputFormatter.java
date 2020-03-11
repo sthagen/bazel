@@ -24,14 +24,11 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.graph.Digraph;
 import com.google.devtools.build.lib.graph.Node;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
@@ -54,6 +51,7 @@ import com.google.devtools.build.lib.query2.engine.QueryEnvironment;
 import com.google.devtools.build.lib.query2.engine.SynchronizedDelegatingOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.engine.ThreadSafeOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.proto.proto2api.Build;
+import com.google.devtools.build.lib.query2.proto.proto2api.Build.Attribute.Discriminator;
 import com.google.devtools.build.lib.query2.proto.proto2api.Build.GeneratedFile;
 import com.google.devtools.build.lib.query2.proto.proto2api.Build.QueryResult;
 import com.google.devtools.build.lib.query2.proto.proto2api.Build.SourceFile;
@@ -100,8 +98,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
   private boolean flattenSelects = true;
   private boolean includeLocations = true;
   private boolean includeRuleInputsAndOutputs = true;
-
-  private EventHandler eventHandler;
+  private boolean includeSyntheticAttributeHash = false;
 
   @Override
   public String getName() {
@@ -119,11 +116,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
     this.flattenSelects = options.protoFlattenSelects;
     this.includeLocations = options.protoIncludeLocations;
     this.includeRuleInputsAndOutputs = options.protoIncludeRuleInputsAndOutputs;
-  }
-
-  @Override
-  public void setEventHandler(EventHandler eventHandler) {
-    this.eventHandler = eventHandler;
+    this.includeSyntheticAttributeHash = options.protoIncludeSyntheticAttributeHash;
   }
 
   private static Predicate<String> newAttributePredicate(List<String> outputAttributes) {
@@ -167,12 +160,12 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
 
   /** Converts a logical {@link Target} object into a {@link Build.Target} protobuffer. */
   public Build.Target toTargetProtoBuffer(Target target) throws InterruptedException {
-    return toTargetProtoBuffer(target, null);
+    return toTargetProtoBuffer(target, /*extraDataForAttrHash=*/ "");
   }
 
   /** Converts a logical {@link Target} object into a {@link Build.Target} protobuffer. */
   @VisibleForTesting
-  public Build.Target toTargetProtoBuffer(Target target, Object extraDataForPostProcess)
+  public Build.Target toTargetProtoBuffer(Target target, Object extraDataForAttrHash)
       throws InterruptedException {
     Build.Target.Builder targetPb = Build.Target.newBuilder();
 
@@ -184,7 +177,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
       if (includeLocations) {
         rulePb.setLocation(FormatUtils.getLocation(target, relativeLocations));
       }
-      addAttributes(rulePb, rule, extraDataForPostProcess);
+      addAttributes(rulePb, rule, extraDataForAttrHash);
       String transitiveHashCode = rule.getRuleClassObject().getRuleDefinitionEnvironmentHashCode();
       if (transitiveHashCode != null && includeRuleDefinitionEnvironment()) {
         // The RuleDefinitionEnvironment is always defined for Skylark rules and
@@ -208,7 +201,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
           if (!includeAspectAttribute(attribute, labels)) {
             continue;
           }
-          Object attributeValue = getAspectAttributeValue(target, attribute, labels);
+          Object attributeValue = getAspectAttributeValue(attribute, labels);
           Build.Attribute serializedAttribute =
               AttributeFormatter.getAttributeProto(
                   attribute,
@@ -339,7 +332,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
     return targetPb.build();
   }
 
-  protected void addAttributes(Build.Rule.Builder rulePb, Rule rule, Object extraDataForPostProcess)
+  protected void addAttributes(Build.Rule.Builder rulePb, Rule rule, Object extraDataForAttrHash)
       throws InterruptedException {
     Map<Attribute, Build.Attribute> serializedAttributes = Maps.newHashMap();
     AggregatingAttributeMapper attributeMapper = AggregatingAttributeMapper.of(rule);
@@ -371,7 +364,15 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
             .sorted(ATTRIBUTE_NAME)
             .collect(Collectors.toList()));
 
-    postProcess(rule, rulePb, serializedAttributes, extraDataForPostProcess);
+    if (includeSyntheticAttributeHash()) {
+      rulePb.addAttribute(
+          Build.Attribute.newBuilder()
+              .setName("$internal_attr_hash")
+              .setStringValue(
+                  SyntheticAttributeHashCalculator.compute(
+                      rule, serializedAttributes, extraDataForAttrHash))
+              .setType(Discriminator.STRING));
+    }
   }
 
   protected boolean shouldIncludeAttribute(Rule rule, Attribute attr) {
@@ -379,29 +380,11 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
         && ruleAttributePredicate.apply(attr.getName());
   }
 
-  private Object getAspectAttributeValue(
-      Target target, Attribute attribute, Collection<Label> labels) {
+  private static Object getAspectAttributeValue(Attribute attribute, Collection<Label> labels) {
     Type<?> attributeType = attribute.getType();
     if (attributeType.equals(BuildType.LABEL)) {
       Preconditions.checkState(labels.size() == 1, "attribute=%s, labels=%s", attribute, labels);
       return Iterables.getOnlyElement(labels);
-    } else if (attributeType.equals(BuildType.LABEL_KEYED_STRING_DICT)) {
-      // Ideally we'd support LABEL_KEYED_STRING_DICT by getting the value directly from the aspect
-      // definition vs. trying to reverse-construct it from the flattened labels as this method
-      // does. Unfortunately any proper support surfaces a latent bug between --output=proto and
-      // aspect attributes: "{@code labels} isn't the set of labels for a single attribute value but
-      // for all values of all attributes with the same name. We can have multiple attributes with
-      // the same name because multiple aspects may attach to a rule, and nothing is stopping them
-      // from defining the same attribute names. That means the "Attribute" proto message doesn't
-      // really represent a single attribute, in spite of its documented purpose. This all calls for
-      // an API design upgrade to properly consider these relationships. Details at b/149982967.
-      eventHandler.handle(
-          Event.error(
-              String.format(
-                  "Target \"%s\", aspect attribute \"%s\": type \"%s\" not yet supported with"
-                      + " --output=proto. See b/149982967",
-                  target.getLabel(), attribute.getName(), BuildType.LABEL_KEYED_STRING_DICT)));
-      return ImmutableMap.of();
     } else {
       Preconditions.checkState(
           attributeType.equals(BuildType.LABEL_LIST),
@@ -413,13 +396,6 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
     }
   }
 
-  /** Further customize the proto output */
-  protected void postProcess(
-      Rule rule,
-      Build.Rule.Builder rulePb,
-      Map<Attribute, Build.Attribute> serializedAttributes,
-      Object extraDataForPostProcess) {}
-
   /** Allow filtering of aspect attributes. */
   protected boolean includeAspectAttribute(Attribute attr, Collection<Label> value) {
     return true;
@@ -427,6 +403,11 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
 
   protected boolean includeRuleDefinitionEnvironment() {
     return true;
+  }
+
+  /** Returns if the "$internal_attr_hash" should be computed and added to the result. */
+  protected boolean includeSyntheticAttributeHash() {
+    return includeSyntheticAttributeHash;
   }
 
   /**
