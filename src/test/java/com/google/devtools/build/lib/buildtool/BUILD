@@ -11,6 +11,7 @@ filegroup(
     srcs = glob(["*"]) + [
         "//src/test/java/com/google/devtools/build/lib/buildtool/util:srcs",
     ],
+    visibility = ["//src:__subpackages__"],
 )
 
 java_test(
@@ -34,8 +35,8 @@ java_test(
         "SymlinkForestTest.java",
     ],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib:abrupt_exit_exception",
         "//src/main/java/com/google/devtools/build/lib:runtime",
-        "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
