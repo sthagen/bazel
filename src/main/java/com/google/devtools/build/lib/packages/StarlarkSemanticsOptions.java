@@ -265,18 +265,15 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
   public boolean experimentalSiblingRepositoryLayout;
 
   @Option(
-      name = "incompatible_bzl_disallow_load_after_statement",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
-      metadataTags = {
-        OptionMetadataTag.INCOMPATIBLE_CHANGE,
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-      },
+      name = "experimental_exec_groups",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.EXECUTION},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
       help =
-          "If set to true, all `load` must be called at the top of .bzl files, before any other "
-              + "statement.")
-  public boolean incompatibleBzlDisallowLoadAfterStatement;
+          "If set to true, allows rule authors define and access multiple execution groups "
+              + "during rule definition. This work is ongoing.")
+  public boolean experimentalExecGroups;
 
   @Option(
       name = "experimental_allow_tags_propagation",
@@ -292,20 +289,6 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
               + " requirements; otherwise tags are not propagated. See"
               + " https://github.com/bazelbuild/bazel/issues/8830 for details.")
   public boolean experimentalAllowTagsPropagation;
-
-  @Option(
-      name = "incompatible_depset_union",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
-      metadataTags = {
-        OptionMetadataTag.INCOMPATIBLE_CHANGE,
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-      },
-      help =
-          "If set to true, depset union using `+`, `|` or `.union` are forbidden. "
-              + "Use the `depset` constructor instead.")
-  public boolean incompatibleDepsetUnion;
 
   @Option(
       name = "incompatible_always_check_depset_elements",
@@ -497,20 +480,6 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
   public boolean incompatibleNoImplicitFileExport;
 
   @Option(
-      name = "incompatible_no_output_attr_default",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
-      metadataTags = {
-        OptionMetadataTag.INCOMPATIBLE_CHANGE,
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-      },
-      help =
-          "If set to true, disables the `default` parameter of the `attr.output` and "
-              + "`attr.output_list` attribute definition functions.")
-  public boolean incompatibleNoOutputAttrDefault;
-
-  @Option(
       name = "incompatible_no_rule_outputs_param",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
@@ -599,20 +568,6 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
               + "Please see https://github.com/bazelbuild/bazel/issues/10134 for details and "
               + "migration instructions.")
   public boolean incompatibleUseCcConfigureFromRulesCc;
-
-  @Option(
-      name = "incompatible_restrict_named_params",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      metadataTags = {
-        OptionMetadataTag.INCOMPATIBLE_CHANGE,
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-      },
-      help =
-          "If set to true, restricts a number of Starlark built-in function parameters to be "
-              + "only specifiable positionally (and not by keyword).")
-  public boolean incompatibleRestrictNamedParams;
 
   @Option(
       name = "incompatible_depset_for_libraries_to_link_getter",
@@ -705,9 +660,8 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
             .experimentalRepoRemoteExec(experimentalRepoRemoteExec)
             .experimentalDisableExternalPackage(experimentalDisableExternalPackage)
             .experimentalSiblingRepositoryLayout(experimentalSiblingRepositoryLayout)
+            .experimentalExecGroups(experimentalExecGroups)
             .incompatibleApplicableLicenses(incompatibleApplicableLicenses)
-            .incompatibleBzlDisallowLoadAfterStatement(incompatibleBzlDisallowLoadAfterStatement)
-            .incompatibleDepsetUnion(incompatibleDepsetUnion)
             .incompatibleDisableTargetProviderFields(incompatibleDisableTargetProviderFields)
             .incompatibleDisableThirdPartyLicenseChecking(
                 incompatibleDisableThirdPartyLicenseChecking)
@@ -719,11 +673,9 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
             .incompatibleNewActionsApi(incompatibleNewActionsApi)
             .incompatibleNoAttrLicense(incompatibleNoAttrLicense)
             .incompatibleNoImplicitFileExport(incompatibleNoImplicitFileExport)
-            .incompatibleNoOutputAttrDefault(incompatibleNoOutputAttrDefault)
             .incompatibleNoRuleOutputsParam(incompatibleNoRuleOutputsParam)
             .incompatibleNoSupportToolsInActionInputs(incompatibleNoSupportToolsInActionInputs)
             .incompatibleNoTargetOutputGroup(incompatibleNoTargetOutputGroup)
-            .incompatibleRestrictNamedParams(incompatibleRestrictNamedParams)
             .incompatibleRunShellCommandString(incompatibleRunShellCommandString)
             .incompatibleVisibilityPrivateAttributesAtDefinition(
                 incompatibleVisibilityPrivateAttributesAtDefinition)

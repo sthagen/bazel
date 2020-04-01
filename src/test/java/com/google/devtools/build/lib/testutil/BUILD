@@ -35,7 +35,6 @@ java_library(
         "Scratch.java",
         "Suite.java",
         "TestFileOutErr.java",
-        "TestOnlyInNormalExecutionMode.java",
         "TestRuleClassProvider.java",
         "TestSpec.java",
         "TimestampGranularityUtils.java",
@@ -54,6 +53,8 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/com/google/devtools/build/lib/packages:build_type",
+        "//src/main/java/com/google/devtools/build/lib/packages:type",
         "//src/main/java/com/google/devtools/build/lib/util/io",
         "//src/main/java/com/google/devtools/build/lib/util/io:out-err",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
@@ -154,10 +155,17 @@ java_library(
         "TestConstants.java",
     ],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//third_party:guava",
     ],
+)
+
+java_library(
+    name = "SkyframeExecutorTestHelper",
+    srcs = [
+        "SkyframeExecutorTestHelper.java",
+    ],
+    deps = ["//src/main/java/com/google/devtools/build/lib:build-base"],
 )
 
 java_library(
