@@ -55,6 +55,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages:build_type",
         "//src/main/java/com/google/devtools/build/lib/packages:type",
+        "//src/main/java/com/google/devtools/build/lib/syntax:frontend",
         "//src/main/java/com/google/devtools/build/lib/util/io",
         "//src/main/java/com/google/devtools/build/lib/util/io:out-err",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
@@ -126,7 +127,7 @@ java_library(
         "EventIterableSubjectFactory.java",
     ],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:events",
+        "//src/main/java/com/google/devtools/build/lib/events",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party:truth",
@@ -140,8 +141,8 @@ java_library(
     ],
     deps = [
         ":TestConstants",
-        "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:util",
+        "//src/main/java/com/google/devtools/build/lib/events",
         "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",

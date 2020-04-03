@@ -18,7 +18,6 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.util.SpellChecker;
@@ -741,10 +740,10 @@ public final class EvalUtils {
    */
   public static void exec(
       ParserInput input, FileOptions options, Module module, StarlarkThread thread)
-      throws SyntaxError, EvalException, InterruptedException {
+      throws SyntaxError.Exception, EvalException, InterruptedException {
     StarlarkFile file = parseAndValidate(input, options, module);
     if (!file.ok()) {
-      throw new SyntaxError(file.errors());
+      throw new SyntaxError.Exception(file.errors());
     }
     exec(file, module, thread);
   }
@@ -772,7 +771,7 @@ public final class EvalUtils {
    */
   public static Object eval(
       ParserInput input, FileOptions options, Module module, StarlarkThread thread)
-      throws SyntaxError, EvalException, InterruptedException {
+      throws SyntaxError.Exception, EvalException, InterruptedException {
     Expression expr = Expression.parse(input, options);
     ValidationEnvironment.validateExpr(expr, module, options);
 
@@ -802,11 +801,11 @@ public final class EvalUtils {
   @Nullable
   public static Object execAndEvalOptionalFinalExpression(
       ParserInput input, FileOptions options, Module module, StarlarkThread thread)
-      throws SyntaxError, EvalException, InterruptedException {
+      throws SyntaxError.Exception, EvalException, InterruptedException {
     StarlarkFile file = StarlarkFile.parse(input, options);
     ValidationEnvironment.validateFile(file, module);
     if (!file.ok()) {
-      throw new SyntaxError(file.errors());
+      throw new SyntaxError.Exception(file.errors());
     }
 
     // If the final statement is an expression, synthesize a return statement.
