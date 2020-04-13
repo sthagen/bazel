@@ -69,6 +69,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.Dependency;
+import com.google.devtools.build.lib.analysis.DuplicateException;
 import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
@@ -86,7 +87,6 @@ import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTr
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NullTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfiguredTarget;
-import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfiguredTarget.DuplicateException;
 import com.google.devtools.build.lib.analysis.skylark.StarlarkTransition;
 import com.google.devtools.build.lib.analysis.skylark.StarlarkTransition.TransitionException;
 import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
@@ -457,8 +457,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   private ImmutableMap<SkyFunctionName, SkyFunction> skyFunctions(PackageFactory pkgFactory) {
     ConfiguredRuleClassProvider ruleClassProvider =
         (ConfiguredRuleClassProvider) pkgFactory.getRuleClassProvider();
-    SkylarkImportLookupFunction skylarkImportLookupFunctionForInlining =
-        getSkylarkImportLookupFunctionForInlining();
+    StarlarkImportLookupFunction starlarkImportLookupFunctionForInliningPackageAndWorkspaceNodes =
+        getStarlarkImportLookupFunctionForInliningPackageAndWorkspaceNodes();
     // TODO(janakr): use this semaphore to bound memory usage for SkyFunctions besides
     // ConfiguredTargetFunction that may have a large temporary memory blow-up.
     Semaphore cpuBoundSemaphore = new Semaphore(ResourceUsage.getAvailableProcessors());
@@ -485,7 +485,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(SkyFunctions.AST_FILE_LOOKUP, new ASTFileLookupFunction(ruleClassProvider));
     map.put(
         SkyFunctions.SKYLARK_IMPORTS_LOOKUP,
-        newSkylarkImportLookupFunction(ruleClassProvider, pkgFactory));
+        newStarlarkImportLookupFunction(ruleClassProvider, pkgFactory));
     map.put(SkyFunctions.GLOB, newGlobFunction());
     map.put(SkyFunctions.TARGET_PATTERN, new TargetPatternFunction());
     map.put(SkyFunctions.PREPARE_DEPS_OF_PATTERNS, new PrepareDepsOfPatternsFunction());
@@ -520,7 +520,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
             packageFunctionCache,
             fileSyntaxCache,
             numPackagesLoaded,
-            skylarkImportLookupFunctionForInlining,
+            starlarkImportLookupFunctionForInliningPackageAndWorkspaceNodes,
             packageProgress,
             actionOnIOExceptionReadingBuildFile,
             tracksStateForIncrementality()
@@ -546,12 +546,9 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         new AspectFunction(
             new BuildViewProvider(),
             ruleClassProvider,
-            skylarkImportLookupFunctionForInlining,
             shouldStoreTransitivePackagesInLoadingAndAnalysis(),
             defaultBuildOptions));
-    map.put(
-        SkyFunctions.LOAD_SKYLARK_ASPECT,
-        new ToplevelSkylarkAspectFunction(skylarkImportLookupFunctionForInlining));
+    map.put(SkyFunctions.LOAD_SKYLARK_ASPECT, new ToplevelSkylarkAspectFunction());
     map.put(SkyFunctions.ACTION_LOOKUP_CONFLICT_FINDING, new ActionLookupConflictFindingFunction());
     map.put(
         SkyFunctions.TOP_LEVEL_ACTION_LOOKUP_CONFLICT_FINDING,
@@ -564,15 +561,18 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(
         WorkspaceFileValue.WORKSPACE_FILE,
         new WorkspaceFileFunction(
-            ruleClassProvider, pkgFactory, directories, skylarkImportLookupFunctionForInlining));
+            ruleClassProvider,
+            pkgFactory,
+            directories,
+            starlarkImportLookupFunctionForInliningPackageAndWorkspaceNodes));
     map.put(SkyFunctions.EXTERNAL_PACKAGE, new ExternalPackageFunction());
     map.put(
         SkyFunctions.TARGET_COMPLETION,
-        CompletionFunction.targetCompletionFunction(
+        TargetCompletor.targetCompletionFunction(
             pathResolverFactory, skyframeActionExecutor::getExecRoot));
     map.put(
         SkyFunctions.ASPECT_COMPLETION,
-        CompletionFunction.aspectCompletionFunction(
+        AspectCompletor.aspectCompletionFunction(
             pathResolverFactory, skyframeActionExecutor::getExecRoot));
     map.put(SkyFunctions.TEST_COMPLETION, new TestCompletionFunction());
     map.put(
@@ -635,13 +635,14 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   }
 
   @Nullable
-  protected SkylarkImportLookupFunction getSkylarkImportLookupFunctionForInlining() {
+  protected StarlarkImportLookupFunction
+      getStarlarkImportLookupFunctionForInliningPackageAndWorkspaceNodes() {
     return null;
   }
 
-  protected SkyFunction newSkylarkImportLookupFunction(
+  protected SkyFunction newStarlarkImportLookupFunction(
       RuleClassProvider ruleClassProvider, PackageFactory pkgFactory) {
-    return new SkylarkImportLookupFunction(ruleClassProvider, this.pkgFactory);
+    return new StarlarkImportLookupFunction(ruleClassProvider, this.pkgFactory);
   }
 
   protected PerBuildSyscallCache newPerBuildSyscallCache(int concurrencyLevel) {
@@ -1257,7 +1258,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   protected Differencer.Diff getDiff(
       TimestampGranularityMonitor tsgm,
       Collection<PathFragment> modifiedSourceFiles,
-      final Root pathEntry)
+      final Root pathEntry,
+      int fsvcThreads)
       throws InterruptedException {
     if (modifiedSourceFiles.isEmpty()) {
       return new ImmutableDiff(ImmutableList.<SkyKey>of(), ImmutableMap.<SkyKey, SkyValue>of());
@@ -1279,7 +1281,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     logger.info(
         "About to recompute filesystem nodes corresponding to files that are known to have "
             + "changed");
-    FilesystemValueChecker fsvc = new FilesystemValueChecker(tsgm, null);
+    FilesystemValueChecker fsvc =
+        new FilesystemValueChecker(tsgm, /* lastExecutionTimeRange= */ null, fsvcThreads);
     Map<SkyKey, SkyValue> valuesMap = memoizingEvaluator.getValues();
     Differencer.DiffWithDelta diff =
         fsvc.getNewAndOldValues(valuesMap, dirtyFileStateSkyKeys, new FileDirtinessChecker());
@@ -2413,7 +2416,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       TopLevelArtifactContext topLevelArtifactContext)
       throws InterruptedException {
     checkActive();
-    PrecomputedValue.BAD_ACTIONS.set(injectable(), badActions);
+    SkyframeActionExecutor.BAD_ACTIONS.set(injectable(), badActions);
     // Make sure to not run too many analysis threads. This can cause memory thrashing.
     EvaluationResult<ActionLookupConflictFindingValue> result =
         evaluate(
@@ -2806,7 +2809,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   public abstract void detectModifiedOutputFiles(
       ModifiedFileSet modifiedOutputFiles,
       @Nullable Range<Long> lastExecutionTimeRange,
-      boolean trustRemoteArtifacts)
+      boolean trustRemoteArtifacts,
+      int fsvcThreads)
       throws AbruptExitException, InterruptedException;
 
   /**

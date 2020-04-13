@@ -18,6 +18,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -47,7 +48,7 @@ import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.StructProvider;
 import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.skyframe.SkylarkImportLookupFunction;
+import com.google.devtools.build.lib.skyframe.StarlarkImportLookupFunction;
 import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Depset;
@@ -233,6 +234,21 @@ public final class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     Event event = ev.getEventCollector().iterator().next();
     assertThat(event.getKind()).isEqualTo(EventKind.ERROR);
     assertThat(event.getMessage()).contains("Rule class r declared too many attributes");
+  }
+
+  @Test
+  public void testRuleClassTooLongAttributeName() throws Exception {
+    ev.setFailFast(false);
+
+    evalAndExport(
+        "def impl(ctx): return;",
+        "r = rule(impl, attrs = { '" + Strings.repeat("x", 150) + "': attr.int() })");
+
+    assertThat(ev.getEventCollector()).hasSize(1);
+    Event event = ev.getEventCollector().iterator().next();
+    assertThat(event.getKind()).isEqualTo(EventKind.ERROR);
+    assertThat(event.getMessage())
+        .matches("Attribute r\\.x{150}'s name is too long \\(150 > 128\\)");
   }
 
   @Test
@@ -740,7 +756,7 @@ public final class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     if (!file.ok()) {
       throw new SyntaxError.Exception(file.errors());
     }
-    SkylarkImportLookupFunction.execAndExport(file, FAKE_LABEL, ev.getEventHandler(), thread);
+    StarlarkImportLookupFunction.execAndExport(file, FAKE_LABEL, ev.getEventHandler(), thread);
   }
 
   @Test

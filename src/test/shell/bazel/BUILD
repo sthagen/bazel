@@ -597,8 +597,9 @@ sh_test(
     name = "bazel_docgen_test",
     size = "large",
     srcs = ["bazel_docgen_test.sh"],
-    data = ["//src/main/java/com/google/devtools/build/lib:gen_buildencyclopedia"],
+    data = ["//src/main/java/com/google/devtools/build/lib:generated_docs"],
     tags = ["no_windows"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
 sh_test(
@@ -1120,7 +1121,7 @@ sh_test(
         ":test-deps",
         "//src:embedded_jdk_allmodules",
         "//src:jdeps_modules.golden",
-        "//src/main/java/com/google/devtools/build/lib:bazel/BazelServer_deploy.jar",
+        "//src/main/java/com/google/devtools/build/lib/bazel:BazelServer_deploy.jar",
         "@bazel_tools//tools/bash/runfiles",
     ],
     tags = ["no_windows"],

@@ -228,7 +228,20 @@ java_library(
 java_library(
     name = "custom_exit_code_publisher",
     srcs = ["CustomExitCodePublisher.java"],
-    deps = ["//third_party:jsr305"],
+    deps = [
+        "//third_party:guava",
+        "//third_party:jsr305",
+    ],
+)
+
+java_library(
+    name = "custom_failure_detail_publisher",
+    srcs = ["CustomFailureDetailPublisher.java"],
+    deps = [
+        "//src/main/protobuf:failure_details_java_proto",
+        "//third_party:guava",
+        "//third_party:jsr305",
+    ],
 )
 
 java_library(
@@ -240,5 +253,15 @@ java_library(
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf:protobuf_java",
+    ],
+)
+
+java_library(
+    name = "crash_failure_details",
+    srcs = ["CrashFailureDetails.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/util:detailed_exit_code",
+        "//src/main/protobuf:failure_details_java_proto",
+        "//third_party:guava",
     ],
 )

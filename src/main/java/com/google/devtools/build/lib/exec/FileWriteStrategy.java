@@ -20,8 +20,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.RunningActionEvent;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
-import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
-import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction.DeterministicWriter;
+import com.google.devtools.build.lib.analysis.actions.DeterministicWriter;
 import com.google.devtools.build.lib.analysis.actions.FileWriteActionContext;
 import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.profiler.GoogleAutoProfilerUtils;
@@ -32,7 +31,8 @@ import java.io.OutputStream;
 import java.time.Duration;
 
 /**
- * A strategy for executing an {@link AbstractFileWriteAction}.
+ * A strategy for executing an {@link
+ * com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction}.
  */
 public final class FileWriteStrategy implements FileWriteActionContext {
   public static final Class<FileWriteStrategy> TYPE = FileWriteStrategy.class;
