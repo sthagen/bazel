@@ -70,9 +70,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Integration tests for Skylark.
- */
+/** Integration tests for Starlark. */
 @RunWith(JUnit4.class)
 public class SkylarkIntegrationTest extends BuildViewTestCase {
   protected boolean keepGoing() {
@@ -282,36 +280,6 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testOutputGroups() throws Exception {
-    setSkylarkSemanticsOptions(
-        "--incompatible_disallow_struct_provider_syntax=false",
-        "--incompatible_no_target_output_group=false");
-    scratch.file(
-        "test/skylark/extension.bzl",
-        "load('//myinfo:myinfo.bzl', 'MyInfo')",
-        "def _impl(ctx):",
-        "  f = ctx.attr.dep.output_group('_hidden_top_level" + INTERNAL_SUFFIX + "')",
-        "  return [MyInfo(result = f),",
-        "      OutputGroupInfo(my_group = f)]",
-        "my_rule = rule(implementation = _impl,",
-        "    attrs = { 'dep' : attr.label() })");
-    scratch.file(
-        "test/skylark/BUILD",
-        "load('//test/skylark:extension.bzl',  'my_rule')",
-        "cc_binary(name = 'lib', data = ['a.txt'])",
-        "my_rule(name='my', dep = ':lib')");
-    NestedSet<Artifact> hiddenTopLevelArtifacts =
-        OutputGroupInfo.get(getConfiguredTarget("//test/skylark:lib"))
-            .getOutputGroup(OutputGroupInfo.HIDDEN_TOP_LEVEL);
-    ConfiguredTarget myTarget = getConfiguredTarget("//test/skylark:my");
-    Depset result = (Depset) getMyInfoFromTarget(myTarget).getValue("result");
-    assertThat(result.getSet(Artifact.class).toList())
-        .containsExactlyElementsIn(hiddenTopLevelArtifacts.toList());
-    assertThat(OutputGroupInfo.get(myTarget).getOutputGroup("my_group").toList())
-        .containsExactlyElementsIn(hiddenTopLevelArtifacts.toList());
-  }
-
-  @Test
   public void testOutputGroupsDeclaredProvider() throws Exception {
     scratch.file(
         "test/skylark/extension.bzl",
@@ -406,37 +374,6 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
         .containsExactlyElementsIn(hiddenTopLevelArtifacts.toList());
     assertThat(OutputGroupInfo.get(myTarget).getOutputGroup("my_group").toList())
         .containsExactlyElementsIn(hiddenTopLevelArtifacts.toList());
-  }
-
-  @Test
-  public void testOutputGroupsWithList() throws Exception {
-    scratch.file(
-        "test/skylark/extension.bzl",
-        "load('//myinfo:myinfo.bzl', 'MyInfo')",
-        "def _impl(ctx):",
-        "  f = ctx.attr.dep.output_group('_hidden_top_level" + INTERNAL_SUFFIX + "')",
-        "  g = f.to_list()",
-        "  return [MyInfo(result = f),",
-        "      OutputGroupInfo(my_group = g, my_empty_group = [])]",
-        "my_rule = rule(implementation = _impl,",
-        "    attrs = { 'dep' : attr.label() })");
-    scratch.file(
-        "test/skylark/BUILD",
-        "load('//test/skylark:extension.bzl',  'my_rule')",
-        "cc_binary(name = 'lib', data = ['a.txt'])",
-        "my_rule(name='my', dep = ':lib')");
-
-    setSkylarkSemanticsOptions("--incompatible_no_target_output_group=false");
-    NestedSet<Artifact> hiddenTopLevelArtifacts =
-        OutputGroupInfo.get(getConfiguredTarget("//test/skylark:lib"))
-            .getOutputGroup(OutputGroupInfo.HIDDEN_TOP_LEVEL);
-    ConfiguredTarget myTarget = getConfiguredTarget("//test/skylark:my");
-    Depset result = (Depset) getMyInfoFromTarget(myTarget).getValue("result");
-    assertThat(result.getSet(Artifact.class).toList())
-        .containsExactlyElementsIn(hiddenTopLevelArtifacts.toList());
-    assertThat(OutputGroupInfo.get(myTarget).getOutputGroup("my_group").toList())
-        .containsExactlyElementsIn(hiddenTopLevelArtifacts.toList());
-    assertThat(OutputGroupInfo.get(myTarget).getOutputGroup("my_empty_group").toList()).isEmpty();
   }
 
   @Test
@@ -1995,8 +1932,8 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
         "    environments = ['default', 'other'])",
         "environment(name = 'default')",
         "environment(name = 'other')");
-    // The example skylark rule explicitly provides the MyProvider provider as a regression test
-    // for a bug where a skylark rule with unsatisfied constraints but explicit providers would
+    // The example Starlark rule explicitly provides the MyProvider provider as a regression test
+    // for a bug where a Starlark rule with unsatisfied constraints but explicit providers would
     // result in Bazel throwing a null pointer exception.
     scratch.file(
         "test/skylark/extension.bzl",
@@ -2017,25 +1954,6 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
     assertThat(getConfiguredTarget("//test/skylark:my")).isNull();
     assertContainsEvent(
         "//test/skylark:dep doesn't support expected environment: //buildenv/foo:default");
-  }
-
-  @Test
-  public void testNoTargetOutputGroup() throws Exception {
-    setSkylarkSemanticsOptions("--incompatible_no_target_output_group=true");
-    scratch.file(
-        "test/skylark/extension.bzl",
-        "def _impl(ctx):",
-        "  f = ctx.attr.dep.output_group()",
-        "my_rule = rule(implementation = _impl,",
-        "    attrs = { 'dep' : attr.label() })");
-
-    checkError(
-        "test/skylark",
-        "r",
-        "<target //test/skylark:lib> (rule 'cc_binary') doesn't have provider 'output_group'",
-        "load('//test/skylark:extension.bzl',  'my_rule')",
-        "cc_binary(name = 'lib', data = ['a.txt'])",
-        "my_rule(name='r', dep = ':lib')");
   }
 
   @Test
@@ -3049,9 +2967,7 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
     assertContainsEvent("'command' must be of type string");
   }
 
-  /**
-   * Skylark integration test that forces inlining.
-   */
+  /** Starlark integration test that forces inlining. */
   @RunWith(JUnit4.class)
   public static class SkylarkIntegrationTestsWithInlineCalls extends SkylarkIntegrationTest {
 
@@ -3061,11 +2977,11 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
           ((InMemoryMemoizingEvaluator) getSkyframeExecutor().getEvaluatorForTesting())
               .getSkyFunctionsForTesting();
       StarlarkImportLookupFunction starlarkImportLookupFunction =
-          new StarlarkImportLookupFunction(
+          StarlarkImportLookupFunction.createForInliningSelfForPackageAndWorkspaceNodes(
               this.getRuleClassProvider(),
               this.getPackageFactory(),
               /*starlarkImportLookupValueCacheSize=*/ 2);
-      starlarkImportLookupFunction.resetCache();
+      starlarkImportLookupFunction.resetSelfInliningCache();
       ((PackageFunction) skyFunctions.get(SkyFunctions.PACKAGE))
           .setStarlarkImportLookupFunctionForInliningForTesting(starlarkImportLookupFunction);
     }

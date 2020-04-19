@@ -22,6 +22,7 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.flogger.GoogleLogger;
 import com.google.common.io.Flushables;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.google.devtools.build.lib.analysis.NoBuildEvent;
@@ -43,6 +44,7 @@ import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.In
 import com.google.devtools.build.lib.syntax.Starlark;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.AnsiStrippingOutputStream;
+import com.google.devtools.build.lib.util.DebugLoggerConfigurator;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
 import com.google.devtools.build.lib.util.Pair;
@@ -62,7 +64,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * Dispatches to the Blaze commands; that is, given a command line, this abstraction looks up the
@@ -70,7 +71,7 @@ import java.util.logging.Logger;
  * Also, this object provides the runtime state (BlazeRuntime) to the commands.
  */
 public class BlazeCommandDispatcher implements CommandDispatcher {
-  private static final Logger logger = Logger.getLogger(BlazeCommandDispatcher.class.getName());
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   private static final ImmutableList<String> HELP_COMMAND = ImmutableList.of("help");
 
@@ -83,7 +84,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
   private String currentClientDescription = null;
   private String shutdownReason = null;
   private OutputStream logOutputStream = null;
-  private Level lastLogVerbosityLevel = null;
   private final LoadingCache<BlazeCommand, OpaqueOptionsData> optionsDataCache =
       CacheBuilder.newBuilder().build(
           new CacheLoader<BlazeCommand, OpaqueOptionsData>() {
@@ -398,10 +398,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
           outErr = bufferErr(outErr);
         }
 
-        if (!commonOptions.verbosity.equals(lastLogVerbosityLevel)) {
-          BlazeRuntime.setupLogging(commonOptions.verbosity);
-          lastLogVerbosityLevel = commonOptions.verbosity;
-        }
+        DebugLoggerConfigurator.setupLogging(commonOptions.verbosity);
 
         EventHandler handler = createEventHandler(outErr, eventHandlerOptions);
         reporter.addHandler(handler);
@@ -506,7 +503,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
           && !commandAnnotation.name().equals("clean")
           && !commandAnnotation.name().equals("info")) {
         try {
-          env.setupPackageCache(options);
+          env.syncPackageLoading(options);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           reporter.handle(Event.error("command interrupted while setting up package cache"));
@@ -573,7 +570,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
       e.printStackTrace();
       BugReport.printBug(outErr, e, commonOptions.oomMessage);
       bugReporter.sendBugReport(e, args);
-      logger.log(Level.SEVERE, "Shutting down due to exception", e);
+      logger.atSevere().withCause(e).log("Shutting down due to exception");
       result = BlazeCommandResult.createShutdown(e);
       return result;
     } finally {

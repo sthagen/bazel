@@ -810,12 +810,15 @@ public class ObjcSkylarkTest extends ObjcRuleTestCase {
 
     @SuppressWarnings("unchecked")
     List<String> copts = (List<String>) myInfo.getValue("copts");
+    @SuppressWarnings("unchecked")
+    List<String> compilationModeCopts = (List<String>) myInfo.getValue("compilation_mode_copts");
     Object iosSimulatorDevice = myInfo.getValue("ios_simulator_device");
     Object iosSimulatorVersion = myInfo.getValue("ios_simulator_version");
     Object signingCertificateName = myInfo.getValue("signing_certificate_name");
     Boolean generateDsym = (Boolean) myInfo.getValue("generate_dsym");
 
     assertThat(copts).contains("-DTestObjcCopt");
+    assertThat(compilationModeCopts).containsExactlyElementsIn(ObjcConfiguration.OPT_COPTS);
     assertThat(iosSimulatorDevice).isEqualTo("'iPhone 6'");
     assertThat(iosSimulatorVersion).isEqualTo("8.4");
     assertThat(signingCertificateName).isEqualTo("'Apple Developer'");
@@ -1612,10 +1615,10 @@ public class ObjcSkylarkTest extends ObjcRuleTestCase {
   }
 
   /**
-   * This test verifies that its possible to use the skylark constructor of ObjcProvider as a
-   * provider key to obtain the provider. This test only needs to exist as long as there are
-   * two methods of retrieving ObjcProvider (which is true for legacy reasons). This is the
-   * 'new' method of retrieving ObjcProvider.
+   * This test verifies that its possible to use the Starlark constructor of ObjcProvider as a
+   * provider key to obtain the provider. This test only needs to exist as long as there are two
+   * methods of retrieving ObjcProvider (which is true for legacy reasons). This is the 'new' method
+   * of retrieving ObjcProvider.
    */
   @Test
   public void testObjcProviderSkylarkConstructor() throws Exception {

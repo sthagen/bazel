@@ -43,6 +43,7 @@ import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.StructProvider;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.profiler.Profiler;
+import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
@@ -90,7 +91,7 @@ import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
 
-/** Skylark API for the repository_rule's context. */
+/** Starlark API for the repository_rule's context. */
 public class SkylarkRepositoryContext
     implements SkylarkRepositoryContextApi<RepositoryFunctionException> {
   private static final ImmutableList<String> WHITELISTED_REPOS_FOR_FLAG_ENABLED =
@@ -115,7 +116,7 @@ public class SkylarkRepositoryContext
   private final RepositoryRemoteExecutor remoteExecutor;
 
   /**
-   * Create a new context (repository_ctx) object for a skylark repository rule ({@code rule}
+   * Create a new context (repository_ctx) object for a Starlark repository rule ({@code rule}
    * argument).
    */
   SkylarkRepositoryContext(
@@ -314,7 +315,7 @@ public class SkylarkRepositoryContext
     SkylarkPath p = getPath("template()", path);
     SkylarkPath t = getPath("template()", template);
     Map<String, String> substitutionMap =
-        substitutions.getContents(String.class, String.class, "substitutions");
+        Dict.cast(substitutions, String.class, String.class, "substitutions");
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newTemplateEvent(
             p.toString(),
@@ -406,13 +407,10 @@ public class SkylarkRepositoryContext
     return featureEnabled && isRemotable() && remoteExecEnabled;
   }
 
-  @SuppressWarnings("unchecked")
   private ImmutableMap<String, String> getExecProperties() throws EvalException {
-    Dict<String, String> execPropertiesDict =
-        (Dict<String, String>) getAttr().getValue("exec_properties", Dict.class);
-    Map<String, String> execPropertiesMap =
-        execPropertiesDict.getContents(String.class, String.class, "exec_properties");
-    return ImmutableMap.copyOf(execPropertiesMap);
+    return ImmutableMap.copyOf(
+        Dict.cast(
+            getAttr().getValue("exec_properties"), String.class, String.class, "exec_properties"));
   }
 
   private Map.Entry<PathFragment, Path> getRemotePathFromLabel(Label label)
@@ -501,10 +499,13 @@ public class SkylarkRepositoryContext
     validateExecuteArguments(arguments);
 
     Map<String, String> environment =
-        uncheckedEnvironment.getContents(String.class, String.class, "environment");
+        Dict.cast(uncheckedEnvironment, String.class, String.class, "environment");
 
     if (canExecuteRemote()) {
-      return executeRemote(arguments, timeout, environment, quiet, workingDirectory);
+      try (SilentCloseable c =
+          Profiler.instance().profile(ProfilerTask.STARLARK_REPOSITORY_FN, "executeRemote")) {
+        return executeRemote(arguments, timeout, environment, quiet, workingDirectory);
+      }
     }
 
     // Execute on the local/host machine
@@ -648,17 +649,12 @@ public class SkylarkRepositoryContext
     reportProgress("Will fail after download of " + url + ". " + errorMessage);
   }
 
-  @SuppressWarnings({"unchecked", "rawtypes"}) // Explained in method comment
-  private static Map<String, Dict<?, ?>> getAuthContents(
-      Dict<?, ?> authUnchecked, @Nullable String description) throws EvalException {
-    // This method would not be worth having (Dict#getContents could be called
-    // instead), except that some trickery is required to cast Map<String, Dict> to
-    // Map<String, Dict<?, ?>>.
-
-    // getContents can only guarantee raw types, so Dict is the raw type here.
-    Map<String, Dict> result = authUnchecked.getContents(String.class, Dict.class, description);
-
-    return (Map<String, Dict<?, ?>>) (Map<String, ? extends Dict>) result;
+  private static Map<String, Dict<?, ?>> getAuthContents(Dict<?, ?> x, String what)
+      throws EvalException {
+    // Dict.cast returns Dict<String, raw Dict>.
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    Map<String, Dict<?, ?>> res = (Map) Dict.cast(x, String.class, Dict.class, what);
+    return res;
   }
 
   @Override
@@ -669,7 +665,7 @@ public class SkylarkRepositoryContext
       Boolean executable,
       Boolean allowFail,
       String canonicalId,
-      Dict<?, ?> authUnchecked, // <String, Dict<?, ?>> expected
+      Dict<?, ?> authUnchecked, // <String, Dict> expected
       String integrity,
       StarlarkThread thread)
       throws RepositoryFunctionException, EvalException, InterruptedException {
@@ -785,7 +781,7 @@ public class SkylarkRepositoryContext
       String stripPrefix,
       Boolean allowFail,
       String canonicalId,
-      Dict<?, ?> auth, // <String, Dict<?, ?>> expected
+      Dict<?, ?> auth, // <String, Dict> expected
       String integrity,
       StarlarkThread thread)
       throws RepositoryFunctionException, InterruptedException, EvalException {

@@ -24,7 +24,6 @@ import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
 import static com.google.devtools.build.lib.packages.Type.INTEGER;
 import static com.google.devtools.build.lib.packages.Type.STRING;
 import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
-import static com.google.devtools.build.lib.syntax.SkylarkType.castMap;
 
 import com.google.common.base.Preconditions;
 import com.google.common.cache.CacheBuilder;
@@ -71,8 +70,8 @@ import com.google.devtools.build.lib.packages.SkylarkAspect;
 import com.google.devtools.build.lib.packages.SkylarkDefinedAspect;
 import com.google.devtools.build.lib.packages.SkylarkExportable;
 import com.google.devtools.build.lib.packages.SkylarkProvider;
-import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.StarlarkCallbackHelper;
+import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.TestSize;
 import com.google.devtools.build.lib.packages.Type;
@@ -89,8 +88,8 @@ import com.google.devtools.build.lib.syntax.Location;
 import com.google.devtools.build.lib.syntax.Module;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.SkylarkType;
 import com.google.devtools.build.lib.syntax.Starlark;
+import com.google.devtools.build.lib.syntax.StarlarkCallable;
 import com.google.devtools.build.lib.syntax.StarlarkFunction;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.syntax.Tuple;
@@ -100,12 +99,12 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-/** A helper class to provide an easier API for Skylark rule definitions. */
+/** A helper class to provide an easier API for Starlark rule definitions. */
 public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifact> {
 
   // TODO(bazel-team): Copied from ConfiguredRuleClassProvider for the transition from built-in
-  // rules to skylark extensions. Using the same instance would require a large refactoring.
-  // If we don't want to support old built-in rules and Skylark simultaneously
+  // rules to Starlark extensions. Using the same instance would require a large refactoring.
+  // If we don't want to support old built-in rules and Starlark simultaneously
   // (except for transition phase) it's probably OK.
   private static final LoadingCache<String, Label> labelCache =
       CacheBuilder.newBuilder()
@@ -125,13 +124,13 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
               });
 
   // TODO(bazel-team): Remove the code duplication (BaseRuleClasses and this class).
-  /** Parent rule class for non-executable non-test Skylark rules. */
+  /** Parent rule class for non-executable non-test Starlark rules. */
   public static final RuleClass baseRule =
       BaseRuleClasses.commonCoreAndSkylarkAttributes(
               BaseRuleClasses.nameAttribute(
                       new RuleClass.Builder("$base_rule", RuleClassType.ABSTRACT, true))
                   .add(attr("expect_failure", STRING)))
-          // TODO(skylark-team): Allow Skylark rules to extend native rules and remove duplication.
+          // TODO(skylark-team): Allow Starlark rules to extend native rules and remove duplication.
           .add(
               attr("toolchains", LABEL_LIST)
                   .allowedFileTypes(FileTypeSet.NO_FILE)
@@ -145,14 +144,14 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
                   .value(ImmutableList.of()))
           .build();
 
-  /** Parent rule class for executable non-test Skylark rules. */
+  /** Parent rule class for executable non-test Starlark rules. */
   public static final RuleClass binaryBaseRule =
       new RuleClass.Builder("$binary_base_rule", RuleClassType.ABSTRACT, true, baseRule)
           .add(attr("args", STRING_LIST))
           .add(attr("output_licenses", LICENSE))
           .build();
 
-  /** Parent rule class for test Skylark rules. */
+  /** Parent rule class for test Starlark rules. */
   public static final RuleClass getTestBaseRule(RuleDefinitionContext env) {
     String toolsRepository = env.getToolsRepository();
     return new RuleClass.Builder("$test_base_rule", RuleClassType.ABSTRACT, true, baseRule)
@@ -252,33 +251,18 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
 
   @Override
   public Provider provider(String doc, Object fields, StarlarkThread thread) throws EvalException {
-    Collection<String> fieldNames = null;
-    if (fields instanceof Sequence) {
-      @SuppressWarnings("unchecked")
-      Sequence<String> list =
-          (Sequence<String>)
-              SkylarkType.cast(
-                  fields,
-                  Sequence.class,
-                  String.class,
-                  null,
-                  "Expected list of strings or dictionary of string -> string for 'fields'");
-      fieldNames = list;
-    } else if (fields instanceof Dict) {
-      Map<String, String> dict =
-          SkylarkType.castMap(
-              fields,
-              String.class,
-              String.class,
-              "Expected list of strings or dictionary of string -> string for 'fields'");
-      fieldNames = dict.keySet();
-    }
+    Collection<String> fieldNames =
+        fields instanceof Sequence
+            ? Sequence.cast(fields, String.class, "fields")
+            : fields instanceof Dict
+                ? Dict.cast(fields, String.class, String.class, "fields").keySet()
+                : null;
     return SkylarkProvider.createUnexportedSchemaful(fieldNames, thread.getCallerLocation());
   }
 
   // TODO(bazel-team): implement attribute copy and other rule properties
   @Override
-  public BaseFunction rule(
+  public StarlarkCallable rule(
       StarlarkFunction implementation,
       Boolean test,
       Object attrs,
@@ -317,7 +301,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
         attrObjectToAttributesList(attrs);
 
     if (skylarkTestable) {
-      builder.setSkylarkTestable();
+      builder.setStarlarkTestable();
     }
     if (Boolean.TRUE.equals(analysisTest)) {
       builder.setIsAnalysisTest();
@@ -330,7 +314,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
               .value(true)
               .nonconfigurable("Called from RunCommand.isExecutable, which takes a Target")
               .build());
-      builder.setExecutableSkylark();
+      builder.setExecutableStarlark();
     }
 
     if (implicitOutputs != Starlark.NONE) {
@@ -344,7 +328,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
         builder.setImplicitOutputsFunction(
             new SkylarkImplicitOutputsFunctionWithMap(
                 ImmutableMap.copyOf(
-                    castMap(
+                    Dict.cast(
                         implicitOutputs,
                         String.class,
                         String.class,
@@ -356,11 +340,11 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
       builder.setOutputToGenfiles();
     }
 
-    builder.requiresConfigurationFragmentsBySkylarkModuleName(
-        fragments.getContents(String.class, "fragments"));
+    builder.requiresConfigurationFragmentsByStarlarkModuleName(
+        Sequence.cast(fragments, String.class, "fragments"));
     ConfigAwareRuleClassBuilder.of(builder)
         .requiresHostConfigurationFragmentsBySkylarkModuleName(
-            hostFragments.getContents(String.class, "host_fragments"));
+            Sequence.cast(hostFragments, String.class, "host_fragments"));
     builder.setConfiguredTargetFunction(implementation);
     builder.setRuleDefinitionEnvironmentLabelAndHashCode(
         (Label) Module.ofInnermostEnclosingStarlarkFunction(thread).getLabel(),
@@ -369,7 +353,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
     builder.addRequiredToolchains(parseToolchains(toolchains, thread));
 
     if (execGroups != Starlark.NONE) {
-      builder.addExecGroups(castMap(execGroups, String.class, ExecGroup.class, "exec_group"));
+      builder.addExecGroups(Dict.cast(execGroups, String.class, ExecGroup.class, "exec_group"));
     }
 
     if (!buildSetting.equals(Starlark.NONE) && !cfg.equals(Starlark.NONE)) {
@@ -398,9 +382,9 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
             EvalUtils.getDataTypeName(o, true));
       }
     }
-    for (SkylarkProviderIdentifier skylarkProvider :
+    for (StarlarkProviderIdentifier skylarkProvider :
         SkylarkAttr.getSkylarkProviderIdentifiers(providesArg)) {
-      builder.advertiseSkylarkProvider(skylarkProvider);
+      builder.advertiseStarlarkProvider(skylarkProvider);
     }
 
     if (!execCompatibleWith.isEmpty()) {
@@ -422,7 +406,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
 
     if (attrs != Starlark.NONE) {
       for (Map.Entry<String, Descriptor> attr :
-          castMap(attrs, String.class, Descriptor.class, "attrs").entrySet()) {
+          Dict.cast(attrs, String.class, Descriptor.class, "attrs").entrySet()) {
         Descriptor attrDescriptor = attr.getValue();
         AttributeValueSource source = attrDescriptor.getValueSource();
         checkAttributeName(attr.getKey());
@@ -436,8 +420,8 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
   private static void addAttribute(RuleClass.Builder builder, Attribute attribute)
       throws EvalException {
     try {
-      builder.addOrOverrideAttribute(attribute);
-    } catch (IllegalArgumentException ex) {
+      builder.addAttribute(attribute);
+    } catch (IllegalStateException ex) {
       throw new EvalException(null, ex);
     }
   }
@@ -471,7 +455,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
   private static ImmutableList<Label> parseToolchains(Sequence<?> inputs, StarlarkThread thread)
       throws EvalException {
     return parseLabels(
-        inputs.getContents(String.class, "toolchains"),
+        Sequence.cast(inputs, String.class, "toolchains"),
         BazelStarlarkContext.from(thread).getRepoMapping(),
         "toolchain");
   }
@@ -479,7 +463,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
   private static ImmutableList<Label> parseExecCompatibleWith(
       Sequence<?> inputs, StarlarkThread thread) throws EvalException {
     return parseLabels(
-        inputs.getContents(String.class, "exec_compatible_with"),
+        Sequence.cast(inputs, String.class, "exec_compatible_with"),
         BazelStarlarkContext.from(thread).getRepoMapping(),
         "constraint");
   }
@@ -575,15 +559,15 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
         SkylarkAttr.buildProviderPredicate(requiredAspectProvidersArg, "required_aspect_providers"),
         SkylarkAttr.getSkylarkProviderIdentifiers(providesArg),
         requiredParams.build(),
-        ImmutableSet.copyOf(fragments.getContents(String.class, "fragments")),
+        ImmutableSet.copyOf(Sequence.cast(fragments, String.class, "fragments")),
         HostTransition.INSTANCE,
-        ImmutableSet.copyOf(hostFragments.getContents(String.class, "host_fragments")),
+        ImmutableSet.copyOf(Sequence.cast(hostFragments, String.class, "host_fragments")),
         parseToolchains(toolchains, thread),
         applyToGeneratingRules);
   }
 
   /**
-   * The implementation for the magic function "rule" that creates Skylark rule classes.
+   * The implementation for the magic function "rule" that creates Starlark rule classes.
    *
    * <p>Exactly one of {@link #builder} or {@link #ruleClass} is null except inside {@link #export}.
    */
@@ -645,7 +629,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
       }
 
       for (Attribute attribute : ruleClass.getAttributes()) {
-        // TODO(dslomov): If a Skylark parameter extractor is specified for this aspect, its
+        // TODO(dslomov): If a Starlark parameter extractor is specified for this aspect, its
         // attributes may not be required.
         for (Map.Entry<String, ImmutableSet<String>> attrRequirements :
             attribute.getRequiredAspectParameters().entrySet()) {
@@ -682,7 +666,7 @@ public class SkylarkRuleClassFunctions implements SkylarkRuleFunctionsApi<Artifa
       return Starlark.NONE;
     }
 
-    /** Export a RuleFunction from a Skylark file with a given name. */
+    /** Export a RuleFunction from a Starlark file with a given name. */
     public void export(Label skylarkLabel, String ruleClassName) throws EvalException {
       Preconditions.checkState(ruleClass == null && builder != null);
       this.skylarkLabel = skylarkLabel;

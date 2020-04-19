@@ -41,9 +41,11 @@ import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
 import com.google.devtools.build.lib.query2.engine.QueryVisibility;
 import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetValue;
 import com.google.devtools.build.lib.skyframe.PackageValue;
 import com.google.devtools.build.lib.skyframe.UnloadedToolchainContext;
+import com.google.devtools.build.lib.skyframe.UnloadedToolchainContextKey;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import java.util.List;
 import java.util.Map;
@@ -189,7 +191,7 @@ public class ConfiguredTargetAccessor implements TargetAccessor<ConfiguredTarget
     return (RuleConfiguredTarget)
         ((ConfiguredTargetValue)
                 walkableGraph.getValue(
-                    ConfiguredTargetValue.key(
+                    ConfiguredTargetKey.of(
                         oct.getGeneratingRule().getLabel(),
                         queryEnvironment.getConfiguration(oct))))
             .getConfiguredTarget();
@@ -227,7 +229,7 @@ public class ConfiguredTargetAccessor implements TargetAccessor<ConfiguredTarget
         UnloadedToolchainContext context =
             (UnloadedToolchainContext)
                 walkableGraph.getValue(
-                    UnloadedToolchainContext.key()
+                    UnloadedToolchainContextKey.key()
                         .configurationKey(BuildConfigurationValue.key(config))
                         .requiredToolchainTypeLabels(execGroup.getRequiredToolchains())
                         .execConstraintLabels(execGroup.getExecutionPlatformConstraints())
@@ -240,7 +242,7 @@ public class ConfiguredTargetAccessor implements TargetAccessor<ConfiguredTarget
       UnloadedToolchainContext defaultContext =
           (UnloadedToolchainContext)
               walkableGraph.getValue(
-                  UnloadedToolchainContext.key()
+                  UnloadedToolchainContextKey.key()
                       .configurationKey(BuildConfigurationValue.key(config))
                       .requiredToolchainTypeLabels(requiredToolchains)
                       .execConstraintLabels(execConstraintLabels)

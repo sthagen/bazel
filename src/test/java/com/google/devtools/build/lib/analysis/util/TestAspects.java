@@ -34,9 +34,9 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
+import com.google.devtools.build.lib.analysis.TransitionMode;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -49,7 +49,7 @@ import com.google.devtools.build.lib.packages.Attribute.LabelListLateBoundDefaul
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
@@ -138,8 +138,8 @@ public class TestAspects {
       if (!LABEL.equals(attributeType) && !LABEL_LIST.equals(attributeType)) {
         continue;
       }
-      Iterable<AspectInfo> prerequisites = ruleContext
-          .getPrerequisites(attributeName, Mode.DONT_CHECK, AspectInfo.class);
+      Iterable<AspectInfo> prerequisites =
+          ruleContext.getPrerequisites(attributeName, TransitionMode.DONT_CHECK, AspectInfo.class);
       for (AspectInfo prerequisite : prerequisites) {
         result.addTransitive(prerequisite.getData());
       }
@@ -198,8 +198,10 @@ public class TestAspects {
     @Override
     public ConfiguredTarget create(RuleContext ruleContext)
         throws InterruptedException, RuleErrorException, ActionConflictException {
-      TransitiveInfoCollection fooAttribute = ruleContext.getPrerequisite("foo", Mode.DONT_CHECK);
-      TransitiveInfoCollection barAttribute = ruleContext.getPrerequisite("bar", Mode.DONT_CHECK);
+      TransitiveInfoCollection fooAttribute =
+          ruleContext.getPrerequisite("foo", TransitionMode.DONT_CHECK);
+      TransitiveInfoCollection barAttribute =
+          ruleContext.getPrerequisite("bar", TransitionMode.DONT_CHECK);
 
       NestedSetBuilder<String> infoBuilder = NestedSetBuilder.<String>stableOrder();
 
@@ -454,7 +456,7 @@ public class TestAspects {
         information.append(" ");
       }
       List<? extends TransitiveInfoCollection> deps =
-          ruleContext.getPrerequisites("$dep", Mode.TARGET);
+          ruleContext.getPrerequisites("$dep", TransitionMode.TARGET);
       information.append("$dep:[");
       for (TransitiveInfoCollection dep : deps) {
         information.append(" ");
@@ -568,10 +570,10 @@ public class TestAspects {
       = new FalseAdvertisementAspect();
   private static final AspectDefinition FALSE_ADVERTISEMENT_DEFINITION =
       new AspectDefinition.Builder(FALSE_ADVERTISEMENT_ASPECT)
-        .advertiseProvider(RequiredProvider.class)
-        .advertiseProvider(
-            ImmutableList.of(SkylarkProviderIdentifier.forLegacy("advertised_provider")))
-        .build();
+          .advertiseProvider(RequiredProvider.class)
+          .advertiseProvider(
+              ImmutableList.of(StarlarkProviderIdentifier.forLegacy("advertised_provider")))
+          .build();
 
   /**
    * A common base rule for mock rules in this class to reduce boilerplate.

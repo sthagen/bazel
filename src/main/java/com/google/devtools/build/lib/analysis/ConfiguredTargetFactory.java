@@ -26,11 +26,10 @@ import com.google.devtools.build.lib.actions.Artifact.SourceArtifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.FailAction;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
-import com.google.devtools.build.lib.analysis.DependencyResolver.DependencyKind;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
+import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.configuredtargets.EnvironmentGroupConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.InputFileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.OutputFileConfiguredTarget;
@@ -63,7 +62,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.RuleVisibility;
-import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.profiler.memory.CurrentRuleTracker;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
@@ -269,7 +268,7 @@ public final class ConfiguredTargetFactory {
    * See {@link RuleConfiguredTargetBuilder#maybeAddRequiredConfigFragmentsProvider} for the
    * remaining pieces of config state.
    *
-   * <p>The strings can be names of {@link BuildConfiguration.Fragment}s, names of {@link
+   * <p>The strings can be names of {@link Fragment}s, names of {@link
    * com.google.devtools.build.lib.analysis.config.FragmentOptions}, and labels of user-defined
    * options such as Starlark flags and Android feature flags.
    *
@@ -294,10 +293,9 @@ public final class ConfiguredTargetFactory {
    *     required by {@code select}s on this rule. This is a different type than the others: options
    *     and fragments are different concepts. There's some subtlety to their relationship (e.g. a
    *     {@link com.google.devtools.build.lib.analysis.config.FragmentOptions} can be associated
-   *     with multiple {@link BuildConfiguration.Fragment}s). Rather than trying to merge all
-   *     results into a pure set of {@link BuildConfiguration.Fragment}s we just allow the mix. In
-   *     practice the conceptual dependencies remain clear enough without trying to resolve these
-   *     subtleties.
+   *     with multiple {@link Fragment}s). Rather than trying to merge all results into a pure set
+   *     of {@link Fragment}s we just allow the mix. In practice the conceptual dependencies remain
+   *     clear enough without trying to resolve these subtleties.
    * @param prerequisites all prerequisties of this rule
    * @return An alphabetically ordered set of required fragments, options, and labels of
    *     user-defined options.
@@ -305,7 +303,7 @@ public final class ConfiguredTargetFactory {
   private static ImmutableSet<String> getRequiredConfigFragments(
       Rule rule,
       BuildConfiguration configuration,
-      Collection<Class<? extends BuildConfiguration.Fragment>> universallyRequiredFragments,
+      Collection<Class<? extends Fragment>> universallyRequiredFragments,
       ConfigurationFragmentPolicy configurationFragmentPolicy,
       Collection<ConfigMatchingProvider> configConditions,
       Iterable<ConfiguredTargetAndData> prerequisites) {
@@ -462,7 +460,7 @@ public final class ConfiguredTargetFactory {
         // Otherwise missingFragmentPolicy == MissingFragmentPolicy.CREATE_FAIL_ACTIONS:
         return createFailConfiguredTarget(ruleContext);
       }
-      if (rule.getRuleClassObject().isSkylark()) {
+      if (rule.getRuleClassObject().isStarlark()) {
         // TODO(bazel-team): maybe merge with RuleConfiguredTargetBuilder?
         ConfiguredTarget target =
             SkylarkRuleConfiguredTargetUtil.buildRule(
@@ -700,7 +698,7 @@ public final class ConfiguredTargetFactory {
       }
     }
 
-    for (SkylarkProviderIdentifier providerId : advertisedProviders.getSkylarkProviders()) {
+    for (StarlarkProviderIdentifier providerId : advertisedProviders.getSkylarkProviders()) {
       if (configuredAspect.get(providerId) == null) {
         eventHandler.handle(Event.error(
             target.getLocation(),

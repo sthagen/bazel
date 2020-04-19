@@ -165,10 +165,8 @@ public class Package {
    */
   private boolean containsErrors;
 
-  /**
-   * The list of transitive closure of the Skylark file dependencies.
-   */
-  private ImmutableList<Label> skylarkFileDependencies;
+  /** The list of transitive closure of the Starlark file dependencies. */
+  private ImmutableList<Label> starlarkFileDependencies;
 
   /** The package's default "applicable_licenses" attribute. */
   private Set<Label> defaultApplicableLicenses = ImmutableSet.of();
@@ -418,7 +416,7 @@ public class Package {
     }
     this.buildFile = builder.buildFile;
     this.containsErrors = builder.containsErrors;
-    this.skylarkFileDependencies = builder.skylarkFileDependencies;
+    this.starlarkFileDependencies = builder.starlarkFileDependencies;
     this.defaultLicense = builder.defaultLicense;
     this.defaultDistributionSet = builder.defaultDistributionSet;
     this.features = ImmutableSortedSet.copyOf(builder.features);
@@ -447,11 +445,9 @@ public class Package {
         || baseFileName.equals(LabelConstants.WORKSPACE_FILE_NAME.getPathString());
   }
 
-  /**
-   * Returns the list of transitive closure of the Skylark file dependencies of this package.
-   */
-  public ImmutableList<Label> getSkylarkFileDependencies() {
-    return skylarkFileDependencies;
+  /** Returns the list of transitive closure of the Starlark file dependencies of this package. */
+  public ImmutableList<Label> getStarlarkFileDependencies() {
+    return starlarkFileDependencies;
   }
 
   /**
@@ -874,7 +870,7 @@ public class Package {
     private BiMap<String, Target> targets = HashBiMap.create();
     private final Map<Label, EnvironmentGroup> environmentGroups = new HashMap<>();
 
-    private ImmutableList<Label> skylarkFileDependencies = ImmutableList.of();
+    private ImmutableList<Label> starlarkFileDependencies = ImmutableList.of();
 
     private final List<String> registeredExecutionPlatforms = new ArrayList<>();
     private final List<String> registeredToolchains = new ArrayList<>();
@@ -1188,8 +1184,8 @@ public class Package {
       return this;
     }
 
-    Builder setSkylarkFileDependencies(ImmutableList<Label> skylarkFileDependencies) {
-      this.skylarkFileDependencies = skylarkFileDependencies;
+    Builder setStarlarkFileDependencies(ImmutableList<Label> starlarkFileDependencies) {
+      this.starlarkFileDependencies = starlarkFileDependencies;
       return this;
     }
 

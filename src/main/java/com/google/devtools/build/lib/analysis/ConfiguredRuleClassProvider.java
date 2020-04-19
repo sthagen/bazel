@@ -27,17 +27,19 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.analysis.RuleContext.PrerequisiteValidator;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory;
-import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
+import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoKey;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.ConvenienceSymlinks.SymlinkDefinition;
+import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
+import com.google.devtools.build.lib.analysis.config.FragmentProvider;
 import com.google.devtools.build.lib.analysis.config.transitions.ComposingTransitionFactory;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.constraints.ConstraintSemantics;
+import com.google.devtools.build.lib.analysis.constraints.RuleContextConstraintSemantics;
 import com.google.devtools.build.lib.analysis.skylark.SkylarkModules;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
@@ -49,7 +51,6 @@ import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.ThirdPartyLicenseExistencePolicy;
-import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.SymbolGenerator;
 import com.google.devtools.build.lib.skylarkbuildapi.core.Bootstrap;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
@@ -83,7 +84,7 @@ import javax.annotation.Nullable;
  * configuration options is guaranteed not to change over the life time of the Blaze server.
  */
 // This class has no subclasses except those created by the evil that is mockery.
-public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider {
+public /*final*/ class ConfiguredRuleClassProvider implements FragmentProvider {
 
   /**
    * Predicate for determining whether the analysis cache should be cleared, given the new and old
@@ -144,7 +145,8 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
     private Set<String> reservedActionMnemonics = new TreeSet<>();
     private BuildConfiguration.ActionEnvironmentProvider actionEnvironmentProvider =
         (BuildOptions options) -> ActionEnvironment.EMPTY;
-    private ConstraintSemantics constraintSemantics = new ConstraintSemantics();
+    private ConstraintSemantics<RuleContext> constraintSemantics =
+        new RuleContextConstraintSemantics();
 
     private ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy =
         ThirdPartyLicenseExistencePolicy.USER_CONTROLLABLE;
@@ -216,7 +218,7 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
     /**
      * Adds a configuration fragment factory and all build options required by its fragment.
      *
-     * <p>Note that configuration fragments annotated with a Skylark name must have a unique name;
+     * <p>Note that configuration fragments annotated with a Starlark name must have a unique name;
      * no two different configuration fragments can share the same name.
      */
     public Builder addConfigurationFragment(ConfigurationFragmentFactory factory) {
@@ -272,7 +274,7 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
      * don't depend on rules that aren't compatible with the same environments. Defaults to
      * {@ConstraintSemantics}. See {@ConstraintSemantics} for more details.
      */
-    public Builder setConstraintSemantics(ConstraintSemantics constraintSemantics) {
+    public Builder setConstraintSemantics(ConstraintSemantics<RuleContext> constraintSemantics) {
       this.constraintSemantics = constraintSemantics;
       return this;
     }
@@ -545,7 +547,7 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
 
   private final ImmutableMap<String, Class<?>> configurationFragmentMap;
 
-  private final ConstraintSemantics constraintSemantics;
+  private final ConstraintSemantics<RuleContext> constraintSemantics;
 
   private final ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy;
 
@@ -571,7 +573,7 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
       ImmutableList<SymlinkDefinition> symlinkDefinitions,
       ImmutableSet<String> reservedActionMnemonics,
       BuildConfiguration.ActionEnvironmentProvider actionEnvironmentProvider,
-      ConstraintSemantics constraintSemantics,
+      ConstraintSemantics<RuleContext> constraintSemantics,
       ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy) {
     this.preludeLabel = preludeLabel;
     this.runfilesPrefix = runfilesPrefix;
@@ -838,7 +840,7 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
     return symlinkDefinitions;
   }
 
-  public ConstraintSemantics getConstraintSemantics() {
+  public ConstraintSemantics<RuleContext> getConstraintSemantics() {
     return constraintSemantics;
   }
 
@@ -858,7 +860,7 @@ public /*final*/ class ConfiguredRuleClassProvider implements RuleClassProvider 
     return fragmentsBuilder.build();
   }
 
-  /** Returns a reserved set of action mnemonics. These cannot be used from a Skylark action. */
+  /** Returns a reserved set of action mnemonics. These cannot be used from a Starlark action. */
   public ImmutableSet<String> getReservedActionMnemonics() {
     return reservedActionMnemonics;
   }

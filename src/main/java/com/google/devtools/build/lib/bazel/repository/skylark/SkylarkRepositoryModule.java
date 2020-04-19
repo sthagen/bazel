@@ -18,7 +18,6 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
 import static com.google.devtools.build.lib.packages.Type.STRING;
 import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
-import static com.google.devtools.build.lib.syntax.SkylarkType.castMap;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
@@ -46,20 +45,20 @@ import com.google.devtools.build.lib.syntax.Module;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkFunction;
+import com.google.devtools.build.lib.syntax.StarlarkCallable;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.syntax.Tuple;
 import java.util.Map;
 
 /**
- * The Skylark module containing the definition of {@code repository_rule} function to define a
- * skylark remote repository.
+ * The Starlark module containing the definition of {@code repository_rule} function to define a
+ * Starlark remote repository.
  */
 public class SkylarkRepositoryModule implements RepositoryModuleApi {
 
   @Override
-  public BaseFunction repositoryRule(
-      StarlarkFunction implementation,
+  public StarlarkCallable repositoryRule(
+      StarlarkCallable implementation,
       Object attrs,
       Boolean local,
       Sequence<?> environ, // <String> expected
@@ -76,20 +75,19 @@ public class SkylarkRepositoryModule implements RepositoryModuleApi {
     builder.setCallStack(
         callstack.subList(0, callstack.size() - 1)); // pop 'repository_rule' itself
 
-    builder.addOrOverrideAttribute(attr("$local", BOOLEAN).defaultValue(local).build());
-    builder.addOrOverrideAttribute(attr("$configure", BOOLEAN).defaultValue(configure).build());
+    builder.addAttribute(attr("$local", BOOLEAN).defaultValue(local).build());
+    builder.addAttribute(attr("$configure", BOOLEAN).defaultValue(configure).build());
     if (thread.getSemantics().experimentalRepoRemoteExec()) {
-      builder.addOrOverrideAttribute(attr("$remotable", BOOLEAN).defaultValue(remotable).build());
+      builder.addAttribute(attr("$remotable", BOOLEAN).defaultValue(remotable).build());
       BaseRuleClasses.execPropertiesAttribute(builder);
     }
-    builder.addOrOverrideAttribute(
-        attr("$environ", STRING_LIST).defaultValue(environ).build());
+    builder.addAttribute(attr("$environ", STRING_LIST).defaultValue(environ).build());
     BaseRuleClasses.nameAttribute(builder);
     BaseRuleClasses.commonCoreAndSkylarkAttributes(builder);
     builder.add(attr("expect_failure", STRING));
     if (attrs != Starlark.NONE) {
       for (Map.Entry<String, Descriptor> attr :
-          castMap(attrs, String.class, Descriptor.class, "attrs").entrySet()) {
+          Dict.cast(attrs, String.class, Descriptor.class, "attrs").entrySet()) {
         Descriptor attrDescriptor = attr.getValue();
         AttributeValueSource source = attrDescriptor.getValueSource();
         String attrName = source.convertToNativeName(attr.getKey());
@@ -116,11 +114,11 @@ public class SkylarkRepositoryModule implements RepositoryModuleApi {
   private static final class RepositoryRuleFunction extends BaseFunction
       implements SkylarkExportable {
     private final RuleClass.Builder builder;
-    private final BaseFunction implementation;
+    private final StarlarkCallable implementation;
     private Label extensionLabel;
     private String exportedName;
 
-    private RepositoryRuleFunction(RuleClass.Builder builder, BaseFunction implementation) {
+    private RepositoryRuleFunction(RuleClass.Builder builder, StarlarkCallable implementation) {
       this.builder = builder;
       this.implementation = implementation;
     }

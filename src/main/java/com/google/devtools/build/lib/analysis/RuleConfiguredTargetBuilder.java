@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.analysis;
 
 import static com.google.devtools.build.lib.analysis.ExtraActionUtils.createExtraActionProvider;
-import static com.google.devtools.build.lib.packages.RuleClass.Builder.SKYLARK_BUILD_SETTING_DEFAULT_ATTR_NAME;
+import static com.google.devtools.build.lib.packages.RuleClass.Builder.STARLARK_BUILD_SETTING_DEFAULT_ATTR_NAME;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -29,7 +29,6 @@ import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.CoreOptions.IncludeConfigFragmentsEnum;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.constraints.ConstraintSemantics;
 import com.google.devtools.build.lib.analysis.constraints.EnvironmentCollection;
 import com.google.devtools.build.lib.analysis.constraints.SupportedEnvironments;
@@ -214,7 +213,7 @@ public final class RuleConfiguredTargetBuilder {
       Object defaultValue =
           ruleContext
               .attributes()
-              .get(SKYLARK_BUILD_SETTING_DEFAULT_ATTR_NAME, buildSetting.getType());
+              .get(STARLARK_BUILD_SETTING_DEFAULT_ATTR_NAME, buildSetting.getType());
       addProvider(
           BuildSettingProvider.class,
           new BuildSettingProvider(buildSetting, defaultValue, ruleContext.getLabel()));
@@ -310,7 +309,7 @@ public final class RuleConfiguredTargetBuilder {
       if (attributeType.getLabelClass() == LabelClass.DEPENDENCY) {
         for (TransitiveLabelsInfo labelsInfo :
             ruleContext.getPrerequisites(
-                attributeName, Mode.DONT_CHECK, TransitiveLabelsInfo.class)) {
+                attributeName, TransitionMode.DONT_CHECK, TransitiveLabelsInfo.class)) {
           nestedSetBuilder.addTransitive(labelsInfo.getLabels());
         }
       }
@@ -344,7 +343,7 @@ public final class RuleConfiguredTargetBuilder {
 
         for (OutputGroupInfo outputGroup :
             ruleContext.getPrerequisites(
-                attributeName, Mode.DONT_CHECK, OutputGroupInfo.SKYLARK_CONSTRUCTOR)) {
+                attributeName, TransitionMode.DONT_CHECK, OutputGroupInfo.SKYLARK_CONSTRUCTOR)) {
 
           NestedSet<Artifact> validationArtifacts =
               outputGroup.getOutputGroup(OutputGroupInfo.VALIDATION);
@@ -366,7 +365,7 @@ public final class RuleConfiguredTargetBuilder {
       NestedSet<Artifact> runfilesMiddlemen, NestedSet<Artifact> filesToBuild) {
     filesToRunBuilder.addTransitive(filesToBuild);
     filesToRunBuilder.addTransitive(runfilesMiddlemen);
-    if (executable != null && ruleContext.getRule().getRuleClassObject().isSkylark()) {
+    if (executable != null && ruleContext.getRule().getRuleClassObject().isStarlark()) {
       filesToRunBuilder.add(executable);
     }
     return filesToRunBuilder.build();
@@ -381,7 +380,7 @@ public final class RuleConfiguredTargetBuilder {
     if (!ruleContext.getRule().getRuleClassObject().supportsConstraintChecking()) {
       return;
     }
-    ConstraintSemantics constraintSemantics = ruleContext.getConstraintSemantics();
+    ConstraintSemantics<RuleContext> constraintSemantics = ruleContext.getConstraintSemantics();
     EnvironmentCollection supportedEnvironments =
         constraintSemantics.getSupportedEnvironments(ruleContext);
     if (supportedEnvironments != null) {
@@ -484,10 +483,9 @@ public final class RuleConfiguredTargetBuilder {
   }
 
   /**
-   * Add a Skylark transitive info. The provider value must be safe (i.e. a String, a Boolean,
-   * an Integer, an Artifact, a Label, None, a Java TransitiveInfoProvider or something composed
-   * from these in Skylark using lists, sets, structs or dicts). Otherwise an EvalException is
-   * thrown.
+   * Add a Starlark transitive info. The provider value must be safe (i.e. a String, a Boolean, an
+   * Integer, an Artifact, a Label, None, a Java TransitiveInfoProvider or something composed from
+   * these in Starlark using lists, sets, structs or dicts). Otherwise an EvalException is thrown.
    */
   public RuleConfiguredTargetBuilder addSkylarkTransitiveInfo(
       String name, Object value, Location loc) throws EvalException {
@@ -496,7 +494,7 @@ public final class RuleConfiguredTargetBuilder {
   }
 
   /**
-   * Adds a "declared provider" defined in Skylark to the rule. Use this method for declared
+   * Adds a "declared provider" defined in Starlark to the rule. Use this method for declared
    * providers defined in Skyark.
    *
    * <p>Has special handling for {@link OutputGroupInfo}: that provider is not added from Skylark
@@ -526,7 +524,7 @@ public final class RuleConfiguredTargetBuilder {
    * Adds "declared providers" defined in native code to the rule. Use this method for declared
    * providers in definitions of native rules.
    *
-   * <p>Use {@link #addSkylarkDeclaredProvider(Info)} for Skylark rule implementations.
+   * <p>Use {@link #addSkylarkDeclaredProvider(Info)} for Starlark rule implementations.
    */
   public RuleConfiguredTargetBuilder addNativeDeclaredProviders(Iterable<Info> providers) {
     for (Info provider : providers) {
@@ -539,7 +537,7 @@ public final class RuleConfiguredTargetBuilder {
    * Adds a "declared provider" defined in native code to the rule. Use this method for declared
    * providers in definitions of native rules.
    *
-   * <p>Use {@link #addSkylarkDeclaredProvider(Info)} for Skylark rule implementations.
+   * <p>Use {@link #addSkylarkDeclaredProvider(Info)} for Starlark rule implementations.
    */
   public RuleConfiguredTargetBuilder addNativeDeclaredProvider(Info provider) {
     Provider constructor = provider.getProvider();
@@ -564,11 +562,8 @@ public final class RuleConfiguredTargetBuilder {
     return providersBuilder.contains(legacyId);
   }
 
-  /**
-   * Add a Skylark transitive info. The provider value must be safe.
-   */
-  public RuleConfiguredTargetBuilder addSkylarkTransitiveInfo(
-      String name, Object value) {
+  /** Add a Starlark transitive info. The provider value must be safe. */
+  public RuleConfiguredTargetBuilder addSkylarkTransitiveInfo(String name, Object value) {
     providersBuilder.put(name, value);
     return this;
   }

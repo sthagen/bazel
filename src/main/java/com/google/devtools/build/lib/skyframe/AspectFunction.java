@@ -26,10 +26,10 @@ import com.google.devtools.build.lib.analysis.CachingAnalysisEnvironment.Missing
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.analysis.DependencyKind;
 import com.google.devtools.build.lib.analysis.DependencyResolver;
-import com.google.devtools.build.lib.analysis.DependencyResolver.DependencyKind;
-import com.google.devtools.build.lib.analysis.DependencyResolver.InconsistentAspectOrderException;
 import com.google.devtools.build.lib.analysis.DuplicateException;
+import com.google.devtools.build.lib.analysis.InconsistentAspectOrderException;
 import com.google.devtools.build.lib.analysis.ResolvedToolchainContext;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
@@ -39,8 +39,6 @@ import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.DependencyEvaluationException;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfiguredTarget;
-import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.ConfigurationId;
-import com.google.devtools.build.lib.causes.AnalysisFailedCause;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.causes.LabelCause;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -63,7 +61,7 @@ import com.google.devtools.build.lib.packages.SkylarkDefinedAspect;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.profiler.memory.CurrentRuleTracker;
-import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
+import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetFunction.ConfiguredTargetFunctionException;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor.BuildViewProvider;
 import com.google.devtools.build.lib.skyframe.StarlarkImportLookupFunction.StarlarkImportFailedException;
@@ -120,7 +118,7 @@ public final class AspectFunction implements SkyFunction {
   }
 
   /**
-   * Load Skylark-defined aspect from an extension file. Is to be called from a SkyFunction.
+   * Load Starlark-defined aspect from an extension file. Is to be called from a SkyFunction.
    *
    * @return {@code null} if dependencies cannot be satisfied.
    * @throws AspectCreationException if the value loaded is not a {@link SkylarkDefinedAspect}.
@@ -147,7 +145,7 @@ public final class AspectFunction implements SkyFunction {
   }
 
   /**
-   * Load Skylark aspect from an extension file. Is to be called from a SkyFunction.
+   * Load Starlark aspect from an extension file. Is to be called from a SkyFunction.
    *
    * @return {@code null} if dependencies cannot be satisfied.
    */
@@ -395,7 +393,7 @@ public final class AspectFunction implements SkyFunction {
           unloadedToolchainContext =
               (UnloadedToolchainContext)
                   env.getValueOrThrow(
-                      UnloadedToolchainContext.key()
+                      UnloadedToolchainContextKey.key()
                           .configurationKey(BuildConfigurationValue.key(configuration))
                           .requiredToolchainTypeLabels(requiredToolchains)
                           .shouldSanityCheckConfiguration(
@@ -685,42 +683,6 @@ public final class AspectFunction implements SkyFunction {
   public String extractTag(SkyKey skyKey) {
     AspectKey aspectKey = (AspectKey) skyKey.argument();
     return Label.print(aspectKey.getLabel());
-  }
-
-  /** An exception indicating that there was a problem creating an aspect. */
-  public static final class AspectCreationException extends Exception
-      implements SaneAnalysisException {
-    private static ConfigurationId toId(BuildConfiguration config) {
-      return config == null ? null : config.getEventId().getConfiguration();
-    }
-
-    private final NestedSet<Cause> causes;
-
-    public AspectCreationException(String message, NestedSet<Cause> causes) {
-      super(message);
-      this.causes = causes;
-    }
-
-    public AspectCreationException(
-        String message, Label currentTarget, @Nullable BuildConfiguration configuration) {
-      this(
-          message,
-          NestedSetBuilder.<Cause>stableOrder()
-              .add(new AnalysisFailedCause(currentTarget, toId(configuration), message))
-              .build());
-    }
-
-    public AspectCreationException(String message, Label currentTarget) {
-      this(message, currentTarget, null);
-    }
-
-    public AspectCreationException(String message, Cause cause) {
-      this(message, NestedSetBuilder.<Cause>stableOrder().add(cause).build());
-    }
-
-    public NestedSet<Cause> getCauses() {
-      return causes;
-    }
   }
 
   /** Used to indicate errors during the computation of an {@link AspectValue}. */

@@ -30,9 +30,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Skylark String module.
+ * Starlark String module.
  *
- * <p>This module has special treatment in Skylark, as its methods represent methods represent for
+ * <p>This module has special treatment in Starlark, as its methods represent methods represent for
  * any 'string' objects in the language.
  *
  * <p>Methods of this class annotated with {@link SkylarkCallable} must have a positional-only
@@ -930,10 +930,7 @@ final class StringModule implements StarlarkValue {
     if (sub instanceof String) {
       return str.endsWith((String) sub);
     }
-
-    @SuppressWarnings("unchecked")
-    Tuple<Object> subs = (Tuple<Object>) sub;
-    for (String s : subs.getContents(String.class, "string")) {
+    for (String s : Sequence.cast(sub, String.class, "sub")) {
       if (str.endsWith(s)) {
         return true;
       }
@@ -980,7 +977,7 @@ final class StringModule implements StarlarkValue {
     @SuppressWarnings("unchecked")
     List<Object> argObjects = (List<Object>) args.getImmutableList();
     return new FormatParser()
-        .format(self, argObjects, kwargs.getContents(String.class, Object.class, "kwargs"));
+        .format(self, argObjects, Dict.cast(kwargs, String.class, Object.class, "kwargs"));
   }
 
   @SkylarkCallable(
@@ -1016,10 +1013,7 @@ final class StringModule implements StarlarkValue {
     if (sub instanceof String) {
       return str.startsWith((String) sub);
     }
-
-    @SuppressWarnings("unchecked")
-    Tuple<Object> subs = (Tuple<Object>) sub;
-    for (String s : subs.getContents(String.class, "string")) {
+    for (String s : Sequence.cast(sub, String.class, "sub")) {
       if (str.startsWith(s)) {
         return true;
       }

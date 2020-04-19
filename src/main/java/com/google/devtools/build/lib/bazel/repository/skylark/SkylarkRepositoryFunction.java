@@ -27,6 +27,9 @@ import com.google.devtools.build.lib.packages.BazelStarlarkContext;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.SymbolGenerator;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
+import com.google.devtools.build.lib.profiler.Profiler;
+import com.google.devtools.build.lib.profiler.ProfilerTask;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
@@ -38,7 +41,7 @@ import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkFunction;
+import com.google.devtools.build.lib.syntax.StarlarkCallable;
 import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.vfs.Path;
@@ -51,9 +54,7 @@ import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
 
-/**
- * A repository function to delegate work done by skylark remote repositories.
- */
+/** A repository function to delegate work done by Starlark remote repositories. */
 public class SkylarkRepositoryFunction extends RepositoryFunction {
   static final String SEMANTICS = "STARLARK_SEMANTICS";
 
@@ -102,7 +103,7 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
     String defInfo = RepositoryResolvedEvent.getRuleDefinitionInformation(rule);
     env.getListener().post(new SkylarkRepositoryDefinitionLocationEvent(rule.getName(), defInfo));
 
-    StarlarkFunction function = rule.getRuleClassObject().getConfiguredTargetFunction();
+    StarlarkCallable function = rule.getRuleClassObject().getConfiguredTargetFunction();
     if (declareEnvironmentDependencies(markerData, env, getEnviron(rule)) == null) {
       return null;
     }
@@ -198,12 +199,17 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
       // Also we do a lot of stuff in there, maybe blocking operations and we should certainly make
       // it possible to return null and not block but it doesn't seem to be easy with Skylark
       // structure as it is.
-      Object result =
-          Starlark.call(
-              thread,
-              function,
-              /*args=*/ ImmutableList.of(skylarkRepositoryContext),
-              /*kwargs=*/ ImmutableMap.of());
+      Object result;
+      try (SilentCloseable c =
+          Profiler.instance()
+              .profile(ProfilerTask.STARLARK_REPOSITORY_FN, rule.getLabel().toString())) {
+        result =
+            Starlark.call(
+                thread,
+                function,
+                /*args=*/ ImmutableList.of(skylarkRepositoryContext),
+                /*kwargs=*/ ImmutableMap.of());
+      }
       RepositoryResolvedEvent resolved =
           new RepositoryResolvedEvent(
               rule, skylarkRepositoryContext.getAttr(), outputDirectory, result);
@@ -285,7 +291,7 @@ public class SkylarkRepositoryFunction extends RepositoryFunction {
    * method can also be used as a universal check.
    */
   public static boolean isConfigureRule(Rule rule) {
-    return rule.getRuleClassObject().isSkylark()
+    return rule.getRuleClassObject().isStarlark()
         && ((Boolean) rule.getAttributeContainer().getAttr("$configure"));
   }
 

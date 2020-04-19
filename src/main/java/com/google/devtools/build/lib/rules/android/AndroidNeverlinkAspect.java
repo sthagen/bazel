@@ -19,14 +19,14 @@ import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictEx
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.TransitionMode;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.AspectDefinition;
 import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
-import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
@@ -69,7 +69,7 @@ public class AndroidNeverlinkAspect extends NativeAspectClass implements Configu
         continue;
       }
 
-      deps.addAll(ruleContext.getPrerequisites(attribute, Mode.TARGET));
+      deps.addAll(ruleContext.getPrerequisites(attribute, TransitionMode.TARGET));
     }
 
     NestedSetBuilder<Artifact> runtimeJars = NestedSetBuilder.naiveLinkOrder();
@@ -95,10 +95,10 @@ public class AndroidNeverlinkAspect extends NativeAspectClass implements Configu
     }
 
     return builder
-        .requireSkylarkProviders(SkylarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()))
+        .requireSkylarkProviders(StarlarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()))
         .requireSkylarkProviders(
-            SkylarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()),
-            SkylarkProviderIdentifier.forKey(
+            StarlarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()),
+            StarlarkProviderIdentifier.forKey(
                 AndroidLibraryResourceClassJarProvider.PROVIDER.getKey()))
         .requiresConfigurationFragments()
         .build();

@@ -59,6 +59,7 @@ import com.google.devtools.build.lib.syntax.NoneType;
 import com.google.devtools.build.lib.syntax.ParserInput;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Starlark;
+import com.google.devtools.build.lib.syntax.StarlarkCallable;
 import com.google.devtools.build.lib.syntax.StarlarkFile;
 import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
@@ -206,10 +207,10 @@ public final class PackageFactory {
 
   /**
    * Sets the number of directories to eagerly traverse on the first glob for a given package, in
-   * order to warm the filesystem. -1 means do no eager traversal. See {@code
-   * PackageCacheOptions#maxDirectoriesToEagerlyVisitInGlobbing}. -2 means do the eager traversal
-   * using the regular globbing infrastructure, i.e. sharing the globbing threads and caching the
-   * actual glob results.
+   * order to warm the filesystem. -1 means do no eager traversal. See {@link
+   * com.google.devtools.build.lib.pkgcache.PackageOptions#maxDirectoriesToEagerlyVisitInGlobbing}.
+   * -2 means do the eager traversal using the regular globbing infrastructure, i.e. sharing the
+   * globbing threads and caching the actual glob results.
    */
   public void setMaxDirectoriesToEagerlyVisitInGlobbing(
       int maxDirectoriesToEagerlyVisitInGlobbing) {
@@ -266,7 +267,7 @@ public final class PackageFactory {
   // TODO(adonovan): don't call this function twice (once for BUILD files and
   // once for the native module) as it results in distinct objects. (Using
   // @SkylarkCallable may accomplish that.)
-  private static BaseFunction newPackageFunction(
+  private static StarlarkCallable newPackageFunction(
       final ImmutableMap<String, PackageArgument<?>> packageArguments) {
     FunctionSignature signature =
         FunctionSignature.namedOnly(0, packageArguments.keySet().toArray(new String[0]));
@@ -341,10 +342,7 @@ public final class PackageFactory {
     return result.build();
   }
 
-  /**
-   * {@link BaseFunction} adapter for creating {@link Rule}s for native {@link
-   * com.google.devtools.build.lib.packages.RuleClass}es.
-   */
+  /** A callable Starlark value that creates Rules for native RuleClasses. */
   private static class BuiltinRuleFunction extends BaseFunction implements RuleFunction {
     private final RuleClass ruleClass;
 
@@ -606,7 +604,7 @@ public final class PackageFactory {
   private final ClassObject nativeModule;
   private final ClassObject workspaceNativeModule;
 
-  /** @return the Skylark struct to bind to "native" */
+  /** @return the Starlark struct to bind to "native" */
   public ClassObject getNativeModule(boolean workspace) {
     return workspace ? workspaceNativeModule : nativeModule;
   }
@@ -710,7 +708,7 @@ public final class PackageFactory {
             // Let's give the BUILD file a chance to set default_visibility once,
             // by resetting the PackageBuilder.defaultVisibilitySet flag.
             .setDefaultVisibilitySet(false)
-            .setSkylarkFileDependencies(skylarkFileDependencies)
+            .setStarlarkFileDependencies(skylarkFileDependencies)
             .setWorkspaceName(workspaceName)
             .setRepositoryMapping(repositoryMapping)
             .setThirdPartyLicenceExistencePolicy(

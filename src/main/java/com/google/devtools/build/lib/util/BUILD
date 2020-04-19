@@ -71,6 +71,12 @@ java_library(
 )
 
 java_library(
+    name = "debug-logger-configurator",
+    srcs = ["DebugLoggerConfigurator.java"],
+    deps = [":util"],
+)
+
+java_library(
     name = "command",
     srcs = [
         "CommandBuilder.java",
@@ -152,6 +158,7 @@ java_library(
         "//src/main/java/com/google/devtools/common/options",
         "//third_party:checker_framework_annotations",
         "//third_party:error_prone_annotations",
+        "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

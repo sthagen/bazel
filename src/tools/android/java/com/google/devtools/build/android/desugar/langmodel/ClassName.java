@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.function.Predicate;
 import org.objectweb.asm.Type;
 
 /**
@@ -221,7 +222,7 @@ public abstract class ClassName implements TypeMappable<ClassName> {
    * methods to be adapted, including overloaded API methods, in order to avoid adapter class name
    * clashing from separate compilation units.
    */
-  final ClassName typeAdapterOwner(String encodedMethodTag) {
+  final ClassName typeAdapterOwner(int invocationSiteTag) {
     checkState(
         !hasInProcessLabel() && !hasImmutableLabel(),
         "Expected a label-free type: Actual(%s)",
@@ -233,10 +234,7 @@ public abstract class ClassName implements TypeMappable<ClassName> {
     String binaryName =
         String.format(
             "%s%s$%x$%s",
-            TYPE_ADAPTER_PACKAGE_ROOT,
-            binaryName(),
-            encodedMethodTag.hashCode(),
-            TYPE_ADAPTER_SUFFIX);
+            TYPE_ADAPTER_PACKAGE_ROOT, binaryName(), invocationSiteTag, TYPE_ADAPTER_SUFFIX);
     return ClassName.create(binaryName);
   }
 
@@ -331,6 +329,7 @@ public abstract class ClassName implements TypeMappable<ClassName> {
         "android/service/voice/VoiceInteractionSession",
         "android/telephony/SubscriptionPlan$Builder",
         "android/telephony/TelephonyManager",
+        "android/view/textclassifier/ConversationActions$Message",
         "android/view/textclassifier/TextClassification$Request",
         "android/view/textclassifier/TextLinks");
   }
@@ -364,6 +363,10 @@ public abstract class ClassName implements TypeMappable<ClassName> {
         originalPrefix);
     checkPackagePrefixFormat(targetPrefix);
     return ClassName.create(targetPrefix + binaryName().substring(originalPrefix.length()));
+  }
+
+  public boolean acceptTypeFilter(Predicate<ClassName> typeFilter) {
+    return typeFilter.test(this);
   }
 
   @Override
