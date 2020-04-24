@@ -66,7 +66,10 @@ import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.AnalysisProtos.ActionGraphContainer;
 import com.google.devtools.build.lib.analysis.AspectCollection;
+import com.google.devtools.build.lib.analysis.AspectValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.analysis.ConfigurationsCollector;
+import com.google.devtools.build.lib.analysis.ConfigurationsResult;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -134,12 +137,12 @@ import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.repository.ExternalPackageHelper;
-import com.google.devtools.build.lib.rules.repository.ManagedDirectoriesKnowledge;
 import com.google.devtools.build.lib.rules.repository.ResolvedFileFunction;
 import com.google.devtools.build.lib.rules.repository.ResolvedHashesFunction;
 import com.google.devtools.build.lib.runtime.KeepGoingOption;
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.FileDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
 import com.google.devtools.build.lib.skyframe.FileFunction.NonexistentFileReceiver;
@@ -157,6 +160,7 @@ import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.ResourceUsage;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
@@ -223,7 +227,7 @@ import javax.annotation.Nullable;
  * additional artifacts (workspace status and build info artifacts) into SkyFunctions for use during
  * the build.
  */
-public abstract class SkyframeExecutor implements WalkableGraphFactory {
+public abstract class SkyframeExecutor implements WalkableGraphFactory, ConfigurationsCollector {
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   // We delete any value that can hold an action -- all subclasses of ActionLookupKey.
@@ -494,7 +498,9 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
             buildFilesByPriority,
             externalPackageHelper));
     map.put(SkyFunctions.CONTAINING_PACKAGE_LOOKUP, new ContainingPackageLookupFunction());
-    map.put(SkyFunctions.AST_FILE_LOOKUP, new ASTFileLookupFunction(ruleClassProvider));
+    map.put(
+        SkyFunctions.AST_FILE_LOOKUP,
+        new ASTFileLookupFunction(ruleClassProvider, DigestHashFunction.getDefaultUnchecked()));
     map.put(
         SkyFunctions.STARLARK_IMPORTS_LOOKUP,
         newStarlarkImportLookupFunction(ruleClassProvider, pkgFactory));
@@ -659,7 +665,10 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
   protected SkyFunction newStarlarkImportLookupFunction(
       RuleClassProvider ruleClassProvider, PackageFactory pkgFactory) {
     return StarlarkImportLookupFunction.create(
-        ruleClassProvider, this.pkgFactory, astFileLookupValueCache);
+        ruleClassProvider,
+        this.pkgFactory,
+        DigestHashFunction.getDefaultUnchecked(),
+        astFileLookupValueCache);
   }
 
   protected PerBuildSyscallCache newPerBuildSyscallCache(int concurrencyLevel) {
@@ -1005,7 +1014,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
    */
   protected void discardPreExecutionCache(
       Collection<ConfiguredTarget> topLevelTargets,
-      Collection<AspectValue> topLevelAspects,
+      ImmutableSet<AspectKey> topLevelAspects,
       DiscardType discardType) {
     if (discardType.discardsAnalysis()) {
       topLevelTargets = ImmutableSet.copyOf(topLevelTargets);
@@ -1068,7 +1077,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
             }
             // value may be null if target was not successfully analyzed.
             if (aspectValue != null) {
-              aspectValue.clear(!topLevelAspects.contains(aspectValue));
+              aspectValue.clear(!topLevelAspects.contains(key));
             }
           }
         }
@@ -1082,7 +1091,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
    * graph.
    */
   public abstract void clearAnalysisCache(
-      Collection<ConfiguredTarget> topLevelTargets, Collection<AspectValue> topLevelAspects);
+      Collection<ConfiguredTarget> topLevelTargets, ImmutableSet<AspectKey> topLevelAspects);
 
   protected abstract void dropConfiguredTargetsNow(final ExtendedEventHandler eventHandler);
 
@@ -1556,7 +1565,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       Executor executor,
       Set<Artifact> artifactsToBuild,
       Collection<ConfiguredTarget> targetsToBuild,
-      Collection<AspectValue> aspects,
+      ImmutableSet<AspectKey> aspects,
       Set<ConfiguredTarget> parallelTests,
       Set<ConfiguredTarget> exclusiveTests,
       OptionsProvider options,
@@ -1995,6 +2004,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
    */
   // Keep this in sync with {@link PrepareAnalysisPhaseFunction#getConfigurations}.
   // TODO(ulfjack): Remove this legacy method after switching to the Skyframe-based implementation.
+  @Override
   public ConfigurationsResult getConfigurations(
       ExtendedEventHandler eventHandler, BuildOptions fromOptions, Iterable<Dependency> keys)
       throws InvalidConfigurationException {
@@ -2120,52 +2130,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return memoizingEvaluator.getDoneValues().keySet().stream()
         .filter(key -> SkyFunctions.BUILD_CONFIGURATION.equals(key.functionName()))
         .collect(ImmutableList.toImmutableList());
-  }
-
-  /**
-   * The result of {@link #getConfigurations(ExtendedEventHandler, BuildOptions, Iterable)} which
-   * also registers if an error was recorded.
-   */
-  public static class ConfigurationsResult {
-    private final Multimap<Dependency, BuildConfiguration> configurations;
-    private final boolean hasError;
-
-    private ConfigurationsResult(
-        Multimap<Dependency, BuildConfiguration> configurations, boolean hasError) {
-      this.configurations = configurations;
-      this.hasError = hasError;
-    }
-
-    public boolean hasError() {
-      return hasError;
-    }
-
-    public Multimap<Dependency, BuildConfiguration> getConfigurationMap() {
-      return configurations;
-    }
-
-    public static Builder newBuilder() {
-      return new Builder();
-    }
-
-    /** Builder for {@link ConfigurationsResult} */
-    public static class Builder {
-      private final Multimap<Dependency, BuildConfiguration> configurations =
-          ArrayListMultimap.<Dependency, BuildConfiguration>create();
-      private boolean hasError = false;
-
-      void put(Dependency key, BuildConfiguration value) {
-        configurations.put(key, value);
-      }
-
-      void setHasError() {
-        this.hasError = true;
-      }
-
-      ConfigurationsResult build() {
-        return new ConfigurationsResult(configurations, hasError);
-      }
-    }
   }
 
   private PlatformMappingValue getPlatformMappingValue(

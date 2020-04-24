@@ -96,12 +96,18 @@ message FailureDetail {
     SymlinkForest symlink_forest = 110;
     PackageOptions package_options = 114;
     RemoteExecution remote_execution = 115;
+    Execution execution = 116;
+    Workspaces workspaces = 117;
+    CrashOptions crash_options = 118;
+    Filesystem filesystem = 119;
+    ExecutionOptions execution_options = 121;
   }
 
   reserved 102; // For internal use
   reserved 105; // For internal use
   reserved 109; // For internal use
   reserved 111 to 113; // For internal use
+  reserved 120; // For internal use
 }
 
 message Interrupted {
@@ -109,7 +115,7 @@ message Interrupted {
     // Interrupted at an unspecified time.
     INTERRUPTED_UNKNOWN = 0 [(metadata) = { exit_code: 8 }];
 
-    reserved 1; // For internal use
+    reserved 1 to 3; // For internal use
 
     // TODO(mschaller): Add subcategories that specify what was happening at the
     //  time of interruption.
@@ -217,6 +223,7 @@ message PackageOptions {
   enum Code {
     PACKAGE_OPTIONS_UNKNOWN = 0 [(metadata) = { exit_code: 37 }];
     PACKAGE_PATH_INVALID = 1 [(metadata) = { exit_code: 2 }];
+    reserved 2; // For internal use
   }
 
   Code code = 1;
@@ -239,6 +246,57 @@ message RemoteExecution {
     LOG_DIR_CLEANUP_FAILURE = 8 [(metadata) = { exit_code: 36 }];
     CLIENT_SERVER_INCOMPATIBLE = 9 [(metadata) = { exit_code: 34 }];
     DOWNLOADED_INPUTS_DELETION_FAILURE = 10 [(metadata) = { exit_code: 34 }];
+    REMOTE_DOWNLOAD_OUTPUTS_MINIMAL_WITHOUT_INMEMORY_DOTD = 11
+        [(metadata) = { exit_code: 2 }];
+    REMOTE_DOWNLOAD_OUTPUTS_MINIMAL_WITHOUT_INMEMORY_JDEPS = 12
+        [(metadata) = { exit_code: 2 }];
+  }
+
+  Code code = 1;
+}
+
+message Execution {
+  enum Code {
+    EXECUTION_UNKNOWN = 0 [(metadata) = { exit_code: 37 }];
+    EXECUTION_LOG_INITIALIZATION_FAILURE = 1 [(metadata) = { exit_code: 2 }];
+    EXECUTION_LOG_WRITE_FAILURE = 2 [(metadata) = { exit_code: 36 }];
+  }
+
+  Code code = 1;
+}
+
+message Workspaces {
+  enum Code {
+    WORKSPACES_UNKNOWN = 0 [(metadata) = { exit_code: 37 }];
+    WORKSPACES_LOG_INITIALIZATION_FAILURE = 1 [(metadata) = { exit_code: 2 }];
+    WORKSPACES_LOG_WRITE_FAILURE = 2 [(metadata) = { exit_code: 36 }];
+  }
+
+  Code code = 1;
+}
+
+message CrashOptions {
+  enum Code {
+    CRASH_OPTIONS_UNKNOWN = 0 [(metadata) = { exit_code: 37 }];
+    reserved 1; // For internal use
+  }
+
+  Code code = 1;
+}
+
+message Filesystem {
+  enum Code {
+    FILESYSTEM_UNKNOWN = 0 [(metadata) = { exit_code: 37 }];
+    DEFAULT_DIGEST_HASH_FUNCTION_CHANGED = 1 [(metadata) = { exit_code: 37 }];
+  }
+
+  Code code = 1;
+}
+
+message ExecutionOptions {
+  enum Code {
+    EXECUTION_OPTIONS_UNKNOWN = 0 [(metadata) = { exit_code: 37 }];
+    reserved 1, 2; // For internal use
   }
 
   Code code = 1;

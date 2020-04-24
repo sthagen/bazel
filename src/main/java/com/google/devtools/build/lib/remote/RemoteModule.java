@@ -68,7 +68,6 @@ import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution;
 import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution.Code;
-import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.MutableSupplier;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.DetailedExitCode;
@@ -500,8 +499,7 @@ public final class RemoteModule extends BlazeModule {
       CommandEnvironment env,
       BuildRequest request,
       BuildOptions buildOptions,
-      Iterable<ConfiguredTarget> configuredTargets,
-      ImmutableSet<AspectValue> aspects) {
+      Iterable<ConfiguredTarget> configuredTargets) {
     if (remoteOutputsMode != null && remoteOutputsMode.downloadToplevelOutputsOnly()) {
       Preconditions.checkState(actionContextProvider != null, "actionContextProvider was null");
       boolean isTestCommand = env.getCommandName().equals("test");

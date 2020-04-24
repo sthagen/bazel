@@ -54,11 +54,14 @@ public interface StarlarkCallable extends StarlarkValue {
    * Starlark#fastcall} function to make a call, as it handles necessary book-keeping such as
    * maintenance of the call stack, exception handling, and so on.
    *
+   * <p>The fastcall implementation takes ownership of the two arrays, and may retain them
+   * indefinitely or modify them. The caller must not modify or even access the two arrays after
+   * making the call.
+   *
    * <p>This method defines the low-level or "fast" calling convention. A more convenient interface
    * is provided by the {@link #call} method, which provides a signature analogous to {@code def
    * f(*args, **kwargs)}, or possibly the "self-call" feature of the {@link
-   * SkylarkCallable#selfCall} annotation mechanism. Implementations may elect to use {@code
-   * Starlark.matchSignature} to assist with argument processing.
+   * SkylarkCallable#selfCall} annotation mechanism.
    *
    * <p>The default implementation forwards the call to {@code call}, after rejecting any duplicate
    * named arguments. Other implementations of this method should similarly reject duplicates.
@@ -67,10 +70,7 @@ public interface StarlarkCallable extends StarlarkValue {
    * @param positional a list of positional arguments
    * @param named a list of named arguments, as alternating Strings/Objects. May contain dups.
    */
-  default Object fastcall(
-      StarlarkThread thread,
-      Object[] positional,
-      Object[] named)
+  default Object fastcall(StarlarkThread thread, Object[] positional, Object[] named)
       throws EvalException, InterruptedException {
     LinkedHashMap<String, Object> kwargs = Maps.newLinkedHashMapWithExpectedSize(named.length >> 1);
     for (int i = 0; i < named.length; i += 2) {

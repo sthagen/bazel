@@ -16,13 +16,11 @@ package com.google.devtools.build.lib.syntax;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.syntax.Depset.ElementType;
 import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -37,6 +35,8 @@ public final class DepsetTest extends EvaluationTestCase {
     assertThat(lookup("s")).isInstanceOf(Depset.class);
   }
 
+  private static final ElementType TUPLE = ElementType.of(Tuple.class);
+
   @Test
   public void testTuples() throws Exception {
     exec(
@@ -48,10 +48,10 @@ public final class DepsetTest extends EvaluationTestCase {
         "s_six = depset(transitive = [s_one, s_five])",
         "s_seven = depset(direct = [('1', '3')], transitive = [s_one, s_five])",
         "s_eight = depset(direct = [(1, 3)], transitive = [s_one, s_two])"); // note, tuple of int
-    assertThat(get("s_one").getContentType()).isEqualTo(SkylarkType.TUPLE);
-    assertThat(get("s_two").getContentType()).isEqualTo(SkylarkType.TUPLE);
-    assertThat(get("s_three").getContentType()).isEqualTo(SkylarkType.TUPLE);
-    assertThat(get("s_eight").getContentType()).isEqualTo(SkylarkType.TUPLE);
+    assertThat(get("s_one").getElementType()).isEqualTo(TUPLE);
+    assertThat(get("s_two").getElementType()).isEqualTo(TUPLE);
+    assertThat(get("s_three").getElementType()).isEqualTo(TUPLE);
+    assertThat(get("s_eight").getElementType()).isEqualTo(TUPLE);
 
     assertThat(get("s_four").getSet(Tuple.class).toList())
         .containsExactly(
@@ -70,6 +70,14 @@ public final class DepsetTest extends EvaluationTestCase {
     assertThat(get("s").getSet(String.class).toList()).containsExactly("a", "b").inOrder();
     assertThat(get("s").getSet(Object.class).toList()).containsExactly("a", "b").inOrder();
     assertThrows(Depset.TypeException.class, () -> get("s").getSet(Integer.class));
+
+    // getSet argument must be a legal Starlark value class, or Object,
+    // but not some superclass that doesn't implement StarlarkValue.
+    Depset ints = Depset.legacyOf(Order.STABLE_ORDER, Tuple.of(1, 2, 3));
+    assertThat(ints.getSet(Integer.class).toString()).isEqualTo("{1, 2, 3}");
+    IllegalArgumentException ex =
+        assertThrows(IllegalArgumentException.class, () -> ints.getSet(Number.class));
+    assertThat(ex.getMessage()).contains("Number is not a subclass of StarlarkValue");
   }
 
   @Test
@@ -157,31 +165,31 @@ public final class DepsetTest extends EvaluationTestCase {
   @Test
   public void testEmptyGenericType() throws Exception {
     exec("s = depset()");
-    assertThat(get("s").getContentType()).isEqualTo(SkylarkType.TOP);
+    assertThat(get("s").getElementType()).isEqualTo(ElementType.EMPTY);
   }
 
   @Test
   public void testHomogeneousGenericType() throws Exception {
     exec("s = depset(['a', 'b', 'c'])");
-    assertThat(get("s").getContentType()).isEqualTo(SkylarkType.of(String.class));
+    assertThat(get("s").getElementType()).isEqualTo(ElementType.STRING);
   }
 
   @Test
   public void testHomogeneousGenericTypeDirect() throws Exception {
     exec("s = depset(['a', 'b', 'c'], transitive = [])");
-    assertThat(get("s").getContentType()).isEqualTo(SkylarkType.of(String.class));
+    assertThat(get("s").getElementType()).isEqualTo(ElementType.STRING);
   }
 
   @Test
   public void testHomogeneousGenericTypeItems() throws Exception {
     exec("s = depset(items = ['a', 'b', 'c'], transitive = [])");
-    assertThat(get("s").getContentType()).isEqualTo(SkylarkType.of(String.class));
+    assertThat(get("s").getElementType()).isEqualTo(ElementType.STRING);
   }
 
   @Test
   public void testHomogeneousGenericTypeTransitive() throws Exception {
     exec("s = depset(['a', 'b', 'c'], transitive = [depset(['x'])])");
-    assertThat(get("s").getContentType()).isEqualTo(SkylarkType.of(String.class));
+    assertThat(get("s").getElementType()).isEqualTo(ElementType.STRING);
   }
 
   @Test
@@ -332,7 +340,12 @@ public final class DepsetTest extends EvaluationTestCase {
         boolean compatible = true;
 
         try {
-          Depset.unionOf(s1, s2);
+          // merge
+          Depset.fromDirectAndTransitive(
+              first,
+              /*direct=*/ ImmutableList.of(),
+              /*transitive=*/ ImmutableList.of(s1, s2),
+              /*strict=*/ true);
         } catch (Exception ex) {
           compatible = false;
         }
@@ -342,71 +355,8 @@ public final class DepsetTest extends EvaluationTestCase {
     }
   }
 
-  private boolean areOrdersCompatible(Order first, Order second) {
+  private static boolean areOrdersCompatible(Order first, Order second) {
     return first == Order.STABLE_ORDER || second == Order.STABLE_ORDER || first == second;
-  }
-
-  @Test
-  public void testOrderComplexUnion() throws Exception {
-    // {1, 11, {2, 22}, {3, 33}, {4, 44}}
-    List<String> preOrder = Arrays.asList("1", "11", "2", "22", "3", "33", "4", "44");
-    List<String> postOrder = Arrays.asList("2", "22", "3", "33", "4", "44", "1", "11");
-
-    MergeStrategy strategy =
-        new MergeStrategy() {
-          @Override
-          public Depset merge(Depset[] sets) throws Exception {
-            Depset union = Depset.unionOf(sets[0], sets[1]);
-            union = Depset.unionOf(union, sets[2]);
-            union = Depset.unionOf(union, sets[3]);
-
-            return union;
-          }
-        };
-
-    runComplexOrderTest(strategy, preOrder, postOrder);
-  }
-
-  @Test
-  public void testOrderBalancedTree() throws Exception {
-    // {{1, 11, {2, 22}}, {3, 33, {4, 44}}}
-    List<String> preOrder = Arrays.asList("1", "11", "2", "22", "3", "33", "4", "44");
-    List<String> postOrder = Arrays.asList("2", "22", "4", "44", "3", "33", "1", "11");
-
-    MergeStrategy strategy =
-        new MergeStrategy() {
-          @Override
-          public Depset merge(Depset[] sets) throws Exception {
-            Depset leftUnion = Depset.unionOf(sets[0], sets[1]);
-            Depset rightUnion = Depset.unionOf(sets[2], sets[3]);
-            Depset union = Depset.unionOf(leftUnion, rightUnion);
-
-            return union;
-          }
-        };
-
-    runComplexOrderTest(strategy, preOrder, postOrder);
-  }
-
-  @Test
-  public void testOrderManyLevelsOfNesting() throws Exception {
-    // {1, 11, {2, 22, {3, 33, {4, 44}}}}
-    List<String> preOrder = Arrays.asList("1", "11", "2", "22", "3", "33", "4", "44");
-    List<String> postOrder = Arrays.asList("4", "44", "3", "33", "2", "22", "1", "11");
-
-    MergeStrategy strategy =
-        new MergeStrategy() {
-          @Override
-          public Depset merge(Depset[] sets) throws Exception {
-            Depset union = Depset.unionOf(sets[2], sets[3]);
-            union = Depset.unionOf(sets[1], union);
-            union = Depset.unionOf(sets[0], union);
-
-            return union;
-          }
-        };
-
-    runComplexOrderTest(strategy, preOrder, postOrder);
   }
 
   @Test
@@ -491,40 +441,31 @@ public final class DepsetTest extends EvaluationTestCase {
         .testIfErrorContains("depset exceeded maximum depth 2000", "create_depset(3000)");
   }
 
-  private interface MergeStrategy {
-    Depset merge(Depset[] sets) throws Exception;
-  }
+  @Test
+  public void testElementTypeOf() {
+    // legal values
+    assertThat(ElementType.of(String.class).toString()).isEqualTo("string");
+    assertThat(ElementType.of(Integer.class).toString()).isEqualTo("int");
+    assertThat(ElementType.of(Boolean.class).toString()).isEqualTo("bool");
 
-  private void runComplexOrderTest(
-      MergeStrategy strategy, List<String> preOrder, List<String> postOrder) throws Exception {
-    Map<Order, List<String>> expected = createExpectedMap(preOrder, postOrder);
-    for (Order order : Order.values()) {
-      Depset union = strategy.merge(makeFourSets(order));
-      assertThat(union.toCollection()).containsExactlyElementsIn(expected.get(order)).inOrder();
-    }
-  }
+    // concrete non-values
+    assertThrows(IllegalArgumentException.class, () -> ElementType.of(Float.class));
 
-  private Map<Order, List<String>> createExpectedMap(
-      List<String> preOrder, List<String> postOrder) {
-    Map<Order, List<String>> expected = new HashMap<>();
+    // concrete classes that implement StarlarkValue
+    assertThat(ElementType.of(StarlarkList.class).toString()).isEqualTo("list");
+    assertThat(ElementType.of(Tuple.class).toString()).isEqualTo("tuple");
+    assertThat(ElementType.of(Dict.class).toString()).isEqualTo("dict");
+    class V implements StarlarkValue {} // no SkylarkModule annotation
+    assertThat(ElementType.of(V.class).toString()).isEqualTo("V");
 
-    for (Order order : Order.values()) {
-      expected.put(order, isPostOrder(order) ? postOrder : preOrder);
-    }
+    // abstract classes that implement StarlarkValue
+    assertThat(ElementType.of(Sequence.class).toString()).isEqualTo("sequence");
+    assertThat(ElementType.of(StarlarkCallable.class).toString()).isEqualTo("function");
+    assertThat(ElementType.of(StarlarkIterable.class).toString()).isEqualTo("StarlarkIterable");
 
-    return expected;
-  }
-
-  private boolean isPostOrder(Order order) {
-    return order == Order.STABLE_ORDER || order == Order.COMPILE_ORDER;
-  }
-
-  private Depset[] makeFourSets(Order order) throws Exception {
-    return new Depset[] {
-      Depset.legacyOf(order, Tuple.of("1", "11")),
-      Depset.legacyOf(order, Tuple.of("2", "22")),
-      Depset.legacyOf(order, Tuple.of("3", "33")),
-      Depset.legacyOf(order, Tuple.of("4", "44"))
-    };
+    // superclasses of legal values that aren't values themselves
+    assertThrows(IllegalArgumentException.class, () -> ElementType.of(Number.class));
+    assertThrows(IllegalArgumentException.class, () -> ElementType.of(CharSequence.class));
+    assertThrows(IllegalArgumentException.class, () -> ElementType.of(Object.class));
   }
 }
