@@ -15,7 +15,9 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.starlark.spelling.SpellChecker;
+import com.google.errorprone.annotations.FormatMethod;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,7 +34,7 @@ import javax.annotation.Nullable;
  * is visible in the entire file; a variable in a function is visible in the entire function block
  * (even on the lines before its first assignment).
  *
- * <p>Resolution is a mutation of the syntax tree, as it attaches scope information to Identifier
+ * <p>Resolution is a mutation of the syntax tree, as it attaches binding information to Identifier
  * nodes. (In the future, it will attach additional information to functions to support lexical
  * scope, and even compilation of the trees to bytecode.) Resolution errors are reported in the
  * analogous manner to scan/parse errors: for a StarlarkFile, they are appended to {@code
@@ -42,22 +44,99 @@ import javax.annotation.Nullable;
  */
 public final class Resolver extends NodeVisitor {
 
+  // TODO(adonovan): use "keyword" (not "named") and "required" (not "mandatory") terminology
+  // everywhere, including the spec.
+
   enum Scope {
-    /** Symbols defined inside a function or a comprehension. */
-    Local("local"),
-    /** Symbols defined at a module top-level, e.g. functions, loaded symbols. */
-    Module("global"),
-    /** Predefined symbols (builtins) */
-    Universe("builtin");
+    // TODO(adonovan): Add UNIVERSAL, FREE, CELL.
+    // (PREDECLARED vs UNIVERSAL allows us to represent the app-dependent and fixed parts of the
+    // predeclared environment separately, reducing the amount of copying.)
 
-    private final String qualifier;
+    /** Binding is local to a function, comprehension, or file (e.g. load). */
+    LOCAL,
+    /** Binding occurs outside any function or comprehension. */
+    GLOBAL,
+    /** Binding is predeclared by the core or application. */
+    PREDECLARED;
 
-    private Scope(String qualifier) {
-      this.qualifier = qualifier;
+    @Override
+    public String toString() {
+      return super.toString().toLowerCase();
+    }
+  }
+
+  // A Binding is a static abstraction of a variable.
+  // The Resolver maps each Identifier to a Binding.
+  static final class Binding {
+
+    final Scope scope;
+    @Nullable final Identifier first; // first binding use, if syntactic
+    final int index; // within its block (currently unused)
+
+    private Binding(Scope scope, @Nullable Identifier first, int index) {
+      this.scope = scope;
+      this.first = first;
+      this.index = index;
     }
 
-    String getQualifier() {
-      return qualifier;
+    @Override
+    public String toString() {
+      return first == null
+          ? scope.toString()
+          : String.format(
+              "%s[%d] %s @ %s", scope, index, first.getName(), first.getStartLocation());
+    }
+  }
+
+  /** A Function records information about a resolved function. */
+  static final class Function {
+
+    // This class is exposed to Eval in the evaluator build target
+    // (which is the same Java package, at least for now).
+    // Once we switch to bytecode, it will be exposed only to the compiler.
+
+    // The params and parameterNames fields use "run-time order":
+    // non-kwonly, keyword-only, *args, **kwargs.
+    // A bare * parameter is dropped.
+
+    final String name;
+    final Location location; // of identifier
+    final ImmutableList<Parameter> params; // order defined above
+    final ImmutableList<Statement> body;
+    final boolean hasVarargs;
+    final boolean hasKwargs;
+    final int numKeywordOnlyParams;
+    final ImmutableList<String> parameterNames; // order defined above
+
+    // isToplevel indicates that this is the <toplevel> function containing
+    // top-level statements of a file. It causes assignments to unresolved
+    // identifiers to update the module, not the lexical frame.
+    // TODO(adonovan): remove this hack when identifier resolution is accurate.
+    final boolean isToplevel;
+
+    private Function(
+        String name,
+        Location loc,
+        ImmutableList<Parameter> params,
+        ImmutableList<Statement> body,
+        boolean hasVarargs,
+        boolean hasKwargs,
+        int numKeywordOnlyParams) {
+      this.name = name;
+      this.location = loc;
+      this.params = params;
+      this.body = body;
+      this.hasVarargs = hasVarargs;
+      this.hasKwargs = hasKwargs;
+      this.numKeywordOnlyParams = numKeywordOnlyParams;
+
+      ImmutableList.Builder<String> names = ImmutableList.builderWithExpectedSize(params.size());
+      for (Parameter p : params) {
+        names.add(p.getName());
+      }
+      this.parameterNames = names.build();
+
+      this.isToplevel = name.equals("<toplevel>");
     }
   }
 
@@ -87,18 +166,8 @@ public final class Resolver extends NodeVisitor {
     String getUndeclaredNameError(String name);
   }
 
-  private static final Identifier PREDECLARED; // sentinel for predeclared names
-
-  static {
-    try {
-      PREDECLARED = (Identifier) Expression.parse(ParserInput.fromLines("PREDECLARED"));
-    } catch (SyntaxError.Exception ex) {
-      throw new IllegalStateException(ex); // can't happen
-    }
-  }
-
   private static class Block {
-    private final Map<String, Identifier> variables = new HashMap<>();
+    private final Map<String, Binding> bindings = new HashMap<>();
     private final Scope scope;
     @Nullable private final Block parent;
 
@@ -114,57 +183,64 @@ public final class Resolver extends NodeVisitor {
   private Block block;
   private int loopCount;
 
+  // Shared binding for all predeclared names.
+  private static final Binding PREDECLARED = new Binding(Scope.PREDECLARED, null, 0);
+
   private Resolver(List<SyntaxError> errors, Module module, FileOptions options) {
     this.errors = errors;
     this.module = module;
     this.options = options;
-    block = new Block(Scope.Universe, null);
+
+    this.block = new Block(Scope.PREDECLARED, null);
     for (String name : module.getNames()) {
-      block.variables.put(name, PREDECLARED);
+      block.bindings.put(name, PREDECLARED);
     }
   }
 
-  // Reports an error at the start of the specified node.
-  private void addError(Node node, String message) {
-    addError(node.getStartLocation(), message);
+  // Formats and reports an error at the start of the specified node.
+  @FormatMethod
+  private void errorf(Node node, String format, Object... args) {
+    errorf(node.getStartLocation(), format, args);
   }
 
-  // Reports an error at the specified location.
-  private void addError(Location loc, String message) {
-    errors.add(new SyntaxError(loc, message));
+  // Formats and reports an error at the specified location.
+  @FormatMethod
+  private void errorf(Location loc, String format, Object... args) {
+    errors.add(new SyntaxError(loc, String.format(format, args)));
   }
 
   /**
-   * First pass: add all definitions to the current block. This is done because symbols are
-   * sometimes used before their definition point (e.g. a functions are not necessarily declared in
-   * order).
+   * First pass: add bindings for all variables to the current block. This is done because symbols
+   * are sometimes used before their definition point (e.g. functions are not necessarily declared
+   * in order).
    */
-  private void collectDefinitions(Iterable<Statement> stmts) {
+  // TODO(adonovan): eliminate this first pass by using go.starlark.net one-pass approach.
+  private void createBindings(Iterable<Statement> stmts) {
     for (Statement stmt : stmts) {
-      collectDefinitions(stmt);
+      createBindings(stmt);
     }
   }
 
-  private void collectDefinitions(Statement stmt) {
+  private void createBindings(Statement stmt) {
     switch (stmt.kind()) {
       case ASSIGNMENT:
-        collectDefinitions(((AssignmentStatement) stmt).getLHS());
+        createBindings(((AssignmentStatement) stmt).getLHS());
         break;
       case IF:
         IfStatement ifStmt = (IfStatement) stmt;
-        collectDefinitions(ifStmt.getThenBlock());
+        createBindings(ifStmt.getThenBlock());
         if (ifStmt.getElseBlock() != null) {
-          collectDefinitions(ifStmt.getElseBlock());
+          createBindings(ifStmt.getElseBlock());
         }
         break;
       case FOR:
         ForStatement forStmt = (ForStatement) stmt;
-        collectDefinitions(forStmt.getLHS());
-        collectDefinitions(forStmt.getBlock());
+        createBindings(forStmt.getVars());
+        createBindings(forStmt.getBody());
         break;
       case DEF:
         DefStatement def = (DefStatement) stmt;
-        declare(def.getIdentifier());
+        bind(def.getIdentifier());
         break;
       case LOAD:
         LoadStatement load = (LoadStatement) stmt;
@@ -173,27 +249,27 @@ public final class Resolver extends NodeVisitor {
           // Reject load('...', '_private').
           Identifier orig = b.getOriginalName();
           if (orig.isPrivate() && !options.allowLoadPrivateSymbols()) {
-            addError(orig, "symbol '" + orig.getName() + "' is private and cannot be imported.");
+            errorf(orig, "symbol '%s' is private and cannot be imported", orig.getName());
           }
 
           // The allowToplevelRebinding check is not applied to all files
           // but we apply it to each load statement as a special case,
           // and emit a better error message than the generic check.
           if (!names.add(b.getLocalName().getName())) {
-            addError(
+            errorf(
                 b.getLocalName(),
-                String.format(
-                    "load statement defines '%s' more than once", b.getLocalName().getName()));
+                "load statement defines '%s' more than once",
+                b.getLocalName().getName());
           }
         }
 
         // TODO(adonovan): support options.loadBindsGlobally().
-        // Requires that we open a Local block for each file,
+        // Requires that we open a LOCAL block for each file,
         // as well as its Module block, and select which block
         // to declare it in. See go.starlark.net implementation.
 
         for (LoadStatement.Binding b : load.getBindings()) {
-          declare(b.getLocalName());
+          bind(b.getLocalName());
         }
         break;
       case EXPRESSION:
@@ -203,18 +279,18 @@ public final class Resolver extends NodeVisitor {
     }
   }
 
-  private void collectDefinitions(Expression lhs) {
+  private void createBindings(Expression lhs) {
     for (Identifier id : Identifier.boundIdentifiers(lhs)) {
-      declare(id);
+      bind(id);
     }
   }
 
   private void assign(Expression lhs) {
     if (lhs instanceof Identifier) {
-      if (options.recordScope()) {
-        ((Identifier) lhs).setScope(block.scope);
-      }
-      // no-op
+      Identifier id = (Identifier) lhs;
+      // Bindings are created by the first pass (createBindings),
+      // so there's nothing to do here.
+      Preconditions.checkNotNull(block.bindings.get(id.getName()));
     } else if (lhs instanceof IndexExpression) {
       visit(lhs);
     } else if (lhs instanceof ListExpression) {
@@ -222,96 +298,127 @@ public final class Resolver extends NodeVisitor {
         assign(elem);
       }
     } else {
-      addError(lhs, "cannot assign to '" + lhs + "'");
+      errorf(lhs, "cannot assign to '%s'", lhs);
     }
   }
 
   @Override
-  public void visit(Identifier node) {
-    String name = node.getName();
-    @Nullable Block b = blockThatDefines(name);
-    if (b == null) {
-      // The identifier might not exist because it was restricted (hidden) by flags.
-      // If this is the case, output a more helpful error message than 'not found'.
-      String error = module.getUndeclaredNameError(name);
-      if (error == null) {
-        // generic error
-        error = createInvalidIdentifierException(node.getName(), getAllSymbols());
+  public void visit(Identifier id) {
+    for (Block b = block; b != null; b = b.parent) {
+      Binding bind = b.bindings.get(id.getName());
+      if (bind != null) {
+        if (options.recordScope()) {
+          id.setBinding(bind);
+        }
+        return;
       }
-      addError(node, error);
-      return;
     }
-    if (options.recordScope()) {
-      node.setScope(b.scope);
+
+    // The identifier might not exist because it was restricted (hidden) by flags.
+    // If this is the case, output a more helpful error message than 'not found'.
+    String error = module.getUndeclaredNameError(id.getName());
+    if (error == null) {
+      // generic error
+      error = createInvalidIdentifierException(id.getName(), getAllSymbols());
     }
+    errorf(id, "%s", error);
   }
 
   private static String createInvalidIdentifierException(String name, Set<String> candidates) {
     if (!Identifier.isValid(name)) {
       // Identifier was created by Parser.makeErrorExpression and contains misparsed text.
-      return "contains syntax error(s)";
-    }
-
-    String error = getErrorForObsoleteThreadLocalVars(name);
-    if (error != null) {
-      return error;
+      return "contains syntax errors";
     }
 
     String suggestion = SpellChecker.didYouMean(name, candidates);
     return "name '" + name + "' is not defined" + suggestion;
   }
 
-  // TODO(adonovan): delete this. It's been long enough.
-  static String getErrorForObsoleteThreadLocalVars(String name) {
-    if (name.equals("PACKAGE_NAME")) {
-      return "The value 'PACKAGE_NAME' has been removed in favor of 'package_name()', "
-          + "please use the latter ("
-          + "https://docs.bazel.build/versions/master/skylark/lib/native.html#package_name). ";
-    }
-    if (name.equals("REPOSITORY_NAME")) {
-      return "The value 'REPOSITORY_NAME' has been removed in favor of 'repository_name()', please"
-          + " use the latter ("
-          + "https://docs.bazel.build/versions/master/skylark/lib/native.html#repository_name).";
-    }
-    return null;
-  }
-
   @Override
   public void visit(ReturnStatement node) {
-    if (block.scope != Scope.Local) {
-      addError(node, "return statements must be inside a function");
+    if (block.scope != Scope.LOCAL) {
+      errorf(node, "return statements must be inside a function");
     }
     super.visit(node);
   }
 
   @Override
+  public void visit(CallExpression node) {
+    // validate call arguments
+    boolean seenVarargs = false;
+    boolean seenKwargs = false;
+    Set<String> keywords = null;
+    for (Argument arg : node.getArguments()) {
+      if (arg instanceof Argument.Positional) {
+        if (seenVarargs) {
+          errorf(arg, "positional argument may not follow *args");
+        } else if (seenKwargs) {
+          errorf(arg, "positional argument may not follow **kwargs");
+        } else if (keywords != null) {
+          errorf(arg, "positional argument may not follow keyword argument");
+        }
+
+      } else if (arg instanceof Argument.Keyword) {
+        String keyword = ((Argument.Keyword) arg).getName();
+        if (seenVarargs) {
+          errorf(arg, "keyword argument %s may not follow *args", keyword);
+        } else if (seenKwargs) {
+          errorf(arg, "keyword argument %s may not follow **kwargs", keyword);
+        }
+        if (keywords == null) {
+          keywords = new HashSet<>();
+        }
+        if (!keywords.add(keyword)) {
+          errorf(arg, "duplicate keyword argument: %s", keyword);
+        }
+
+      } else if (arg instanceof Argument.Star) {
+        if (seenKwargs) {
+          errorf(arg, "*args may not follow **kwargs");
+        } else if (seenVarargs) {
+          errorf(arg, "multiple *args not allowed");
+        }
+        seenVarargs = true;
+
+      } else if (arg instanceof Argument.StarStar) {
+        if (seenKwargs) {
+          errorf(arg, "multiple **kwargs not allowed");
+        }
+        seenKwargs = true;
+      }
+    }
+
+    super.visit(node);
+  }
+
+  @Override
   public void visit(ForStatement node) {
-    if (block.scope != Scope.Local) {
-      addError(
+    if (block.scope != Scope.LOCAL) {
+      errorf(
           node,
           "for loops are not allowed at the top level. You may move it inside a function "
               + "or use a comprehension, [f(x) for x in sequence]");
     }
     loopCount++;
     visit(node.getCollection());
-    assign(node.getLHS());
-    visitBlock(node.getBlock());
+    assign(node.getVars());
+    visitBlock(node.getBody());
     Preconditions.checkState(loopCount > 0);
     loopCount--;
   }
 
   @Override
   public void visit(LoadStatement node) {
-    if (block.scope == Scope.Local) {
-      addError(node, "load statement not at top level");
+    if (block.scope == Scope.LOCAL) {
+      errorf(node, "load statement not at top level");
     }
-    super.visit(node);
+    // Skip super.visit: don't revisit local Identifier as a use.
   }
 
   @Override
   public void visit(FlowStatement node) {
     if (node.getKind() != TokenKind.PASS && loopCount <= 0) {
-      addError(node, node.getKind() + " statement must be inside a for loop");
+      errorf(node, "%s statement must be inside a for loop", node.getKind());
     }
     super.visit(node);
   }
@@ -324,11 +431,11 @@ public final class Resolver extends NodeVisitor {
 
   @Override
   public void visit(Comprehension node) {
-    openBlock(Scope.Local);
+    openBlock(Scope.LOCAL);
     for (Comprehension.Clause clause : node.getClauses()) {
       if (clause instanceof Comprehension.For) {
         Comprehension.For forClause = (Comprehension.For) clause;
-        collectDefinitions(forClause.getVars());
+        createBindings(forClause.getVars());
       }
     }
     // TODO(adonovan): opt: combine loops
@@ -348,29 +455,130 @@ public final class Resolver extends NodeVisitor {
 
   @Override
   public void visit(DefStatement node) {
-    if (block.scope == Scope.Local) {
-      addError(node, "nested functions are not allowed. Move the function to the top level.");
+    if (block.scope == Scope.LOCAL) {
+      errorf(node, "nested functions are not allowed. Move the function to the top level.");
     }
-    for (Parameter param : node.getParameters()) {
+    node.resolved =
+        resolveFunction(
+            node.getIdentifier().getName(),
+            node.getIdentifier().getStartLocation(),
+            node.getParameters(),
+            node.getBody());
+  }
+
+  private Function resolveFunction(
+      String name,
+      Location loc,
+      ImmutableList<Parameter> parameters,
+      ImmutableList<Statement> body) {
+
+    // Resolve defaults in enclosing environment.
+    for (Parameter param : parameters) {
       if (param instanceof Parameter.Optional) {
         visit(param.getDefaultValue());
       }
     }
-    openBlock(Scope.Local);
-    for (Parameter param : node.getParameters()) {
-      if (param.getIdentifier() != null) {
-        declare(param.getIdentifier());
+
+    // Enter function block.
+    openBlock(Scope.LOCAL);
+
+    // Check parameter order and convert to run-time order:
+    // positionals, keyword-only, *args, **kwargs.
+    Parameter.Star star = null;
+    Parameter.StarStar starStar = null;
+    boolean seenOptional = false;
+    int numKeywordOnlyParams = 0;
+    // TODO(adonovan): opt: when all Identifiers are resolved to bindings accumulated
+    // in the function, params can be a prefix of the function's array of bindings.
+    ImmutableList.Builder<Parameter> params =
+        ImmutableList.builderWithExpectedSize(parameters.size());
+    for (Parameter param : parameters) {
+      if (param instanceof Parameter.Mandatory) {
+        // e.g. id
+        if (starStar != null) {
+          errorf(
+              param,
+              "required parameter %s may not follow **%s",
+              param.getName(),
+              starStar.getName());
+        } else if (star != null) {
+          numKeywordOnlyParams++;
+        } else if (seenOptional) {
+          errorf(
+              param,
+              "required positional parameter %s may not follow an optional parameter",
+              param.getName());
+        }
+        bindParam(params, param);
+
+      } else if (param instanceof Parameter.Optional) {
+        // e.g. id = default
+        seenOptional = true;
+        if (starStar != null) {
+          errorf(param, "optional parameter may not follow **%s", starStar.getName());
+        } else if (star != null) {
+          numKeywordOnlyParams++;
+        }
+        bindParam(params, param);
+
+      } else if (param instanceof Parameter.Star) {
+        // * or *args
+        if (starStar != null) {
+          errorf(param, "* parameter may not follow **%s", starStar.getName());
+        } else if (star != null) {
+          errorf(param, "multiple * parameters not allowed");
+        } else {
+          star = (Parameter.Star) param;
+        }
+
+      } else {
+        // **kwargs
+        if (starStar != null) {
+          errorf(param, "multiple ** parameters not allowed");
+        }
+        starStar = (Parameter.StarStar) param;
       }
     }
-    collectDefinitions(node.getStatements());
-    visitAll(node.getStatements());
+
+    // * or *args
+    if (star != null) {
+      if (star.getIdentifier() != null) {
+        bindParam(params, star);
+      } else if (numKeywordOnlyParams == 0) {
+        errorf(star, "bare * must be followed by keyword-only parameters");
+      }
+    }
+
+    // **kwargs
+    if (starStar != null) {
+      bindParam(params, starStar);
+    }
+
+    createBindings(body);
+    visitAll(body);
     closeBlock();
+
+    return new Function(
+        name,
+        loc,
+        params.build(),
+        body,
+        star != null && star.getIdentifier() != null,
+        starStar != null,
+        numKeywordOnlyParams);
+  }
+
+  private void bindParam(ImmutableList.Builder<Parameter> params, Parameter param) {
+    if (bind(param.getIdentifier())) {
+      errorf(param, "duplicate parameter: %s", param.getName());
+    }
+    params.add(param);
   }
 
   @Override
   public void visit(IfStatement node) {
-    if (block.scope != Scope.Local) {
-      addError(
+    if (block.scope != Scope.LOCAL) {
+      errorf(
           node,
           "if statements are not allowed at the top level. You may move it inside a function "
               + "or use an if expression (x if condition else y).");
@@ -385,7 +593,7 @@ public final class Resolver extends NodeVisitor {
     // Disallow: [e, ...] += rhs
     // Other bad cases are handled in assign.
     if (node.isAugmented() && node.getLHS() instanceof ListExpression) {
-      addError(
+      errorf(
           node.getOperatorLocation(),
           "cannot perform augmented assignment on a list or tuple expression");
     }
@@ -393,39 +601,48 @@ public final class Resolver extends NodeVisitor {
     assign(node.getLHS());
   }
 
-  /** Declare a variable and add it to the environment. */
-  private void declare(Identifier id) {
-    Identifier prev = block.variables.putIfAbsent(id.getName(), id);
+  /**
+   * Process a binding use of a name by adding a binding to the current block if not already bound,
+   * and associate the identifier with it. Reports whether the name was already bound in this block.
+   */
+  private boolean bind(Identifier id) {
+    Binding bind = block.bindings.get(id.getName());
 
-    // Symbols defined in the module scope cannot be reassigned.
-    if (prev != null && block.scope == Scope.Module && !options.allowToplevelRebinding()) {
-      addError(
-          id,
-          String.format(
-              "cannot reassign global '%s' (read more at"
-                  + " https://bazel.build/versions/master/docs/skylark/errors/read-only-variable.html)",
-              id.getName()));
-      if (prev != PREDECLARED) {
-        addError(prev, String.format("'%s' previously declared here", id.getName()));
+    // Already bound in this block?
+    if (bind != null) {
+      // Symbols defined in the module block cannot be reassigned.
+      if (block.scope == Scope.GLOBAL && !options.allowToplevelRebinding()) {
+        errorf(
+            id,
+            "cannot reassign global '%s' (read more at"
+                + " https://bazel.build/versions/master/docs/skylark/errors/read-only-variable.html)",
+            id.getName());
+        if (bind.first != null) {
+          errorf(bind.first, "'%s' previously declared here", id.getName());
+        }
       }
-    }
-  }
 
-  /** Returns the nearest Block that defines a symbol. */
-  private Block blockThatDefines(String varname) {
-    for (Block b = block; b != null; b = b.parent) {
-      if (b.variables.containsKey(varname)) {
-        return b;
+      if (options.recordScope()) {
+        id.setBinding(bind);
       }
+      return true;
     }
-    return null;
+
+    // new binding
+    // TODO(adonovan): accumulate locals in the enclosing function/file block.
+    bind = new Binding(block.scope, id, block.bindings.size());
+    block.bindings.put(id.getName(), bind);
+    if (options.recordScope()) {
+      id.setBinding(bind);
+    }
+    return false;
   }
 
   /** Returns the set of all accessible symbols (both local and global) */
   private Set<String> getAllSymbols() {
     Set<String> all = new HashSet<>();
     for (Block b = block; b != null; b = b.parent) {
-      all.addAll(b.variables.keySet());
+      all.addAll(b.bindings.keySet());
     }
     return all;
   }
@@ -445,8 +662,8 @@ public final class Resolver extends NodeVisitor {
         if (firstStatement == null) {
           continue;
         }
-        addError(statement, "load statements must appear before any other statement");
-        addError(firstStatement, "\tfirst non-load statement appears here");
+        errorf(statement, "load statements must appear before any other statement");
+        errorf(firstStatement, "\tfirst non-load statement appears here");
       }
 
       if (firstStatement == null) {
@@ -461,11 +678,11 @@ public final class Resolver extends NodeVisitor {
       checkLoadAfterStatement(statements);
     }
 
-    openBlock(Scope.Module);
+    openBlock(Scope.GLOBAL);
 
-    // Add each variable defined by statements, not including definitions that appear in
-    // sub-scopes of the given statements (function bodies and comprehensions).
-    collectDefinitions(statements);
+    // Add a binding for each variable defined by statements, not including definitions that appear
+    // in sub-scopes of the given statements (function bodies and comprehensions).
+    createBindings(statements);
 
     // Second pass: ensure that all symbols have been defined.
     visitAll(statements);
@@ -478,17 +695,41 @@ public final class Resolver extends NodeVisitor {
    * StarlarkFile#errors}.
    */
   public static void resolveFile(StarlarkFile file, Module module) {
+    ImmutableList<Statement> stmts = file.getStatements();
+
     Resolver r = new Resolver(file.errors, module, file.getOptions());
-    r.resolveToplevelStatements(file.getStatements());
+    r.resolveToplevelStatements(stmts);
     // Check that no closeBlock was forgotten.
     Preconditions.checkState(r.block.parent == null);
+
+    // If the final statement is an expression, synthesize a return statement.
+    int n = stmts.size();
+    if (n > 0 && stmts.get(n - 1) instanceof ExpressionStatement) {
+      Expression expr = ((ExpressionStatement) stmts.get(n - 1)).getExpression();
+      stmts =
+          ImmutableList.<Statement>builder()
+              .addAll(stmts.subList(0, n - 1))
+              .add(ReturnStatement.make(expr))
+              .build();
+    }
+
+    // Annotate with resolved information about the toplevel function.
+    file.resolved =
+        new Function(
+            "<toplevel>",
+            file.getStartLocation(),
+            /*params=*/ ImmutableList.of(),
+            /*body=*/ stmts,
+            /*hasVarargs=*/ false,
+            /*hasKwargs=*/ false,
+            /*numKeywordOnlyParams=*/ 0);
   }
 
   /**
    * Performs static checks, including resolution of identifiers in {@code expr} in the environment
    * defined by {@code module}. This operation mutates the Expression.
    */
-  public static void resolveExpr(Expression expr, Module module, FileOptions options)
+  static Function resolveExpr(Expression expr, Module module, FileOptions options)
       throws SyntaxError.Exception {
     List<SyntaxError> errors = new ArrayList<>();
     Resolver r = new Resolver(errors, module, options);
@@ -498,6 +739,16 @@ public final class Resolver extends NodeVisitor {
     if (!errors.isEmpty()) {
       throw new SyntaxError.Exception(errors);
     }
+
+    // Return no-arg function that computes the expression.
+    return new Function(
+        "<expr>",
+        expr.getStartLocation(),
+        /*params=*/ ImmutableList.of(),
+        ImmutableList.of(ReturnStatement.make(expr)),
+        /*hasVarargs=*/ false,
+        /*hasKwargs=*/ false,
+        /*numKeywordOnlyParams=*/ 0);
   }
 
   /** Open a new lexical block that will contain the future declarations. */

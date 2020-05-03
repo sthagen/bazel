@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.skylarkbuildapi.java;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkRuleContextApi;
 import com.google.devtools.build.lib.skylarkbuildapi.StarlarkActionFactoryApi;
@@ -24,8 +25,7 @@ import com.google.devtools.build.lib.skylarkbuildapi.platform.ConstraintValueInf
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.ParamType;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.syntax.Depset;
+import com.google.devtools.build.lib.skylarkinterface.StarlarkBuiltin;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
@@ -33,7 +33,7 @@ import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.syntax.StarlarkValue;
 
 /** Utilities for Java compilation support in Starlark. */
-@SkylarkModule(name = "java_common", doc = "Utilities for Java compilation support in Starlark.")
+@StarlarkBuiltin(name = "java_common", doc = "Utilities for Java compilation support in Starlark.")
 public interface JavaCommonApi<
         FileT extends FileApi,
         JavaInfoT extends JavaInfoApi<FileT>,

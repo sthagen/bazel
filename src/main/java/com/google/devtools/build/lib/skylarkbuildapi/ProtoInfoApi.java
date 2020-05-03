@@ -15,17 +15,17 @@
 package com.google.devtools.build.lib.skylarkbuildapi;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.skylarkbuildapi.core.ProviderApi;
 import com.google.devtools.build.lib.skylarkbuildapi.core.StructApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.syntax.Depset;
+import com.google.devtools.build.lib.skylarkinterface.StarlarkBuiltin;
+import com.google.devtools.build.lib.skylarkinterface.StarlarkDocumentationCategory;
 
 /** Info object propagating information about protocol buffer sources. */
-@SkylarkModule(
+@StarlarkBuiltin(
     name = "ProtoInfo",
-    category = SkylarkModuleCategory.PROVIDER,
+    category = StarlarkDocumentationCategory.PROVIDER,
     doc =
         "Encapsulates information provided by <a href=\""
             + "../../be/protocol-buffer.html#proto_library\">proto_library.</a>"
@@ -36,7 +36,7 @@ import com.google.devtools.build.lib.syntax.Depset;
             + "</p>")
 public interface ProtoInfoApi<FileT extends FileApi> extends StructApi {
   /** Provider class for {@link ProtoInfoApi} objects. */
-  @SkylarkModule(name = "Provider", documented = false, doc = "")
+  @StarlarkBuiltin(name = "Provider", documented = false, doc = "")
   interface ProtoInfoProviderApi extends ProviderApi {
     // Currently empty. ProtoInfo cannot be created from Starlark at the moment.
   }

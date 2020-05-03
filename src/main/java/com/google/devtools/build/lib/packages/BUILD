@@ -33,14 +33,14 @@ java_library(
     deps = [
         ":build_type",
         ":type",
-        "//src/main/java/com/google/devtools/build/lib:config-matching-provider",
-        "//src/main/java/com/google/devtools/build/lib:rule-definition-context",
-        "//src/main/java/com/google/devtools/build/lib:transitive-info-provider",
+        "//src/main/java/com/google/devtools/build/lib/analysis:config/config_matching_provider",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/configuration_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/no_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/patch_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/split_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/transition_factory",
+        "//src/main/java/com/google/devtools/build/lib/analysis:rule_definition_context",
+        "//src/main/java/com/google/devtools/build/lib/analysis:transitive_info_provider",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/cmdline:LabelValidator",
         "//src/main/java/com/google/devtools/build/lib/collect",
@@ -79,7 +79,7 @@ java_library(
     srcs = ["BuilderFactoryForTesting.java"],
     deps = [
         ":packages",
-        "//src/main/java/com/google/devtools/build/lib:build-base",
+        "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
         "//third_party:guava",
     ],
 )
@@ -118,6 +118,7 @@ java_library(
     deps = [
         ":type",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi",

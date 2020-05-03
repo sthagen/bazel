@@ -123,12 +123,12 @@ java_library(
         ":skylark/args",
         ":skylark/bazel_build_api_globals",
         ":skylark/function_transition_util",
-        ":skylark/skylark_api_provider",
-        ":skylark/skylark_command_line",
-        ":skylark/skylark_custom_command_line",
-        ":skylark/skylark_error_reporter",
-        ":skylark/skylark_late_bound_default",
+        ":skylark/starlark_api_provider",
+        ":skylark/starlark_command_line",
         ":skylark/starlark_config",
+        ":skylark/starlark_custom_command_line",
+        ":skylark/starlark_error_reporter",
+        ":skylark/starlark_late_bound_default",
         ":statically_linked_marker_provider",
         ":target_configured_event",
         ":template_variable_info",
@@ -247,14 +247,14 @@ java_library(
         "extra/ExtraAction.java",
         "extra/ExtraActionMapProvider.java",
         "extra/ExtraActionSpec.java",
-        "skylark/SkylarkAttr.java",
-        "skylark/SkylarkAttributesCollection.java",
         "skylark/SkylarkModules.java",
         "skylark/SkylarkRuleClassFunctions.java",
         "skylark/SkylarkRuleConfiguredTargetUtil.java",
         "skylark/SkylarkRuleContext.java",
         "skylark/StarlarkActionFactory.java",
+        "skylark/StarlarkAttrModule.java",
         "skylark/StarlarkAttributeTransitionProvider.java",
+        "skylark/StarlarkAttributesCollection.java",
         "skylark/StarlarkRuleTransitionProvider.java",
         "skylark/StarlarkTransition.java",
         "test/AnalysisTestActionBuilder.java",
@@ -292,7 +292,6 @@ java_library(
         ":config/build_configuration",
         ":config/build_options",
         ":config/config_matching_provider",
-        ":config/core_option_converters",
         ":config/core_options",
         ":config/execution_transition_factory",
         ":config/fragment",
@@ -342,9 +341,9 @@ java_library(
         ":skylark/args",
         ":skylark/bazel_build_api_globals",
         ":skylark/function_transition_util",
-        ":skylark/skylark_api_provider",
-        ":skylark/skylark_command_line",
-        ":skylark/skylark_late_bound_default",
+        ":skylark/starlark_api_provider",
+        ":skylark/starlark_command_line",
+        ":skylark/starlark_late_bound_default",
         ":template_variable_info",
         ":test/analysis_failure",
         ":test/analysis_failure_info",
@@ -469,7 +468,6 @@ java_library(
     name = "analysis_phase_complete_event",
     srcs = ["AnalysisPhaseCompleteEvent.java"],
     deps = [
-        ":analysis_cluster",
         ":configured_target",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
         "//third_party:guava",
@@ -744,7 +742,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi",
-        "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
     ],
 )
 
@@ -1392,7 +1389,6 @@ java_library(
 java_library(
     name = "buildinfo/build_info_key",
     srcs = ["buildinfo/BuildInfoKey.java"],
-    deps = ["//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec"],
 )
 
 # TODO(b/144899336):  This should be analysis/config/BUILD
@@ -1498,7 +1494,7 @@ java_library(
     name = "config/config_matching_provider",
     srcs = ["config/ConfigMatchingProvider.java"],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:transitive-info-provider",
+        "//src/main/java/com/google/devtools/build/lib/analysis:transitive_info_provider",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
@@ -1553,7 +1549,6 @@ java_library(
         ":config/build_options",
         ":config/build_options_cache",
         ":config/core_options",
-        ":config/host_transition",
         ":config/transitions/patch_transition",
         ":config/transitions/transition_factory",
         ":platform_options",
@@ -1622,6 +1617,10 @@ java_library(
 java_library(
     name = "config/invalid_configuration_exception",
     srcs = ["config/InvalidConfigurationException.java"],
+    deps = [
+        "//src/main/protobuf:failure_details_java_proto",
+        "//third_party:jsr305",
+    ],
 )
 
 java_library(
@@ -1875,7 +1874,7 @@ java_library(
     deps = [
         ":constraints/environment_collection",
         ":label_and_location",
-        "//src/main/java/com/google/devtools/build/lib:transitive-info-provider",
+        "//src/main/java/com/google/devtools/build/lib/analysis:transitive_info_provider",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//third_party:auto_value",
@@ -1926,7 +1925,7 @@ java_library(
     name = "skylark/args",
     srcs = ["skylark/Args.java"],
     deps = [
-        ":skylark/skylark_custom_command_line",
+        ":skylark/starlark_custom_command_line",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
@@ -1942,7 +1941,7 @@ java_library(
     name = "skylark/bazel_build_api_globals",
     srcs = ["skylark/BazelBuildApiGlobals.java"],
     deps = [
-        ":skylark/skylark_late_bound_default",
+        ":skylark/starlark_late_bound_default",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi",
         "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
@@ -1969,17 +1968,17 @@ java_library(
 )
 
 java_library(
-    name = "skylark/skylark_api_provider",
-    srcs = ["skylark/SkylarkApiProvider.java"],
+    name = "skylark/starlark_api_provider",
+    srcs = ["skylark/StarlarkApiProvider.java"],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:provider-collection",
+        ":provider_collection",
         "//third_party:guava",
     ],
 )
 
 java_library(
-    name = "skylark/skylark_command_line",
-    srcs = ["skylark/SkylarkCommandLine.java"],
+    name = "skylark/starlark_command_line",
+    srcs = ["skylark/StarlarkCommandLine.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
@@ -1989,8 +1988,8 @@ java_library(
 )
 
 java_library(
-    name = "skylark/skylark_custom_command_line",
-    srcs = ["skylark/SkylarkCustomCommandLine.java"],
+    name = "skylark/starlark_custom_command_line",
+    srcs = ["skylark/StarlarkCustomCommandLine.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:commandline_item",
@@ -2009,8 +2008,8 @@ java_library(
 )
 
 java_library(
-    name = "skylark/skylark_error_reporter",
-    srcs = ["skylark/SkylarkErrorReporter.java"],
+    name = "skylark/starlark_error_reporter",
+    srcs = ["skylark/StarlarkErrorReporter.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
@@ -2018,8 +2017,8 @@ java_library(
 )
 
 java_library(
-    name = "skylark/skylark_late_bound_default",
-    srcs = ["skylark/SkylarkLateBoundDefault.java"],
+    name = "skylark/starlark_late_bound_default",
+    srcs = ["skylark/StarlarkLateBoundDefault.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/analysis/skylark/annotations",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
@@ -2051,6 +2050,7 @@ java_library(
     srcs = ["test/AnalysisFailure.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/test",
         "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
     ],
@@ -2064,7 +2064,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/test",
-        "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
     ],
 )
 
@@ -2091,7 +2090,6 @@ java_library(
     name = "test/coverage_report_action_factory",
     srcs = ["test/CoverageReportActionFactory.java"],
     deps = [
-        ":analysis_cluster",
         ":blaze_directories",
         ":configured_target",
         "//src/main/java/com/google/devtools/build/lib/actions",

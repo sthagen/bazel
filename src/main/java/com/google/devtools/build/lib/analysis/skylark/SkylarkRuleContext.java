@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.analysis.skylark;
 
+import static com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition.PATCH_TRANSITION_KEY;
 import static com.google.devtools.build.lib.packages.RuleClass.Builder.STARLARK_BUILD_SETTING_DEFAULT_ATTR_NAME;
 
 import com.google.common.base.Function;
@@ -56,6 +57,7 @@ import com.google.devtools.build.lib.analysis.stringtemplate.ExpansionException;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.packages.Aspect;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
 import com.google.devtools.build.lib.packages.Attribute;
@@ -77,7 +79,6 @@ import com.google.devtools.build.lib.shell.ShellUtils.TokenizationException;
 import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkbuildapi.SkylarkRuleContextApi;
 import com.google.devtools.build.lib.syntax.ClassObject;
-import com.google.devtools.build.lib.syntax.Depset;
 import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
@@ -140,8 +141,8 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
   private final StarlarkSemantics starlarkSemantics;
 
   private Dict<String, String> makeVariables;
-  private SkylarkAttributesCollection attributesCollection;
-  private SkylarkAttributesCollection ruleAttributesCollection;
+  private StarlarkAttributesCollection attributesCollection;
+  private StarlarkAttributesCollection ruleAttributesCollection;
   private StructImpl splitAttributes;
 
   // TODO(bazel-team): we only need this because of the css_binary rule.
@@ -222,7 +223,7 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
       this.artifactsLabelMap = artifactLabelMapBuilder.build();
       this.outputsObject = outputs;
 
-      SkylarkAttributesCollection.Builder builder = SkylarkAttributesCollection.builder(this);
+      StarlarkAttributesCollection.Builder builder = StarlarkAttributesCollection.builder(this);
       for (Attribute attribute : ruleContext.getRule().getAttributes()) {
         Object value = ruleContext.attributes().get(attribute.getName(), attribute.getType());
         builder.addAttribute(attribute, value);
@@ -238,14 +239,15 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
 
       ImmutableCollection<Attribute> attributes =
           ruleContext.getMainAspect().getDefinition().getAttributes().values();
-      SkylarkAttributesCollection.Builder aspectBuilder = SkylarkAttributesCollection.builder(this);
+      StarlarkAttributesCollection.Builder aspectBuilder =
+          StarlarkAttributesCollection.builder(this);
       for (Attribute attribute : attributes) {
         aspectBuilder.addAttribute(attribute, attribute.getDefaultValue(null));
       }
       this.attributesCollection = aspectBuilder.build();
 
       this.splitAttributes = null;
-      SkylarkAttributesCollection.Builder ruleBuilder = SkylarkAttributesCollection.builder(this);
+      StarlarkAttributesCollection.Builder ruleBuilder = StarlarkAttributesCollection.builder(this);
 
       for (Attribute attribute : ruleContext.getRule().getAttributes()) {
         Object value = ruleContext.attributes().get(attribute.getName(), attribute.getType());
@@ -427,7 +429,7 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
 
     ImmutableMap.Builder<String, Object> splitAttrInfos = ImmutableMap.builder();
     for (Attribute attr : attributes) {
-      if (!attr.getTransitionFactory().isSplit() || attr.hasStarlarkDefinedTransition()) {
+      if (!attr.getTransitionFactory().isSplit()) {
         continue;
       }
       Map<Optional<String>, ? extends List<? extends TransitiveInfoCollection>> splitPrereqs =
@@ -436,6 +438,13 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
       Map<Object, Object> splitPrereqsMap = new LinkedHashMap<>();
       for (Map.Entry<Optional<String>, ? extends List<? extends TransitiveInfoCollection>>
           splitPrereq : splitPrereqs.entrySet()) {
+
+        // Skip a split with an empty dependency list.
+        // TODO(jungjw): Figure out exactly which cases trigger this and see if this can be made
+        // more error-proof.
+        if (splitPrereq.getValue().isEmpty()) {
+          continue;
+        }
 
         Object value;
         if (attr.getType() == BuildType.LABEL) {
@@ -446,7 +455,8 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
           value = StarlarkList.immutableCopyOf(splitPrereq.getValue());
         }
 
-        if (splitPrereq.getKey().isPresent()) {
+        if (splitPrereq.getKey().isPresent()
+            && !splitPrereq.getKey().get().equals(PATCH_TRANSITION_KEY)) {
           splitPrereqsMap.put(splitPrereq.getKey().get(), value);
         } else {
           // If the split transition is not in effect, then the key will be missing since there's
@@ -463,9 +473,8 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
 
     return StructProvider.STRUCT.create(
         splitAttrInfos.build(),
-        "No attribute '%s' in split_attr. This attribute is either not defined with a split"
-            + " configuration OR is defined with a Starlark split transition, the results of which"
-            + " cannot be accessed from split_attr.");
+        "No attribute '%s' in split_attr."
+            + " This attribute is not defined with a split configuration.");
   }
 
   @Override
@@ -657,7 +666,7 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
   }
 
   @Override
-  public SkylarkAttributesCollection rule() throws EvalException {
+  public StarlarkAttributesCollection rule() throws EvalException {
     checkMutable("rule");
     if (!isForAspect) {
       throw new EvalException(
@@ -915,7 +924,8 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
               useDefaultShellEnv,
               envUnchecked,
               executionRequirementsUnchecked,
-              inputManifestsUnchecked);
+              inputManifestsUnchecked,
+              /* execGroupUnchecked= */ Starlark.NONE);
 
     } else {
       actions()
@@ -931,6 +941,7 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
               envUnchecked,
               executionRequirementsUnchecked,
               inputManifestsUnchecked,
+              /* execGroupUnchecked= */ Starlark.NONE,
               thread);
     }
     return Starlark.NONE;
@@ -1128,7 +1139,7 @@ public final class SkylarkRuleContext implements SkylarkRuleContextApi<Constrain
       } else {
         throw Starlark.errorf(
             "invalid value %s in 'label_dict': expected iterable, but got '%s'",
-            Starlark.repr(val), EvalUtils.getDataTypeName(val));
+            Starlark.repr(val), Starlark.type(val));
       }
       for (Object file : valIter) {
         if (!(file instanceof Artifact)) {

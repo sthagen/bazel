@@ -14,22 +14,23 @@
 
 package com.google.devtools.build.lib.skylarkbuildapi;
 
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.ParamType;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.syntax.Depset;
+import com.google.devtools.build.lib.skylarkinterface.StarlarkBuiltin;
+import com.google.devtools.build.lib.skylarkinterface.StarlarkDocumentationCategory;
 import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Sequence;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.syntax.StarlarkValue;
 
 /** Module providing functions to create actions. */
-@SkylarkModule(
+@StarlarkBuiltin(
     name = "actions",
-    category = SkylarkModuleCategory.BUILTIN,
+    category = StarlarkDocumentationCategory.BUILTIN,
     doc =
         "Module providing functions to create actions. "
             + "Access this module using <a href=\"ctx.html#actions\"><code>ctx.actions</code></a>.")
@@ -159,17 +160,74 @@ public interface StarlarkActionFactoryApi extends StarlarkValue {
   @SkylarkCallable(
       name = "symlink",
       doc =
-          "<p><b>Experimental</b>. This parameter is experimental and may change at any "
-              + "time. Please do not depend on it. It may be enabled on an experimental basis by "
-              + "setting <code>--experimental_allow_unresolved_symlinks</code></p><p>"
-              + "Creates a symlink in the file system. If the output file is a regular file, the "
-              + "symlink must point to a file. If the output is an unresolved symlink, a dangling "
-              + "symlink is allowed.",
+          "Creates an action that writes a symlink in the file system."
+              + "<p>This function must be called with exactly one of <code>target_file</code> and "
+              + "<code>target_path</code> specified.</p>"
+              + "<p>If <code>target_file</code> is used, then <code>output</code> must be declared "
+              + "as a regular file (such as by using "
+              + "<a href=\"#declare_file\"><code>declare_file()</code></a>). It will actually be "
+              + "created as a symlink that points to the path of <code>target_file</code>.</p>"
+              + "<p>If <code>target_path</code> is used instead, then <code>output</code> must be "
+              + "declared as a symlink (such as by using "
+              + "<a href=\"#declare_symlink\"><code>declare_symlink()</code></a>). In this case, "
+              + "the symlink will point to whatever the content of <code>target_path</code> is. "
+              + "This can be used to create a dangling symlink.</p>",
       parameters = {
-        @Param(name = "output", type = FileApi.class, doc = "The output path.", named = true),
-        @Param(name = "target", type = String.class, doc = "The target.", named = true),
+        @Param(
+            name = "output",
+            type = FileApi.class,
+            named = true,
+            positional = false,
+            doc = "The output of this action."),
+        @Param(
+            name = "target_file",
+            type = FileApi.class,
+            named = true,
+            positional = false,
+            noneable = true,
+            defaultValue = "None",
+            doc = "The File that the output symlink will point to."),
+        @Param(
+            name = "target_path",
+            type = String.class,
+            named = true,
+            positional = false,
+            noneable = true,
+            defaultValue = "None",
+            doc =
+                "(Experimental) The exact path that the output symlink will point to. No "
+                    + "normalization or other processing is applied. Access to this feature "
+                    + "requires setting <code>--experimental_allow_unresolved_symlinks</code>."),
+        @Param(
+            name = "is_executable",
+            type = Boolean.class,
+            named = true,
+            positional = false,
+            defaultValue = "False",
+            doc =
+                "May only be used with <code>target_file</code>, not <code>target_path</code>. "
+                    + "If true, when the action is executed, the <code>target_file</code>'s path "
+                    + "is checked to confirm that it is executable, and an error is reported if it "
+                    + "is not. Setting <code>is_executable</code> to False does not mean the "
+                    + "target is not executable, just that no verification is done."
+                    + "<p>This feature does not make sense for <code>target_path</code> because "
+                    + "dangling symlinks might not exist at build time.</p>"),
+        @Param(
+            name = "progress_message",
+            type = String.class,
+            named = true,
+            positional = false,
+            noneable = true,
+            defaultValue = "None",
+            doc = "Progress message to show to the user during the build.")
       })
-  void symlink(FileApi output, String targetPath) throws EvalException;
+  void symlink(
+      FileApi output,
+      Object targetFile,
+      Object targetPath,
+      Boolean isExecutable,
+      Object progressMessage)
+      throws EvalException;
 
   @SkylarkCallable(
       name = "write",
@@ -336,7 +394,20 @@ public interface StarlarkActionFactoryApi extends StarlarkValue {
             positional = false,
             doc =
                 "(Experimental) sets the input runfiles metadata; "
-                    + "they are typically generated by resolve_command.")
+                    + "they are typically generated by resolve_command."),
+        @Param(
+            name = "exec_group",
+            type = String.class,
+            noneable = true,
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            enableOnlyWithFlag = FlagIdentifier.EXPERIMENTAL_EXEC_GROUPS,
+            valueWhenDisabled = "None",
+            // TODO(b/151742236) update this doc when this becomes non-experimental.
+            doc =
+                "(Experimental) runs the action on the given exec group's execution platform. If"
+                    + " none, uses the target's default execution platform."),
       })
   void run(
       Sequence<?> outputs,
@@ -350,7 +421,8 @@ public interface StarlarkActionFactoryApi extends StarlarkValue {
       Boolean useDefaultShellEnv,
       Object envUnchecked,
       Object executionRequirementsUnchecked,
-      Object inputManifestsUnchecked)
+      Object inputManifestsUnchecked,
+      Object execGroupUnchecked)
       throws EvalException;
 
   @SkylarkCallable(
@@ -504,7 +576,20 @@ public interface StarlarkActionFactoryApi extends StarlarkValue {
             positional = false,
             doc =
                 "(Experimental) sets the input runfiles metadata; "
-                    + "they are typically generated by resolve_command.")
+                    + "they are typically generated by resolve_command."),
+        @Param(
+            name = "exec_group",
+            type = String.class,
+            noneable = true,
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            enableOnlyWithFlag = FlagIdentifier.EXPERIMENTAL_EXEC_GROUPS,
+            valueWhenDisabled = "None",
+            // TODO(b/151742236) update this doc when this becomes non-experimental.
+            doc =
+                "(Experimental) runs the action on the given exec group's execution platform. If"
+                    + " none, uses the target's default execution platform."),
       },
       useStarlarkThread = true)
   void runShell(
@@ -519,6 +604,7 @@ public interface StarlarkActionFactoryApi extends StarlarkValue {
       Object envUnchecked,
       Object executionRequirementsUnchecked,
       Object inputManifestsUnchecked,
+      Object execGroupUnchecked,
       StarlarkThread thread)
       throws EvalException;
 

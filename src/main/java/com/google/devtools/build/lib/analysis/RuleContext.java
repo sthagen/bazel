@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.devtools.build.lib.analysis.ToolchainCollection.DEFAULT_EXEC_GROUP_NAME;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
@@ -44,13 +46,11 @@ import com.google.devtools.build.lib.analysis.AliasProvider.TargetMode;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoKey;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentCollection;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
-import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.constraints.ConstraintSemantics;
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
@@ -99,6 +99,7 @@ import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -201,8 +202,11 @@ public final class RuleContext extends TargetContext
   @Nullable private final ToolchainCollection<ResolvedToolchainContext> toolchainContexts;
   private final ConstraintSemantics<RuleContext> constraintSemantics;
   private final ImmutableSet<String> requiredConfigFragments;
+  private final List<Expander> makeVariableExpanders = new ArrayList<>();
 
-  private ActionOwner actionOwner;
+  /** Map of exec group names to ActionOwners. */
+  private final Map<String, ActionOwner> actionOwners = new HashMap<>();
+
   private final SymbolGenerator<ActionLookupValue.ActionLookupKey> actionOwnerSymbolGenerator;
 
   /* lazily computed cache for Make variables, computed from the above. See get... method */
@@ -423,15 +427,26 @@ public final class RuleContext extends TargetContext
 
   @Override
   public ActionOwner getActionOwner() {
-    if (actionOwner == null) {
-      actionOwner =
-          createActionOwner(
-              rule,
-              aspectDescriptors,
-              getConfiguration(),
-              getTargetExecProperties(),
-              getExecutionPlatform());
+    return getActionOwner(DEFAULT_EXEC_GROUP_NAME);
+  }
+
+  @Override
+  public ActionOwner getActionOwner(String execGroup) {
+    if (actionOwners.containsKey(execGroup)) {
+      return actionOwners.get(execGroup);
     }
+    Preconditions.checkState(
+        toolchainContexts == null || toolchainContexts.hasToolchainContext(execGroup),
+        "action owner requested for non-existent exec group '%s'.",
+        execGroup);
+    ActionOwner actionOwner =
+        createActionOwner(
+            rule,
+            aspectDescriptors,
+            getConfiguration(),
+            getTargetExecProperties(),
+            getExecutionPlatform(execGroup));
+    actionOwners.put(execGroup, actionOwner);
     return actionOwner;
   }
 
@@ -903,40 +918,19 @@ public final class RuleContext extends TargetContext
   public Map<Optional<String>, List<ConfiguredTargetAndData>>
       getSplitPrerequisiteConfiguredTargetAndTargets(String attributeName) {
     checkAttribute(attributeName, TransitionMode.SPLIT);
-    Attribute attributeDefinition = attributes().getAttributeDefinition(attributeName);
-    Preconditions.checkState(attributeDefinition.getTransitionFactory().isSplit());
-    SplitTransition transition =
-        (SplitTransition)
-            attributeDefinition
-                .getTransitionFactory()
-                .create(
-                    AttributeTransitionData.builder()
-                        .attributes(ConfiguredAttributeMapper.of(rule, configConditions))
-                        .executionPlatform(getToolchainContext().executionPlatform().label())
-                        .build());
-    BuildOptions fromOptions = getConfiguration().getOptions();
-    Map<String, BuildOptions> splitOptions =
-        transition.split(fromOptions, getAnalysisEnvironment().getEventHandler());
-    List<ConfiguredTargetAndData> deps = getConfiguredTargetAndTargetDeps(attributeName);
-
-    if (SplitTransition.equals(fromOptions, splitOptions.values())) {
-      // The split transition is not active.
-      return ImmutableMap.of(Optional.<String>absent(), deps);
-    }
-
     // Use an ImmutableListMultimap.Builder here to preserve ordering.
     ImmutableListMultimap.Builder<Optional<String>, ConfiguredTargetAndData> result =
         ImmutableListMultimap.builder();
+    List<ConfiguredTargetAndData> deps = getConfiguredTargetAndTargetDeps(attributeName);
     for (ConfiguredTargetAndData t : deps) {
-      if (t.getTransitionKey() == null
-          || t.getTransitionKey().equals(ConfigurationTransition.PATCH_TRANSITION_KEY)) {
-        // The target doesn't have a specific transition key associated. This likely means it's a
-        // non-configurable target, e.g. files, package groups. Pan out to all available keys.
-        for (String key : splitOptions.keySet()) {
-          result.put(Optional.of(key), t);
-        }
-      } else {
-        result.put(Optional.of(t.getTransitionKey()), t);
+      ImmutableList<String> transitionKeys = t.getTransitionKeys();
+      if (transitionKeys.isEmpty()) {
+        // The split transition is not active, i.e. does not change build configurations.
+        // TODO(jungjw): Investigate if we need to do a sanity check here.
+        return ImmutableMap.of(Optional.absent(), deps);
+      }
+      for (String key : transitionKeys) {
+        result.put(Optional.of(key), t);
       }
     }
     return Multimaps.asMap(result.build());
@@ -1200,15 +1194,21 @@ public final class RuleContext extends TargetContext
   }
 
   public Expander getExpander(TemplateContext templateContext) {
-    return new Expander(this, templateContext);
+    Expander expander = new Expander(this, templateContext);
+    makeVariableExpanders.add(expander);
+    return expander;
   }
 
   public Expander getExpander() {
-    return new Expander(this, getConfigurationMakeVariableContext());
+    Expander expander = new Expander(this, getConfigurationMakeVariableContext());
+    makeVariableExpanders.add(expander);
+    return expander;
   }
 
   public Expander getExpander(ImmutableMap<Label, ImmutableCollection<Artifact>> labelMap) {
-    return new Expander(this, getConfigurationMakeVariableContext(), labelMap);
+    Expander expander = new Expander(this, getConfigurationMakeVariableContext(), labelMap);
+    makeVariableExpanders.add(expander);
+    return expander;
   }
 
   /**
@@ -1222,10 +1222,18 @@ public final class RuleContext extends TargetContext
     return configurationMakeVariableContext;
   }
 
-  // TODO(b/151742236): provide access to other non-default toolchain contexts.
   @Nullable
   public ResolvedToolchainContext getToolchainContext() {
     return toolchainContexts == null ? null : toolchainContexts.getDefaultToolchainContext();
+  }
+
+  @Nullable
+  private ResolvedToolchainContext getToolchainContext(String execGroup) {
+    return toolchainContexts == null ? null : toolchainContexts.getToolchainContext(execGroup);
+  }
+
+  public boolean hasToolchainContext(String execGroup) {
+    return toolchainContexts != null && toolchainContexts.hasToolchainContext(execGroup);
   }
 
   @Nullable
@@ -1250,8 +1258,26 @@ public final class RuleContext extends TargetContext
     return constraintSemantics;
   }
 
-  public ImmutableSet<String> getRequiredConfigFragments() {
-    return requiredConfigFragments;
+  /**
+   * Returns the configuration fragments this rule uses.
+   *
+   * <p>Returned results are alphabetically ordered.
+   */
+  public ImmutableSortedSet<String> getRequiredConfigFragments() {
+    ImmutableSortedSet.Builder<String> ans = ImmutableSortedSet.naturalOrder();
+    ans.addAll(requiredConfigFragments);
+    for (Expander makeVariableExpander : makeVariableExpanders) {
+      for (String makeVariable : makeVariableExpander.lookedUpVariables()) {
+        // User-defined make values may be set either in "--define foo=bar" or in a vardef in the
+        // rule's package. Both are equivalent for these purposes, since in both cases setting
+        // "--define foo=bar" impacts the rule's output.
+        if (getRule().getPackage().getMakeEnvironment().containsKey(makeVariable)
+            || getConfiguration().getCommandLineBuildVariables().containsKey(makeVariable)) {
+          ans.add("--define:" + makeVariable);
+        }
+      }
+    }
+    return ans.build();
   }
 
   public Map<String, String> getTargetExecProperties() {
@@ -1269,6 +1295,16 @@ public final class RuleContext extends TargetContext
       return null;
     }
     return getToolchainContext().executionPlatform();
+  }
+
+  @Override
+  @Nullable
+  public PlatformInfo getExecutionPlatform(String execGroup) {
+    if (getToolchainContexts() == null) {
+      return null;
+    }
+    ResolvedToolchainContext toolchainContext = getToolchainContext(execGroup);
+    return toolchainContext == null ? null : toolchainContext.executionPlatform();
   }
 
   private void checkAttribute(String attributeName, TransitionMode mode) {

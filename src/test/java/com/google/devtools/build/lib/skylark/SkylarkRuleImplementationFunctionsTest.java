@@ -49,6 +49,7 @@ import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTa
 import com.google.devtools.build.lib.analysis.skylark.Args;
 import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.StarlarkProvider;
@@ -57,7 +58,6 @@ import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkGlobalLibrary;
-import com.google.devtools.build.lib.syntax.Depset;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Sequence;
@@ -2034,7 +2034,7 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
   public void testArgsScalarAddThrowsWithVectorArg() throws Exception {
     setRuleContext(createRuleContext("//foo:foo"));
     checkEvalErrorContains(
-        "Args#add doesn't accept vectorized",
+        "Args.add() doesn't accept vectorized arguments",
         "args = ruleContext.actions.args()",
         "args.add([1, 2])",
         "ruleContext.actions.run(",
@@ -2330,22 +2330,6 @@ public class SkylarkRuleImplementationFunctionsTest extends SkylarkTestCase {
     checkEvalErrorContains(
         "Invalid value for parameter \"format\": Expected one of \"shell\", \"multiline\"",
         "args = ruleContext.actions.args()\n" + "args.set_param_file_format('illegal')");
-  }
-
-  @Test
-  public void testScalarJoinWithErrorMessage() throws Exception {
-    setRuleContext(createRuleContext("//foo:foo"));
-    checkEvalErrorContains(
-        "'join_with' is not supported for scalar arguments",
-        "args = ruleContext.actions.args()\n" + "args.add(1, join_with=':')");
-  }
-
-  @Test
-  public void testScalarBeforeEachErrorMessage() throws Exception {
-    setRuleContext(createRuleContext("//foo:foo"));
-    checkEvalErrorContains(
-        "'before_each' is not supported for scalar arguments",
-        "args = ruleContext.actions.args()\n" + "args.add(1, before_each='illegal')");
   }
 
   @Test
