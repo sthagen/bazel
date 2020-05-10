@@ -17,8 +17,10 @@ java_library(
     visibility = [
         "//src/test/java/com/google/devtools/build/android/desugar:__subpackages__",
         "//src/tools/android/java/com/google/devtools/build/android:__subpackages__",
+        "//src/tools/android/java/com/google/devtools/build/android/r8:__subpackages__",
     ],
     deps = [
+        "//src/tools/android/java/com/google/devtools/build/android/r8:utils",
         "//third_party:jsr305",
     ],
 )
@@ -47,9 +49,11 @@ java_library(
         "//src/tools/android/java/com/google/devtools/build/android/desugar/io",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/langmodel",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/nest",
+        "//src/tools/android/java/com/google/devtools/build/android/desugar/preanalysis",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/strconcat",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/typeannotation",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/typehierarchy",
+        "//src/tools/android/java/com/google/devtools/build/android/r8:utils",
         "//third_party:asm",
         "//third_party:asm-commons",
         "//third_party:asm-tree",
@@ -83,6 +87,7 @@ filegroup(
         "//src/tools/android/java/com/google/devtools/build/android/desugar/corelibadapter:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/runtime:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/strconcat:srcs",
+        "//src/tools/android/java/com/google/devtools/build/android/desugar/preanalysis:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/scan:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/desugar/testing/junit:srcs",
     ],

@@ -337,6 +337,47 @@ public class BuildViewTest extends BuildViewTestBase {
   }
 
   @Test
+  public void testReportsNonExistentPackageInPackageGroupKeepGoing()
+      throws Exception {
+    if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
+      // TODO(b/129599328): fix or justify disabling
+      return;
+    }
+    // Regression test for b/155669924, a missed edge case from the fix to b/153480748.
+    scratch.file(
+        "java/BUILD",
+        "package_group(name = 'group', includes=['//non/existent/package:othergroup'])",
+        "java_library(",
+        "    name='library_invalid_visibility',",
+        "    srcs=['NoOp.java'],",
+        "    deps=[':other'],",
+        "    visibility=[':group'])",
+        "java_library(",
+        "    name='other',",
+        "    srcs=['NoOp.java'],",
+        "    deps=[])");
+    scratch.file("java/NoOp.java", "class NoOp { private NoOp() {} }");
+
+    reporter.removeHandler(failFastHandler);
+    AnalysisFailureRecorder recorder = new AnalysisFailureRecorder();
+    eventBus.register(recorder);
+    AnalysisResult result =
+        update(eventBus, defaultFlags().with(Flag.KEEP_GOING), "//java:library_invalid_visibility");
+    assertThat(result.hasError()).isTrue();
+
+    assertThat(recorder.events).hasSize(1);
+    AnalysisFailureEvent event = recorder.events.get(0);
+    assertThat(event.getLegacyFailureReason().toString())
+        .isEqualTo("//non/existent/package:othergroup");
+    assertThat(event.getFailedTarget().getLabel().toString())
+        .isEqualTo("//java:library_invalid_visibility");
+
+    assertThat(recorder.causes).hasSize(1);
+    AnalysisRootCauseEvent cause = recorder.causes.get(0);
+    assertThat(cause.getLabel().toString()).isEqualTo("//non/existent/package:othergroup");
+  }
+
+  @Test
   public void testTestOnlyFailureReported() throws Exception {
     scratch.file(
         "foo/BUILD",

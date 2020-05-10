@@ -36,8 +36,11 @@ import com.google.devtools.build.lib.rules.cpp.CppIncludeScanningContext;
 import com.google.devtools.build.lib.rules.test.ExclusiveTestStrategy;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.LocalExecution;
+import com.google.devtools.build.lib.server.FailureDetails.LocalExecution.Code;
 import com.google.devtools.build.lib.util.AbruptExitException;
-import com.google.devtools.build.lib.util.ExitCode;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.vfs.Path;
 
 /**
@@ -58,8 +61,13 @@ public class StandaloneModule extends BlazeModule {
     if (dynamicOptions != null) { // Guard against tests that don't pull this module in.
       if (localOptions.localLockfreeOutput && dynamicOptions.legacySpawnScheduler) {
         throw new AbruptExitException(
-            "--experimental_local_lockfree_output requires --nolegacy_spawn_scheduler",
-            ExitCode.COMMAND_LINE_ERROR);
+            DetailedExitCode.of(
+                FailureDetail.newBuilder()
+                    .setMessage(
+                        "--experimental_local_lockfree_output requires --nolegacy_spawn_scheduler")
+                    .setLocalExecution(
+                        LocalExecution.newBuilder().setCode(Code.LOCKFREE_OUTPUT_PREREQ_UNMET))
+                    .build()));
       }
     }
   }
@@ -109,7 +117,7 @@ public class StandaloneModule extends BlazeModule {
     registryBuilder.registerStrategy(
         new StandaloneSpawnStrategy(env.getExecRoot(), localSpawnRunner), "standalone", "local");
 
-    // This makes the "sandboxed" strategy the default Spawn strategy, unless it is overridden by a
+    // This makes the "standalone" strategy the default Spawn strategy, unless it is overridden by a
     // later BlazeModule.
     registryBuilder.setDefaultStrategies(ImmutableList.of("standalone"));
   }

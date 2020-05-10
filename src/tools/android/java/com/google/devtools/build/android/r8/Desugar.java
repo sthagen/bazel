@@ -13,12 +13,22 @@
 // limitations under the License.
 package com.google.devtools.build.android.r8;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
+import com.android.tools.r8.ArchiveClassFileProvider;
+import com.android.tools.r8.ClassFileResourceProvider;
 import com.android.tools.r8.CompilationFailedException;
 import com.android.tools.r8.D8;
 import com.android.tools.r8.D8Command;
-import com.android.tools.r8.OutputMode;
+import com.android.tools.r8.Diagnostic;
+import com.android.tools.r8.DiagnosticsHandler;
+import com.android.tools.r8.errors.InterfaceDesugarMissingTypeDiagnostic;
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.android.Converters.ExistingPathConverter;
 import com.google.devtools.build.android.Converters.PathConverter;
+import com.google.devtools.build.android.desugar.DependencyCollector;
+import com.google.devtools.build.android.r8.desugar.OrderedClassFileResourceProvider;
+import com.google.devtools.build.android.r8.desugar.OutputConsumer;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
@@ -26,19 +36,24 @@ import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.ShellQuotedParamsFilePreProcessor;
+import java.io.IOException;
 import java.nio.file.FileSystems;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 /** Desugar compatible wrapper based on D8 desugaring engine */
 public class Desugar {
+
+  public static final String DESUGAR_DEPS_FILENAME = "META-INF/desugar_deps";
+
   /** Commandline options for {@link com.google.devtools.build.android.r8.Desugar}. */
   public static class DesugarOptions extends OptionsBase {
 
     @Option(
         name = "input",
         allowMultiple = true,
-        defaultValue = "",
+        defaultValue = "null",
         category = "input",
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -52,7 +67,7 @@ public class Desugar {
     @Option(
         name = "classpath_entry",
         allowMultiple = true,
-        defaultValue = "",
+        defaultValue = "null",
         category = "input",
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -65,7 +80,7 @@ public class Desugar {
     @Option(
         name = "bootclasspath_entry",
         allowMultiple = true,
-        defaultValue = "",
+        defaultValue = "null",
         category = "input",
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -106,7 +121,7 @@ public class Desugar {
     @Option(
         name = "output",
         allowMultiple = true,
-        defaultValue = "",
+        defaultValue = "null",
         category = "output",
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -226,7 +241,7 @@ public class Desugar {
     /** Type prefixes that we'll move to a custom package. */
     @Option(
         name = "rewrite_core_library_prefix",
-        defaultValue = "", // ignored
+        defaultValue = "null",
         allowMultiple = true,
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -236,7 +251,7 @@ public class Desugar {
     /** Interfaces whose default and static interface methods we'll emulate. */
     @Option(
         name = "emulate_core_library_interface",
-        defaultValue = "", // ignored
+        defaultValue = "null",
         allowMultiple = true,
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -246,7 +261,7 @@ public class Desugar {
     /** Members that we will retarget to the given new owner. */
     @Option(
         name = "retarget_core_library_member",
-        defaultValue = "", // ignored
+        defaultValue = "null",
         allowMultiple = true,
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -258,7 +273,7 @@ public class Desugar {
     /** Members not to rewrite. */
     @Option(
         name = "dont_rewrite_core_library_invocation",
-        defaultValue = "", // ignored
+        defaultValue = "null",
         allowMultiple = true,
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -267,7 +282,7 @@ public class Desugar {
 
     @Option(
         name = "preserve_core_library_override",
-        defaultValue = "", // ignored
+        defaultValue = "null",
         allowMultiple = true,
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.UNKNOWN},
@@ -325,6 +340,12 @@ public class Desugar {
     public boolean persistentWorker;
   }
 
+  private final DesugarOptions options;
+
+  private Desugar(DesugarOptions options) {
+    this.options = options;
+  }
+
   private static DesugarOptions parseCommandLineOptions(String[] args) {
     OptionsParser parser =
         OptionsParser.builder()
@@ -338,14 +359,82 @@ public class Desugar {
     return options;
   }
 
-  private static void desugar(DesugarOptions options) throws CompilationFailedException {
+  /**
+   * Returns a dependency collector for use with a single input Jar. If {@link
+   * DesugarOptions#emitDependencyMetadata} is set, this method instantiates the collector
+   * reflectively to allow compiling and using the desugar tool without this mechanism.
+   */
+  private DependencyCollector createDependencyCollector() {
+    if (options.emitDependencyMetadata) {
+      try {
+        return (DependencyCollector)
+            Thread.currentThread()
+                .getContextClassLoader()
+                .loadClass(
+                    "com.google.devtools.build.android.desugar.dependencies.MetadataCollector")
+                .getConstructor(Boolean.TYPE)
+                .newInstance(options.tolerateMissingDependencies);
+      } catch (ReflectiveOperationException | SecurityException e) {
+        throw new IllegalStateException("Can't emit desugaring metadata as requested", e);
+      }
+    } else if (options.tolerateMissingDependencies) {
+      return DependencyCollector.NoWriteCollectors.NOOP;
+    } else {
+      return DependencyCollector.NoWriteCollectors.FAIL_ON_MISSING;
+    }
+  }
+
+  private class DesugarDiagnosticsHandler implements DiagnosticsHandler {
+
+    OutputConsumer outputConsumer;
+
+    private DesugarDiagnosticsHandler(OutputConsumer outputConsumer) {
+      this.outputConsumer = outputConsumer;
+    }
+
+    @Override
+    public void warning(Diagnostic warning) {
+      if (warning instanceof InterfaceDesugarMissingTypeDiagnostic) {
+        InterfaceDesugarMissingTypeDiagnostic missingTypeDiagnostic =
+            (InterfaceDesugarMissingTypeDiagnostic) warning;
+        outputConsumer.missingImplementedInterface(
+            DescriptorUtils.descriptorToBinaryName(
+                missingTypeDiagnostic.getContextType().getDescriptor()),
+            DescriptorUtils.descriptorToBinaryName(
+                missingTypeDiagnostic.getMissingType().getDescriptor()));
+      }
+      DiagnosticsHandler.super.warning(warning);
+    }
+  }
+
+  private void desugar(ClassFileResourceProvider classpath, Path input, Path output)
+      throws CompilationFailedException {
+    checkArgument(!Files.isDirectory(input), "Input must be a jar (%s is a directory)", input);
+    DependencyCollector dependencyCollector = createDependencyCollector();
+    OutputConsumer consumer = new OutputConsumer(output, dependencyCollector);
     D8.run(
-        D8Command.builder()
+        D8Command.builder(new DesugarDiagnosticsHandler(consumer))
             .addLibraryFiles(options.bootclasspath)
-            .addProgramFiles(options.inputJars)
+            .addClasspathResourceProvider(classpath)
+            .addProgramFiles(input)
             .setMinApiLevel(options.minSdkVersion)
-            .setOutput(options.outputJars.get(0), OutputMode.ClassFile)
+            .setProgramConsumer(consumer)
             .build());
+  }
+
+  private void desugar() throws CompilationFailedException, IOException {
+    // Prepare classpath.
+    ImmutableList.Builder<ClassFileResourceProvider> classpathProvidersBuilder =
+        ImmutableList.builder();
+    for (Path path : options.classpath) {
+      classpathProvidersBuilder.add(new ArchiveClassFileProvider(path));
+    }
+    OrderedClassFileResourceProvider classpathProvider =
+        new OrderedClassFileResourceProvider(classpathProvidersBuilder.build());
+    // Desugar the input jars into the specified output jars.
+    for (int i = 0; i < options.inputJars.size(); i++) {
+      desugar(classpathProvider, options.inputJars.get(i), options.outputJars.get(i));
+    }
   }
 
   private static void validateOptions(DesugarOptions options) {
@@ -357,9 +446,6 @@ public class Desugar {
     }
     if (options.alwaysRewriteLongCompare) {
       throw new AssertionError("--rewrite_calls_to_long_compare has no effect");
-    }
-    if (options.emitDependencyMetadata) {
-      throw new AssertionError("--emit_dependency_metadata_as_needed is not supported");
     }
     if (!options.tolerateMissingDependencies) {
       throw new AssertionError("--best_effort_tolerate_missing_deps must be enabled");
@@ -413,14 +499,20 @@ public class Desugar {
     if (options.persistentWorker) {
       throw new AssertionError("--persistent_worker is not supported");
     }
+
+    checkArgument(!options.inputJars.isEmpty(), "--input is required");
+    checkArgument(
+        options.inputJars.size() == options.outputJars.size(),
+        "D8 Desugar requires the same number of inputs and outputs to pair them."
+            + " #input=%s,#output=%s",
+        options.inputJars.size(),
+        options.outputJars.size());
   }
 
   public static void main(String[] args) throws Exception {
     DesugarOptions options = parseCommandLineOptions(args);
     validateOptions(options);
 
-    desugar(options);
+    new Desugar(options).desugar();
   }
-
-  private Desugar() {}
 }

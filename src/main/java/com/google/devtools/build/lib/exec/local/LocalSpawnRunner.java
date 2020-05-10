@@ -184,6 +184,11 @@ public class LocalSpawnRunner implements SpawnRunner {
     return true;
   }
 
+  @Override
+  public boolean handlesCaching() {
+    return false;
+  }
+
   protected Path createActionTemp(Path execRoot) throws IOException {
     return execRoot.getRelative(
         java.nio.file.Files.createTempDirectory(
@@ -387,12 +392,12 @@ public class LocalSpawnRunner implements SpawnRunner {
                 .profile(ProfilerTask.PROCESS_TIME, spawn.getResourceOwner().getMnemonic())) {
           needCleanup = true;
           Subprocess subprocess = subprocessBuilder.start();
-          subprocess.getOutputStream().close();
           try {
+            subprocess.getOutputStream().close();
             subprocess.waitFor();
             terminationStatus =
                 new TerminationStatus(subprocess.exitValue(), subprocess.timedout());
-          } catch (InterruptedException e) {
+          } catch (InterruptedException | IOException e) {
             subprocess.destroyAndWait();
             throw e;
           }

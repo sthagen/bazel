@@ -262,6 +262,7 @@ public class RemoteSpawnRunner implements SpawnRunner {
           } else {
             try {
               return downloadAndFinalizeSpawnResult(
+                  actionKey.getDigest().getHash(),
                   cachedResult,
                   /* cacheHit= */ true,
                   spawn,
@@ -341,6 +342,7 @@ public class RemoteSpawnRunner implements SpawnRunner {
 
               try {
                 return downloadAndFinalizeSpawnResult(
+                    actionKey.getDigest().getHash(),
                     actionResult,
                     reply.getCachedResult(),
                     spawn,
@@ -413,6 +415,7 @@ public class RemoteSpawnRunner implements SpawnRunner {
   }
 
   private SpawnResult downloadAndFinalizeSpawnResult(
+      String actionId,
       ActionResult actionResult,
       boolean cacheHit,
       Spawn spawn,
@@ -441,6 +444,7 @@ public class RemoteSpawnRunner implements SpawnRunner {
           Profiler.instance().profile(REMOTE_DOWNLOAD, "download outputs minimal")) {
         inMemoryOutput =
             remoteCache.downloadMinimal(
+                actionId,
                 actionResult,
                 spawn.getOutputFiles(),
                 inMemoryOutputPath,
@@ -470,6 +474,11 @@ public class RemoteSpawnRunner implements SpawnRunner {
   @Override
   public boolean canExec(Spawn spawn) {
     return Spawns.mayBeExecutedRemotely(spawn);
+  }
+
+  @Override
+  public boolean handlesCaching() {
+    return true;
   }
 
   private void maybeWriteParamFilesLocally(Spawn spawn) throws IOException {

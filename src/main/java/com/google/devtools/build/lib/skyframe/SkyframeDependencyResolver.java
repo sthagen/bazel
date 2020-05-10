@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.analysis.DependencyKind;
 import com.google.devtools.build.lib.analysis.DependencyResolver;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.ConfigurationId;
 import com.google.devtools.build.lib.causes.AnalysisFailedCause;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.causes.LoadingFailedCause;
@@ -148,11 +149,13 @@ public final class SkyframeDependencyResolver extends DependencyResolver {
                           e.getMessage())));
           continue;
         }
-        BuildConfiguration configuration = fromNode.getConfiguration();
+        @Nullable BuildConfiguration configuration = fromNode.getConfiguration();
+        @Nullable ConfigurationId configId = null;
+        if (configuration != null) {
+          configId =  configuration.getEventId().getConfiguration();
+        }
         env.getListener().post(new AnalysisRootCauseEvent(configuration, label, e.getMessage()));
-        rootCauses.add(
-            new AnalysisFailedCause(
-                label, configuration.getEventId().getConfiguration(), e.getMessage()));
+        rootCauses.add(new AnalysisFailedCause(label, configId, e.getMessage()));
         missingEdgeHook(fromTarget, entry.getKey(), label, e);
         continue;
       }
