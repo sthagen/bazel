@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.syntax.StarlarkThread;
 import javax.annotation.Nullable;
 
 /** Contextual information associated with each Starlark thread created by Bazel. */
+// TODO(adonovan): rename BazelThreadContext, for symmetry with BazelModuleContext.
 public final class BazelStarlarkContext implements RuleDefinitionContext, Label.HasRepoMapping {
 
   /** The phase to which this Starlark thread belongs. */
@@ -50,7 +51,6 @@ public final class BazelStarlarkContext implements RuleDefinitionContext, Label.
   private final ImmutableMap<RepositoryName, RepositoryName> repoMapping;
   private final SymbolGenerator<?> symbolGenerator;
   @Nullable private final Label analysisRuleLabel;
-  @Nullable private final byte[] transitiveDigest;
 
   /**
    * @param phase the phase to which this Starlark thread belongs
@@ -66,7 +66,7 @@ public final class BazelStarlarkContext implements RuleDefinitionContext, Label.
   // TODO(adonovan): clearly demarcate which fields are defined in which kinds of threads (loading,
   // analysis, workspace, implicit outputs, computed defaults, etc), perhaps by splitting these into
   // separate structs, exactly one of which is populated (plus the common fields). And eliminate
-  // SkylarkUtils.Phase.
+  // StarlarkUtils.Phase.
   // TODO(adonovan): move PackageFactory.PackageContext in here, for loading-phase threads.
   // TODO(adonovan): add a PackageIdentifier here, for use by the Starlark Label function.
   // TODO(adonovan): is there any reason not to put the entire RuleContext in this thread, for
@@ -77,15 +77,13 @@ public final class BazelStarlarkContext implements RuleDefinitionContext, Label.
       @Nullable ImmutableMap<String, Class<?>> fragmentNameToClass,
       ImmutableMap<RepositoryName, RepositoryName> repoMapping,
       SymbolGenerator<?> symbolGenerator,
-      @Nullable Label analysisRuleLabel,
-      @Nullable byte[] transitiveDigest) {
+      @Nullable Label analysisRuleLabel) {
     this.phase = phase;
     this.toolsRepository = toolsRepository;
     this.fragmentNameToClass = fragmentNameToClass;
     this.repoMapping = repoMapping;
     this.symbolGenerator = Preconditions.checkNotNull(symbolGenerator);
     this.analysisRuleLabel = analysisRuleLabel;
-    this.transitiveDigest = transitiveDigest;
   }
 
   /** Returns the phase to which this Starlark thread belongs. */
@@ -125,16 +123,6 @@ public final class BazelStarlarkContext implements RuleDefinitionContext, Label.
   @Nullable
   public Label getAnalysisRuleLabel() {
     return analysisRuleLabel;
-  }
-
-  /**
-   * Returns the digest of the .bzl file and those it transitively loads. Only defined for .bzl
-   * initialization threads. Returns a dummy value (empty array) for WORKSPACE initialization
-   * threads. Returns null for all other threads.
-   */
-  @Nullable
-  public byte[] getTransitiveDigest() {
-    return transitiveDigest;
   }
 
   /**

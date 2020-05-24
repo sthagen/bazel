@@ -153,4 +153,21 @@ public final class StarlarkFile extends Node {
   public FileOptions getOptions() {
     return options;
   }
+
+  /** Returns the name of this file, as specified to the parser. */
+  public String getName() {
+    return locs.file();
+  }
+
+  /** A ParseProfiler records the start and end times of parse operations. */
+  public interface ParseProfiler {
+    Object start(String filename);
+
+    void end(Object span);
+  }
+
+  /** Installs a global hook that will be notified of parse operations. */
+  public static void setParseProfiler(@Nullable ParseProfiler p) {
+    Parser.profiler = p;
+  }
 }

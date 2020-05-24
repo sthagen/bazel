@@ -65,7 +65,6 @@ import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunctio
 import com.google.devtools.build.lib.query2.query.output.OutputFormatter;
 import com.google.devtools.build.lib.query2.query.output.OutputFormatters;
 import com.google.devtools.build.lib.runtime.CommandDispatcher.LockingMode;
-import com.google.devtools.build.lib.runtime.commands.InfoItem;
 import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.server.CommandProtos.EnvironmentVariable;
 import com.google.devtools.build.lib.server.CommandProtos.ExecRequest;
@@ -556,9 +555,6 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
             .handle(Event.error("Error while creating memory profile file: " + e.getMessage()));
       }
     }
-
-    // Initialize exit code to dummy value for afterCommand.
-    storedExitCode.set(null);
   }
 
   @Override
@@ -650,6 +646,7 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     try {
       workspace.getSkyframeExecutor().notifyCommandComplete(env.getReporter());
     } catch (InterruptedException e) {
+      logger.atInfo().withCause(e).log("Interrupted in afterCommand");
       afterCommandResult =
           BlazeCommandResult.detailedExitCode(
               InterruptedFailureDetails.detailedExitCode(
@@ -686,6 +683,7 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     env.getReporter().clearEventBus();
     actionKeyContext.clear();
     DebugLoggerConfigurator.flushServerLog();
+    storedExitCode.set(null);
     return finalCommandResult;
   }
 
@@ -1668,16 +1666,13 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
       Package.Builder.Helper packageBuilderHelper,
       ConfiguredRuleClassProvider ruleClassProvider,
       FileSystem fs) {
-    List<PackageLoadingListener> packageLoadingListeners =
+    ImmutableList<PackageLoadingListener> listeners =
         blazeModules.stream()
             .map(
                 module ->
                     module.getPackageLoadingListener(packageBuilderHelper, ruleClassProvider, fs))
             .filter(validator -> validator != null)
             .collect(toImmutableList());
-    Preconditions.checkState(
-        packageLoadingListeners.size() <= 1,
-        "more than one module defined a PackageLoadingListener");
-    return Iterables.getFirst(packageLoadingListeners, PackageLoadingListener.NOOP_LISTENER);
+    return PackageLoadingListener.create(listeners);
   }
 }

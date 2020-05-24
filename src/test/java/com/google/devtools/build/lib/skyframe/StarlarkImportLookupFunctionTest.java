@@ -178,7 +178,7 @@ public class StarlarkImportLookupFunctionTest extends BuildViewTestCase {
   }
 
   private static SkyKey key(String label) {
-    return StarlarkImportLookupValue.key(Label.parseAbsoluteUnchecked(label));
+    return StarlarkImportLookupValue.packageBzlKey(Label.parseAbsoluteUnchecked(label));
   }
 
   // Ensures that a Starlark file has been successfully processed by checking that the
@@ -257,7 +257,7 @@ public class StarlarkImportLookupFunctionTest extends BuildViewTestCase {
             Root.fromPath(p.getParentDirectory()), PathFragment.create("WORKSPACE"));
 
     SkyKey starlarkImportLookupKey =
-        StarlarkImportLookupValue.keyInWorkspace(
+        StarlarkImportLookupValue.workspaceBzlKey(
             Label.parseAbsoluteUnchecked("@a_remote_repo//remote_pkg:ext.bzl"),
             /* inWorkspace= */
             /* workspaceChunk= */ 0,
@@ -400,14 +400,14 @@ public class StarlarkImportLookupFunctionTest extends BuildViewTestCase {
     RootedPath rootedPath = RootedPath.toRootedPath(root, PathFragment.create("WORKSPACE"));
 
     SkyKey starlarkImportLookupKey =
-        StarlarkImportLookupValue.keyInWorkspace(
+        StarlarkImportLookupValue.workspaceBzlKey(
             Label.parseAbsoluteUnchecked("@a//:a.bzl"), 1, rootedPath);
 
     EvaluationResult<StarlarkImportLookupValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), starlarkImportLookupKey, /*keepGoing=*/ false, reporter);
 
-    assertThat(result.get(starlarkImportLookupKey).getModule().getExportedBindings())
+    assertThat(result.get(starlarkImportLookupKey).getModule().getGlobals())
         .containsEntry("a_symbol", 5);
   }
 

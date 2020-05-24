@@ -23,17 +23,24 @@ import java.util.Set;
 
 /**
  * Classpath provider which will de-dupe duplicate classes from several providers. For any defined
- * class the definition form the first provider defining the class is used
+ * class the definition from the first provider defining the class is used.
  */
 public class OrderedClassFileResourceProvider implements ClassFileResourceProvider {
   private final Set<String> descriptors = Sets.newHashSet();
   private final Map<String, ClassFileResourceProvider> descriptorToProvider = new HashMap<>();
 
-  public OrderedClassFileResourceProvider(ImmutableList<ClassFileResourceProvider> providers) {
-    // Collect all descriptors provided and the first provider providing each.
-    for (ClassFileResourceProvider provider : providers) {
+  public OrderedClassFileResourceProvider(
+      ImmutableList<ClassFileResourceProvider> bootclasspathProviders,
+      ImmutableList<ClassFileResourceProvider> classfileProviders) {
+    final Set<String> bootclasspathDescriptors = Sets.newHashSet();
+    for (ClassFileResourceProvider provider : classfileProviders) {
+      // Collect all descriptors provided and the first provider providing each.
+      bootclasspathProviders.forEach(p -> bootclasspathDescriptors.addAll(p.getClassDescriptors()));
       for (String descriptor : provider.getClassDescriptors()) {
-        if (descriptors.add(descriptor)) {
+        // Pick first definition of classpath class and filter out platform classes
+        // from classpath if present.
+        if (!bootclasspathDescriptors.contains(descriptor)
+            && descriptors.add(descriptor)) {
           descriptorToProvider.put(descriptor, provider);
         }
       }

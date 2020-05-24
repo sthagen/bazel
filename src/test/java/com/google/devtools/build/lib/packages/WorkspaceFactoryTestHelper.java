@@ -114,16 +114,16 @@ class WorkspaceFactoryTestHelper {
     return events.get(0).getMessage();
   }
 
-  protected void setSkylarkSemantics(String... options) throws Exception {
-    starlarkSemantics = parseSkylarkSemanticsOptions(options);
+  protected void setStarlarkSemantics(String... options) throws Exception {
+    starlarkSemantics = parseStarlarkSemanticsOptions(options);
   }
 
-  private static StarlarkSemantics parseSkylarkSemanticsOptions(String... options)
+  private static StarlarkSemantics parseStarlarkSemanticsOptions(String... options)
       throws Exception {
     OptionsParser parser =
         OptionsParser.builder().optionsClasses(StarlarkSemanticsOptions.class).build();
     parser.parse(options);
-    return parser.getOptions(StarlarkSemanticsOptions.class).toSkylarkSemantics();
+    return parser.getOptions(StarlarkSemanticsOptions.class).toStarlarkSemantics();
   }
 
 }

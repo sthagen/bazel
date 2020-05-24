@@ -19,7 +19,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.NoBuildEvent;
 import com.google.devtools.build.lib.analysis.NoBuildRequestFinishedEvent;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOrderEvent;
-import com.google.devtools.build.lib.bazel.repository.skylark.SkylarkRepositoryFunction;
+import com.google.devtools.build.lib.bazel.repository.skylark.StarlarkRepositoryFunction;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
@@ -220,7 +220,7 @@ public final class SyncCommand implements BlazeCommand {
       return BlazeCommandResult.detailedExitCode(e.getDetailedExitCode());
     }
     reportNoBuildRequestFinished(env, ExitCode.SUCCESS);
-    return BlazeCommandResult.exitCode(ExitCode.SUCCESS);
+    return BlazeCommandResult.success();
   }
 
   private static boolean shouldSync(Rule rule, SyncOptions options) {
@@ -235,7 +235,7 @@ public final class SyncCommand implements BlazeCommand {
     if (options.configure) {
       // If this is only a configure run, only sync Starlark rules that
       // declare themselves as configure-like.
-      return SkylarkRepositoryFunction.isConfigureRule(rule);
+      return StarlarkRepositoryFunction.isConfigureRule(rule);
     }
     if (rule.getRuleClassObject().isStarlark()) {
       // Starlark rules are all whitelisted

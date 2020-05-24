@@ -52,19 +52,16 @@ public interface RuleClassProvider extends RuleDefinitionContext {
    *
    * @param thread StarlarkThread in which to store the context.
    * @param label the label of the .bzl file
-   * @param transitiveDigest digest of the .bzl file and those it transitively loads
    * @param repoMapping map of RepositoryNames to be remapped
    */
   void setStarlarkThreadContext(
       StarlarkThread thread,
       Label label,
-      byte[] transitiveDigest,
       ImmutableMap<RepositoryName, RepositoryName> repoMapping);
 
   /**
    * Returns the predeclared environment for a loading-phase thread. Includes "native", though its
-   * value may be inappropriate for a WORKSPACE file. Includes the universal bindings (e.g. True,
-   * len), though that will soon change.
+   * value may be inappropriate for a WORKSPACE file. Excludes universal bindings (e.g. True, len).
    */
   // TODO(adonovan): update doc comment. And does it really include native?
   ImmutableMap<String, Object> getEnvironment();

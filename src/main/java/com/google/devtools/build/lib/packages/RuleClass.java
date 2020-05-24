@@ -44,8 +44,8 @@ import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
-import com.google.devtools.build.lib.packages.Attribute.SkylarkComputedDefaultTemplate;
-import com.google.devtools.build.lib.packages.Attribute.SkylarkComputedDefaultTemplate.CannotPrecomputeDefaultsException;
+import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate;
+import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate.CannotPrecomputeDefaultsException;
 import com.google.devtools.build.lib.packages.BuildType.LabelConversionContext;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
@@ -1147,7 +1147,7 @@ public class RuleClass {
 
     public Builder advertiseStarlarkProvider(StarlarkProviderIdentifier... starlarkProviders) {
       for (StarlarkProviderIdentifier starlarkProviderIdentifier : starlarkProviders) {
-        advertisedProviders.addSkylark(starlarkProviderIdentifier);
+        advertisedProviders.addStarlark(starlarkProviderIdentifier);
       }
       return this;
     }
@@ -2135,17 +2135,17 @@ public class RuleClass {
       // expressions in the build language, and they require configuration data from the analysis
       // phase to be resolved). Instead, we're setting the attribute value to a reference to the
       // computed default function, or if #getDefaultValue is a Starlark computed default
-      // template, setting the attribute value to a reference to the SkylarkComputedDefault
-      // returned from SkylarkComputedDefaultTemplate#computePossibleValues.
+      // template, setting the attribute value to a reference to the StarlarkComputedDefault
+      // returned from StarlarkComputedDefaultTemplate#computePossibleValues.
       //
-      // SkylarkComputedDefaultTemplate#computePossibleValues pre-computes all possible values the
+      // StarlarkComputedDefaultTemplate#computePossibleValues pre-computes all possible values the
       // function may evaluate to, and records them in a lookup table. By calling it here, with an
       // EventHandler, any errors that might occur during the function's evaluation can
       // be discovered and propagated here.
       Object valueToSet;
       Object defaultValue = attr.getDefaultValue(rule);
-      if (defaultValue instanceof SkylarkComputedDefaultTemplate) {
-        SkylarkComputedDefaultTemplate template = (SkylarkComputedDefaultTemplate) defaultValue;
+      if (defaultValue instanceof StarlarkComputedDefaultTemplate) {
+        StarlarkComputedDefaultTemplate template = (StarlarkComputedDefaultTemplate) defaultValue;
         valueToSet = template.computePossibleValues(attr, rule, eventHandler);
       } else if (defaultValue instanceof ComputedDefault) {
         // Compute all possible values to verify that the ComputedDefault is well-defined. This was

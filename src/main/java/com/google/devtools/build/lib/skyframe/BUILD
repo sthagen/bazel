@@ -69,7 +69,9 @@ java_library(
         "SkyframePackageManager.java",
         "SkyframeTargetPatternEvaluator.java",
         "SkyframeTransitivePackageLoader.java",
-        "SkylarkAspectFactory.java",
+        "StarlarkAspectFactory.java",
+        "StarlarkBuiltinsFunction.java",
+        "StarlarkBuiltinsValue.java",
         "StarlarkImportLookupFunction.java",
         "TargetCompletionValue.java",
         "TargetCompletor.java",
@@ -80,7 +82,7 @@ java_library(
         "ToolchainResolutionFunction.java",
         "ToolchainTypeLookupUtil.java",
         "TopLevelActionLookupConflictFindingFunction.java",
-        "ToplevelSkylarkAspectFunction.java",
+        "ToplevelStarlarkAspectFunction.java",
         "TransitiveTargetFunction.java",
         "TrimmedConfigurationProgressReceiver.java",
         "UnloadedToolchainContextImpl.java",
@@ -207,6 +209,7 @@ java_library(
         ":test_expansion_function",
         ":tests_for_target_pattern_function",
         ":tests_for_target_pattern_value",
+        ":toolchain_context_key",
         ":toolchain_exception",
         ":top_down_action_cache",
         ":transitive_base_traversal_function",
@@ -217,20 +220,17 @@ java_library(
         ":transitive_traversal_value",
         ":tree_artifact_value",
         ":unloaded_toolchain_context",
-        ":unloaded_toolchain_context_key",
         ":workspace_ast_value",
         ":workspace_name_function",
         ":workspace_name_value",
         ":workspace_status_function",
         ":workspace_status_value",
-        "//src/main/java/com/google/devtools/build/lib:bug-report",
         "//src/main/java/com/google/devtools/build/lib:build-request-options",
         "//src/main/java/com/google/devtools/build/lib:keep-going-option",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actionsketch:action_sketch",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/parameter_file_write_action",
         "//src/main/java/com/google/devtools/build/lib/analysis:analysis_cluster",
-        "//src/main/java/com/google/devtools/build/lib/analysis:aspect_collection",
         "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
         "//src/main/java/com/google/devtools/build/lib/analysis:buildinfo/build_info_collection",
         "//src/main/java/com/google/devtools/build/lib/analysis:buildinfo/build_info_key",
@@ -249,6 +249,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_object_value",
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target",
         "//src/main/java/com/google/devtools/build/lib/analysis:dependency",
+        "//src/main/java/com/google/devtools/build/lib/analysis:dependency_key",
         "//src/main/java/com/google/devtools/build/lib/analysis:dependency_kind",
         "//src/main/java/com/google/devtools/build/lib/analysis:duplicate_exception",
         "//src/main/java/com/google/devtools/build/lib/analysis:inconsistent_aspect_order_exception",
@@ -260,6 +261,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:workspace_status_action",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform:utils",
+        "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
         "//src/main/java/com/google/devtools/build/lib/causes",
@@ -449,8 +451,8 @@ java_library(
         ":action_utils",
         ":artifact_function",
         ":skyframe_aware_action",
-        "//src/main/java/com/google/devtools/build/lib:bug-report",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/skyframe/proto:action_rewind_event_java_proto",
         "//src/main/java/com/google/devtools/build/skyframe",
@@ -486,8 +488,8 @@ java_library(
     deps = [
         ":action_template_expansion_value",
         ":tree_artifact_value",
-        "//src/main/java/com/google/devtools/build/lib:bug-report",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
@@ -743,8 +745,8 @@ java_library(
         ":runfiles_artifact_value",
         ":track_source_directories_flag",
         ":tree_artifact_value",
-        "//src/main/java/com/google/devtools/build/lib:bug-report",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/util",
@@ -1284,7 +1286,7 @@ java_library(
 
 java_library(
     name = "error_reading_skylark_extension_exception",
-    srcs = ["ErrorReadingSkylarkExtensionException.java"],
+    srcs = ["ErrorReadingStarlarkExtensionException.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/skyframe",
@@ -2222,7 +2224,6 @@ java_library(
     name = "sky_functions",
     srcs = ["SkyFunctions.java"],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//third_party:guava",
     ],
@@ -2264,7 +2265,7 @@ java_library(
 
 java_library(
     name = "skylark_module_cycle_reporter",
-    srcs = ["SkylarkModuleCycleReporter.java"],
+    srcs = ["StarlarkModuleCycleReporter.java"],
     deps = [
         ":abstract_label_cycle_reporter",
         ":repository_value",
@@ -2479,6 +2480,19 @@ java_library(
 )
 
 java_library(
+    name = "toolchain_context_key",
+    srcs = ["ToolchainContextKey.java"],
+    deps = [
+        ":build_configuration_value",
+        ":sky_functions",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party:auto_value",
+        "//third_party:guava",
+    ],
+)
+
+java_library(
     name = "toolchain_exception",
     srcs = ["ToolchainException.java"],
 )
@@ -2633,19 +2647,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
-        "//third_party:guava",
-    ],
-)
-
-java_library(
-    name = "unloaded_toolchain_context_key",
-    srcs = ["UnloadedToolchainContextKey.java"],
-    deps = [
-        ":build_configuration_value",
-        ":sky_functions",
-        "//src/main/java/com/google/devtools/build/lib/cmdline",
-        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
-        "//third_party:auto_value",
         "//third_party:guava",
     ],
 )

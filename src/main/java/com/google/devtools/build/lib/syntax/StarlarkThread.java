@@ -18,18 +18,13 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
-import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.profiler.Profiler;
-import com.google.devtools.build.lib.profiler.ProfilerTask;
-import com.google.devtools.build.lib.profiler.SilentCloseable;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.Immutable;
 
 /**
  * An StarlarkThread represents a Starlark thread.
@@ -47,17 +42,10 @@ import javax.annotation.Nullable;
  * interacting {@code StarlarkThread}s. It is a Starlark-level error to attempt to mutate a frozen
  * {@code StarlarkThread} or its objects, but it is a Java-level error to attempt to mutate an
  * unfrozen {@code StarlarkThread} or its objects from within a different {@code StarlarkThread}.
- *
- * <p>One creates an StarlarkThread using the {@link #builder} function, before evaluating code in
- * it with {@link StarlarkFile#eval}, or with {@link StarlarkFile#exec} (where the AST was obtained
- * by passing a {@link Resolver} constructed from the StarlarkThread to {@link StarlarkFile#parse}.
- * When the computation is over, the frozen StarlarkThread can still be queried with {@link
- * #lookup}.
  */
 public final class StarlarkThread {
 
-  // The mutability of the StarlarkThread comes from its initial module.
-  // TODO(adonovan): not every thread initializes a module.
+  /** The mutability of values created by this thread. */
   private final Mutability mutability;
 
   // profiler state
@@ -136,7 +124,7 @@ public final class StarlarkThread {
     // The locals of this frame, if fn is a StarlarkFunction, otherwise empty.
     Map<String, Object> locals;
 
-    @Nullable private SilentCloseable profileSpan; // current span of walltime profiler
+    @Nullable private Object profileSpan; // current span of walltime call profiler
 
     private Frame(StarlarkThread thread, StarlarkCallable fn) {
       this.thread = thread;
@@ -169,21 +157,6 @@ public final class StarlarkThread {
     }
   }
 
-  // The module initialized by this Starlark thread.
-  //
-  // TODO(adonovan): eliminate. First we need to simplify the set-up sequence like so:
-  //
-  //    // Filter predeclaredEnv based on semantics,
-  //    // create a mutability, and retain the semantics:
-  //    Module module = new Module(semantics, predeclaredEnv);
-  //
-  //    // Create a thread that takes its semantics and mutability
-  //    // (and only them) from the Module.
-  //    StarlarkThread thread = StarlarkThread.toInitializeModule(module);
-  //
-  // Then clients that call thread.getGlobals() should use 'module' directly.
-  private final Module module;
-
   /** The semantics options that affect how Starlark code is evaluated. */
   private final StarlarkSemantics semantics;
 
@@ -209,23 +182,20 @@ public final class StarlarkThread {
       Debug.threadHook.onPushFirst(this);
     }
 
-    ProfilerTask taskKind;
     if (fn instanceof StarlarkFunction) {
       StarlarkFunction sfn = (StarlarkFunction) fn;
       fr.locals = Maps.newLinkedHashMapWithExpectedSize(sfn.getParameterNames().size());
-      taskKind = ProfilerTask.STARLARK_USER_FN;
     } else {
       // built-in function
       fr.locals = ImmutableMap.of();
-      taskKind = ProfilerTask.STARLARK_BUILTIN_FN;
     }
 
     fr.loc = fn.getLocation();
 
-    // start wall-time profile span
-    // TODO(adonovan): throw this away when we build a CPU profiler.
-    if (Profiler.instance().isActive()) {
-      fr.profileSpan = Profiler.instance().profile(taskKind, fn.getName());
+    // Start wall-time call profile span.
+    CallProfiler callProfiler = StarlarkThread.callProfiler;
+    if (callProfiler != null) {
+      fr.profileSpan = callProfiler.start(fn);
     }
 
     // Poll for newly installed CPU profiler.
@@ -263,9 +233,10 @@ public final class StarlarkThread {
 
     callstack.remove(last); // pop
 
-    // end profile span
-    if (fr.profileSpan != null) {
-      fr.profileSpan.close();
+    // End wall-time profile span.
+    CallProfiler callProfiler = StarlarkThread.callProfiler;
+    if (callProfiler != null && fr.profileSpan != null) {
+      callProfiler.end(fr.profileSpan);
     }
 
     // Notify debug tools of the thread's last pop.
@@ -274,17 +245,9 @@ public final class StarlarkThread {
     }
   }
 
+  /** Returns the mutability for values created by this thread. */
   public Mutability mutability() {
     return mutability;
-  }
-
-  /** Returns the module initialized by this StarlarkThread. */
-  // TODO(adonovan): get rid of this. Logically, a thread doesn't have module, but every
-  // Starlark source function does. If you want to know the module of the innermost
-  // enclosing call from a function defined in Starlark source code, use
-  // Module.ofInnermostEnclosingStarlarkFunction.
-  public Module getGlobals() {
-    return module;
   }
 
   /**
@@ -374,81 +337,13 @@ public final class StarlarkThread {
   /**
    * Constructs a StarlarkThread.
    *
-   * @param module the module initialized by this StarlarkThread
+   * @param mu the (non-frozen) mutability of values created by this thread.
    * @param semantics the StarlarkSemantics for this thread.
    */
-  private StarlarkThread(Module module, StarlarkSemantics semantics) {
-    this.module = Preconditions.checkNotNull(module);
-    this.mutability = module.mutability();
-    Preconditions.checkArgument(!module.mutability().isFrozen());
+  public StarlarkThread(Mutability mu, StarlarkSemantics semantics) {
+    Preconditions.checkArgument(!mu.isFrozen());
+    this.mutability = mu;
     this.semantics = semantics;
-  }
-
-  /**
-   * A Builder class for StarlarkThread.
-   *
-   * <p>The caller must explicitly set the semantics by calling either {@link #setSemantics} or
-   * {@link #useDefaultSemantics}.
-   */
-  // TODO(adonovan): Decouple Module from thread, and eliminate the builder.
-  // Expose a public constructor from (mutability, semantics).
-  public static class Builder {
-    private final Mutability mutability;
-    @Nullable private Module predeclared;
-    @Nullable private StarlarkSemantics semantics;
-
-    Builder(Mutability mutability) {
-      this.mutability = mutability;
-    }
-
-    /**
-     * Set the predeclared environment of the module created for this thread.
-     *
-     * <p>Any values in {@code predeclared.getBindings()} that are FlagGuardedValues will be
-     * filtered according to the thread's semantics.
-     */
-    // TODO(adonovan): remove this. A thread should not have a Module.
-    // It's only here to piggyback off the semantics for filtering.
-    // (The name is also wrong: really it should be setPredeclared.)
-    // And it's always called with value from Module.createForBuiltins.
-    // Instead, just expose a constructor like Module.withPredeclared(semantics, predeclared).
-    // A Module builder is not a crazy idea.
-    public Builder setGlobals(Module predeclared) {
-      Preconditions.checkState(this.predeclared == null);
-      this.predeclared = predeclared;
-      return this;
-    }
-
-    public Builder setSemantics(StarlarkSemantics semantics) {
-      this.semantics = semantics;
-      return this;
-    }
-
-    public Builder useDefaultSemantics() {
-      this.semantics = StarlarkSemantics.DEFAULT;
-      return this;
-    }
-
-    /** Builds the StarlarkThread. */
-    public StarlarkThread build() {
-      Preconditions.checkArgument(!mutability.isFrozen());
-      if (semantics == null) {
-        throw new IllegalArgumentException("must call either setSemantics or useDefaultSemantics");
-      }
-      // Filter out restricted objects from the universe scope. This cannot be done in-place in
-      // creation of the input global universe scope, because this environment's semantics may not
-      // have been available during its creation. Thus, create a new universe scope for this
-      // environment which is equivalent in every way except that restricted bindings are
-      // filtered out.
-      predeclared = Module.filterOutRestrictedBindings(mutability, predeclared, semantics);
-
-      Module module = new Module(mutability, predeclared);
-      return new StarlarkThread(module, semantics);
-    }
-  }
-
-  public static Builder builder(Mutability mutability) {
-    return new Builder(mutability);
   }
 
   /**
@@ -471,20 +366,6 @@ public final class StarlarkThread {
 
   public StarlarkSemantics getSemantics() {
     return semantics;
-  }
-
-  /**
-   * Returns a set of all names of variables that are accessible in this {@code StarlarkThread}, in
-   * a deterministic order.
-   */
-  // TODO(adonovan): eliminate this once we do resolution.
-  Set<String> getVariableNames() {
-    LinkedHashSet<String> vars = new LinkedHashSet<>();
-    if (!callstack.isEmpty()) {
-      vars.addAll(frame(0).locals.keySet());
-    }
-    vars.addAll(module.getTransitiveBindings().keySet());
-    return vars;
   }
 
   // Implementation of Debug.getCallStack.
@@ -598,6 +479,20 @@ public final class StarlarkThread {
 
   @Override
   public String toString() {
-    return String.format("<StarlarkThread%s>", mutability());
+    return String.format("<StarlarkThread%s>", mutability);
   }
+
+  /** CallProfiler records the start and end wall times of function calls. */
+  public interface CallProfiler {
+    Object start(StarlarkCallable fn);
+
+    void end(Object span);
+  }
+
+  /** Installs a global hook that will be notified of function calls. */
+  public static void setCallProfiler(@Nullable CallProfiler p) {
+    callProfiler = p;
+  }
+
+  @Nullable private static CallProfiler callProfiler = null;
 }

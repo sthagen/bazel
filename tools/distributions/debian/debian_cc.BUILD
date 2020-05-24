@@ -20,3 +20,18 @@ cc_library(
     linkopts = ["-lz"],
     visibility = ["//visibility:public"],
 )
+
+# libprotobuf-dev
+cc_library(
+    name = "protobuf",
+    linkopts = ["-lprotobuf"],
+    visibility = ["//visibility:public"],
+)
+
+# libprotoc-dev
+cc_library(
+    name = "protoc_lib",
+    linkopts = ["-lprotoc", "-lpthread", "-lm"],
+    deps = [":protobuf"],
+    visibility = ["//visibility:public"],
+)
