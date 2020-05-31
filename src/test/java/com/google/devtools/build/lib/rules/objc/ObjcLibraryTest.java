@@ -1901,23 +1901,26 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
   @Test
   public void testDirectFields() throws Exception {
     useConfiguration("--crosstool_top=" + MockObjcSupport.DEFAULT_OSX_CROSSTOOL);
+
     scratch.file(
         "x/BUILD",
         "objc_library(",
-        "   name = 'foo',",
-        "   srcs = ['foo.m'],",
-        "   hdrs = ['foo.h'],",
+        "    name = 'foo',",
+        "    srcs = ['foo.m', 'foo_impl.h'],",
+        "    hdrs = ['foo.h'],",
+        "    textual_hdrs = ['foo.inc'],",
         ")",
         "objc_library(",
         "    name = 'bar',",
-        "    srcs = ['bar.m'],",
+        "    srcs = ['bar.m', 'bar_impl.h'],",
         "    hdrs = ['bar.h'],",
+        "    textual_hdrs = ['bar.inc'],",
         "    deps = [':foo'],",
         ")");
 
     ObjcProvider dependerProvider = providerForTarget("//x:bar");
     assertThat(baseArtifactNames(dependerProvider.getDirect(ObjcProvider.HEADER)))
-        .containsExactly("bar.h");
+        .containsExactly("bar.h", "bar.inc");
     assertThat(baseArtifactNames(dependerProvider.getDirect(ObjcProvider.SOURCE)))
         .containsExactly("bar.m");
     assertThat(Artifact.toRootRelativePaths(dependerProvider.getDirect(ObjcProvider.MODULE_MAP)))

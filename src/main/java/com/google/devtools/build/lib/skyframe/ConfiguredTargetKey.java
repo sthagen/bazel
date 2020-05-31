@@ -37,60 +37,10 @@ public class ConfiguredTargetKey extends ActionLookupKey {
 
   private transient int hashCode;
 
-  private ConfiguredTargetKey(Label label, @Nullable BuildConfigurationValue.Key configurationKey) {
+  @AutoCodec.VisibleForSerialization
+  ConfiguredTargetKey(Label label, @Nullable BuildConfigurationValue.Key configurationKey) {
     this.label = Preconditions.checkNotNull(label);
     this.configurationKey = configurationKey;
-  }
-
-  public static ConfiguredTargetKey of(
-      ConfiguredTarget configuredTarget, BuildConfiguration buildConfiguration) {
-    return of(configuredTarget.getOriginalLabel(), buildConfiguration);
-  }
-
-  public static ConfiguredTargetKey of(
-      ConfiguredTarget configuredTarget,
-      BuildConfigurationValue.Key configurationKey,
-      boolean isHostConfiguration) {
-    return of(configuredTarget.getOriginalLabel(), configurationKey, isHostConfiguration);
-  }
-
-  public static ConfiguredTargetKey inTargetConfig(ConfiguredTarget configuredTarget) {
-    return of(
-        configuredTarget.getOriginalLabel(),
-        configuredTarget.getConfigurationKey(),
-        /*isHostConfiguration=*/ false);
-  }
-
-  /**
-   * Caches so that the number of ConfiguredTargetKey instances is {@code O(configured targets)} and
-   * not {@code O(edges between configured targets)}.
-   */
-  private static final Interner<ConfiguredTargetKey> interner = BlazeInterners.newWeakInterner();
-  private static final Interner<HostConfiguredTargetKey> hostInterner =
-      BlazeInterners.newWeakInterner();
-
-  public static ConfiguredTargetKey of(Label label, @Nullable BuildConfiguration configuration) {
-    KeyAndHost keyAndHost = keyFromConfiguration(configuration);
-    return of(label, keyAndHost.key, keyAndHost.isHost);
-  }
-
-  @AutoCodec.Instantiator
-  public static ConfiguredTargetKey of(
-      Label label,
-      @Nullable BuildConfigurationValue.Key configurationKey,
-      boolean isHostConfiguration) {
-    if (isHostConfiguration) {
-      return hostInterner.intern(new HostConfiguredTargetKey(label, configurationKey));
-    } else {
-      return interner.intern(new ConfiguredTargetKey(label, configurationKey));
-    }
-  }
-
-  static KeyAndHost keyFromConfiguration(@Nullable BuildConfiguration configuration) {
-    return configuration == null
-        ? KeyAndHost.NULL_INSTANCE
-        : new KeyAndHost(
-            BuildConfigurationValue.key(configuration), configuration.isHostConfiguration());
   }
 
   @Override
@@ -136,7 +86,7 @@ public class ConfiguredTargetKey extends ActionLookupKey {
 
   private int computeHashCode() {
     int configVal = configurationKey == null ? 79 : configurationKey.hashCode();
-    return 31 * label.hashCode() + configVal + (isHostConfiguration() ? 41 : 0);
+    return 31 * label.hashCode() + configVal;
   }
 
   @Override
@@ -151,52 +101,76 @@ public class ConfiguredTargetKey extends ActionLookupKey {
       return false;
     }
     ConfiguredTargetKey other = (ConfiguredTargetKey) obj;
-    return this.isHostConfiguration() == other.isHostConfiguration()
-        && Objects.equals(label, other.label)
+    return Objects.equals(label, other.label)
         && Objects.equals(configurationKey, other.configurationKey);
-  }
-
-  public boolean isHostConfiguration() {
-    return false;
   }
 
   public String prettyPrint() {
     if (label == null) {
       return "null";
     }
-    return isHostConfiguration() ? (label + " (host)") : label.toString();
+    return label.toString();
   }
 
   @Override
   public String toString() {
-    return String.format("%s %s %s", label, configurationKey, isHostConfiguration());
+    return String.format("%s %s", label, configurationKey);
   }
 
-  static class HostConfiguredTargetKey extends ConfiguredTargetKey {
-    private HostConfiguredTargetKey(
-        Label label, @Nullable BuildConfigurationValue.Key configurationKey) {
-      super(label, configurationKey);
-    }
-
-    @Override
-    public boolean isHostConfiguration() {
-      return true;
-    }
+  /** Returns a new {@link Builder} to create instances of {@link ConfiguredTargetKey}. */
+  public static Builder builder() {
+    return new Builder();
   }
 
   /**
-   * Simple wrapper class for turning a {@link BuildConfiguration} into a {@link
-   * BuildConfigurationValue.Key} and boolean isHost.
+   * Caches so that the number of ConfiguredTargetKey instances is {@code O(configured targets)} and
+   * not {@code O(edges between configured targets)}.
    */
-  public static class KeyAndHost {
-    private static final KeyAndHost NULL_INSTANCE = new KeyAndHost(null, false);
+  private static final Interner<ConfiguredTargetKey> interner = BlazeInterners.newWeakInterner();
 
-    @Nullable public final BuildConfigurationValue.Key key;
-    final boolean isHost;
+  /** A helper class to create instances of {@link ConfiguredTargetKey}. */
+  public static class Builder {
 
-    private KeyAndHost(@Nullable BuildConfigurationValue.Key key, boolean isHost) {
-      this.key = key;
-      this.isHost = isHost;
+    private Label label = null;
+    private BuildConfigurationValue.Key configurationKey = null;
+
+    /** Sets the label for the target. */
+    public Builder setLabel(Label label) {
+      this.label = label;
+      return this;
+    }
+
+    /**
+     * Sets the {@link ConfiguredTarget} that we want a key for.
+     *
+     * <p>This sets both the label and configurationKey data.
+     */
+    public Builder setConfiguredTarget(ConfiguredTarget configuredTarget) {
+      setLabel(configuredTarget.getOriginalLabel());
+      if (this.configurationKey == null) {
+        setConfigurationKey(configuredTarget.getConfigurationKey());
+      }
+      return this;
+    }
+
+    /** Sets the {@link BuildConfiguration} for the configured target. */
+    public Builder setConfiguration(@Nullable BuildConfiguration buildConfiguration) {
+      if (buildConfiguration == null) {
+        return setConfigurationKey(null);
+      } else {
+        return setConfigurationKey(BuildConfigurationValue.key(buildConfiguration));
+      }
+    }
+
+    /** Sets the configuration key for the configured target. */
+    public Builder setConfigurationKey(@Nullable BuildConfigurationValue.Key configurationKey) {
+      this.configurationKey = configurationKey;
+      return this;
+    }
+
+    /** Builds a new {@link ConfiguredTargetKey} based on the supplied data. */
+    public ConfiguredTargetKey build() {
+      return interner.intern(new ConfiguredTargetKey(label, configurationKey));
     }
   }
 }
