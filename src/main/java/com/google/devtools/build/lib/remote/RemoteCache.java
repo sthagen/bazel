@@ -44,6 +44,7 @@ import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.actions.cache.MetadataInjector;
@@ -59,6 +60,9 @@ import com.google.devtools.build.lib.remote.common.RemoteCacheClient.ActionKey;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.Utils.InMemoryOutput;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution;
+import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution.Code;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.vfs.Dirent;
@@ -351,7 +355,13 @@ public class RemoteCache implements AutoCloseable {
         // any subsequent local execution failure would likely be incomprehensible.
         ExecException execEx =
             new EnvironmentalExecException(
-                "Failed to delete output files after incomplete download", ioEx);
+                ioEx,
+                FailureDetail.newBuilder()
+                    .setMessage("Failed to delete output files after incomplete download")
+                    .setRemoteExecution(
+                        RemoteExecution.newBuilder()
+                            .setCode(Code.INCOMPLETE_OUTPUT_DOWNLOAD_CLEANUP_FAILURE))
+                    .build());
         execEx.addSuppressed(e);
         throw execEx;
       }
@@ -614,7 +624,7 @@ public class RemoteCache implements AutoCloseable {
                 + "--experimental_remote_download_outputs=minimal");
       }
       SpecialArtifact parent = (SpecialArtifact) output;
-      ImmutableMap.Builder<TreeFileArtifact, RemoteFileArtifactValue> childMetadata =
+      ImmutableMap.Builder<TreeFileArtifact, FileArtifactValue> childMetadata =
           ImmutableMap.builderWithExpectedSize(directory.files.size());
       for (FileMetadata file : directory.files()) {
         TreeFileArtifact child =
@@ -627,7 +637,7 @@ public class RemoteCache implements AutoCloseable {
                 actionId);
         childMetadata.put(child, value);
       }
-      metadataInjector.injectRemoteDirectory(parent, childMetadata.build());
+      metadataInjector.injectDirectory(parent, childMetadata.build());
     } else {
       FileMetadata outputMetadata = metadata.file(execRoot.getRelative(output.getExecPathString()));
       if (outputMetadata == null) {
@@ -635,7 +645,7 @@ public class RemoteCache implements AutoCloseable {
         // SkyFrame will make sure to fail.
         return;
       }
-      metadataInjector.injectRemoteFile(
+      metadataInjector.injectFile(
           output,
           new RemoteFileArtifactValue(
               DigestUtil.toBinaryDigest(outputMetadata.digest()),

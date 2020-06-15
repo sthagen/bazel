@@ -41,6 +41,8 @@ static void Usage(char *program_name, const char *fmt, ...) {
   fprintf(
       stderr,
       "\nPossible arguments:\n"
+      "  -g/--graceful_sigterm  propagate SIGTERM to the subprocess and delay "
+      "the corresponding SIGKILL until --kill_delay has passed\n"
       "  -t/--timeout <timeout>  timeout after which the child process will be "
       "terminated with SIGTERM\n"
       "  -k/--kill_delay <timeout>  in case timeout occurs, how long to wait "
@@ -58,21 +60,25 @@ static void Usage(char *program_name, const char *fmt, ...) {
 // global `opt` struct.
 static void ParseCommandLine(const std::vector<char *> &args) {
   static struct option long_options[] = {
+      {"graceful_sigterm", no_argument, 0, 'g'},
       {"timeout", required_argument, 0, 't'},
       {"kill_delay", required_argument, 0, 'k'},
       {"stdout", required_argument, 0, 'o'},
       {"stderr", required_argument, 0, 'e'},
       {"stats", required_argument, 0, 's'},
       {"debug", no_argument, 0, 'd'},
-      {"wait_fix", optional_argument, 0, 'W'},
+      {"wait_fix", no_argument, 0, 'W'},
       {0, 0, 0, 0}};
   extern char *optarg;
   extern int optind, optopt;
   int c;
 
-  while ((c = getopt_long(args.size(), args.data(), "+:t:k:o:e:s:dW",
+  while ((c = getopt_long(args.size(), args.data(), "+:gt:k:o:e:s:dW",
                           long_options, nullptr)) != -1) {
     switch (c) {
+      case 'g':
+        opt.graceful_sigterm = true;
+        break;
       case 't':
         if (sscanf(optarg, "%lf", &opt.timeout_secs) != 1) {
           Usage(args.front(), "Invalid timeout (-t) value: %s", optarg);
@@ -111,22 +117,7 @@ static void ParseCommandLine(const std::vector<char *> &args) {
         opt.debug = true;
         break;
       case 'W':
-        // Allows for a controlled rollout of the "wait for process group" fix.
-        // The optional argument can be used to "undo" the application of -W in
-        // case things go wrong by passing the following flag to the build:
-        // --process_wrapper_extra_flags=--wait_fix=no
-        if (optarg != nullptr) {
-          if (std::strcmp(optarg, "yes") == 0) {
-            opt.wait_fix = true;
-          } else if (std::strcmp(optarg, "no") == 0) {
-            opt.wait_fix = false;
-          } else {
-            Usage(args.front(), "Argument to -W, if present, must be yes or no",
-                  optopt, optind);
-          }
-        } else {
-          opt.wait_fix = true;
-        }
+        opt.wait_fix = true;
         break;
       case '?':
         Usage(args.front(), "Unrecognized argument: -%c (%d)", optopt, optind);

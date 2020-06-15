@@ -122,7 +122,6 @@ java_library(
         "StringModule.java",
         "Tuple.java",
     ],
-    data = [":libcpu_profiler.so"],  # will be loaded dynamically
     deps = [
         ":frontend",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
@@ -135,6 +134,35 @@ java_library(
     ],
 )
 
+# Dynamic library for Starlark CPU profiler.
+# The application or test must arrange for the library to be added
+# to the java.library.path directory (e.g. by 'java -Djava.library.path=<dir>').
+# What a mess.
+filegroup(
+    name = "cpu_profiler",
+    srcs = select({
+        "//src/conditions:darwin": [":libcpu_profiler.dylib"],
+        "//src/conditions:windows": [":cpu_profiler.dll"],
+        "//conditions:default": [":libcpu_profiler.so"],  # POSIX
+    }),
+)
+
+genrule(
+    name = "cpu_profiler_darwin",
+    srcs = ["libcpu_profiler.so"],
+    outs = ["libcpu_profiler.dylib"],
+    cmd = "cp $< $@",
+    visibility = ["//visibility:private"],
+)
+
+genrule(
+    name = "cpu_profiler_windows",
+    srcs = ["libcpu_profiler.so"],
+    outs = ["cpu_profiler.dll"],
+    cmd = "cp $< $@",
+    visibility = ["//visibility:private"],
+)
+
 # The C++ portion of the Starlark CPU profiler.
 cc_binary(
     name = "libcpu_profiler.so",
@@ -143,11 +171,13 @@ cc_binary(
         # There is no config_setting for Linux.
         # See https://github.com/bazelbuild/bazel/issues/11107
         "//src/conditions:linux_aarch64": ["cpu_profiler_posix.cc"],
+        "//src/conditions:linux_arm": ["cpu_profiler_posix.cc"],
         "//src/conditions:linux_ppc": ["cpu_profiler_posix.cc"],
         "//src/conditions:linux_s390x": ["cpu_profiler_posix.cc"],
         "//src/conditions:linux_x86_64": ["cpu_profiler_posix.cc"],
         "//conditions:default": ["cpu_profiler_unimpl.cc"],
     }),
     linkshared = 1,
+    visibility = ["//visibility:private"],
     deps = ["@bazel_tools//tools/jdk:jni"],
 )

@@ -166,6 +166,7 @@ java_library(
     name = "analysis_cluster",
     srcs = [
         "AliasProvider.java",
+        "Allowlist.java",
         "AnalysisEnvironment.java",
         "AnalysisFailureEvent.java",
         "AnalysisResult.java",
@@ -200,7 +201,6 @@ java_library(
         "PlatformConfiguration.java",
         "PrerequisiteArtifacts.java",
         "PseudoAction.java",
-        "ResolvedToolchainContext.java",
         "RuleConfiguredTargetBuilder.java",
         "RuleConfiguredTargetFactory.java",
         "RuleContext.java",
@@ -218,7 +218,6 @@ java_library(
         "TargetContext.java",
         "TopLevelArtifactHelper.java",
         "Util.java",
-        "Whitelist.java",
         "WindowsBatchCommandConstructor.java",
         "WindowsPowershellCommandConstructor.java",
         "actions/ActionConstructionContext.java",
@@ -337,6 +336,7 @@ java_library(
         ":platform_options",
         ":provider_collection",
         ":required_config_fragments_provider",
+        ":resolved_toolchain_context",
         ":rule_definition_context",
         ":rule_definition_environment",
         ":skylark/args",
@@ -371,7 +371,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:localhost_capacity",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
-        "//src/main/java/com/google/devtools/build/lib/analysis/platform:utils",
         "//src/main/java/com/google/devtools/build/lib/analysis/stringtemplate",
         "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
@@ -410,10 +409,8 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe:precomputed_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:sane_analysis_exception",
         "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_context_key",
-        "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_exception",
         "//src/main/java/com/google/devtools/build/lib/skyframe:transitive_target_key",
         "//src/main/java/com/google/devtools/build/lib/skyframe:transitive_target_value",
-        "//src/main/java/com/google/devtools/build/lib/skyframe:unloaded_toolchain_context",
         "//src/main/java/com/google/devtools/build/lib/skyframe:workspace_status_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi",
@@ -705,6 +702,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_key",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_context_key",
         "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
@@ -717,8 +715,11 @@ java_library(
     deps = [
         ":aspect_collection",
         ":config/transitions/configuration_transition",
+        ":dependency",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_context_key",
         "//third_party:auto_value",
+        "//third_party:jsr305",
     ],
 )
 
@@ -958,6 +959,28 @@ java_library(
 )
 
 java_library(
+    name = "resolved_toolchain_context",
+    srcs = ["ResolvedToolchainContext.java"],
+    deps = [
+        ":template_variable_info",
+        ":toolchain_context",
+        "//src/main/java/com/google/devtools/build/lib/analysis/platform",
+        "//src/main/java/com/google/devtools/build/lib/analysis/platform:utils",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/concurrent",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_and_data",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_context_key",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_exception",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:unloaded_toolchain_context",
+        "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/platform",
+        "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
+        "//third_party:auto_value",
+        "//third_party:guava",
+        "//third_party:jsr305",
+    ],
+)
+
+java_library(
     name = "rule_definition_context",
     srcs = ["RuleDefinitionContext.java"],
 )
@@ -1000,6 +1023,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages:type",
+        "//third_party:flogger",
         "//third_party:guava",
     ],
 )
@@ -1024,6 +1048,7 @@ java_library(
     deps = [
         ":toolchain_context",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//third_party:auto_value",
         "//third_party:guava",
     ],
 )
@@ -1350,8 +1375,10 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/util",
+        "//src/main/java/com/google/devtools/build/lib/util:detailed_exit_code",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//src/main/protobuf:failure_details_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -1390,6 +1417,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/syntax:evaluator",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/util:string",
+        "//src/main/protobuf:failure_details_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -1572,6 +1600,7 @@ java_library(
         ":config/build_options",
         ":config/build_options_cache",
         ":config/core_options",
+        ":config/fragment_options",
         ":config/transitions/patch_transition",
         ":config/transitions/transition_factory",
         ":platform_options",

@@ -44,11 +44,15 @@ import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.Spawn.Code;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.SortedMap;
@@ -133,8 +137,15 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
           cacheHandle.store(spawnResult);
         }
       }
+    } catch (InterruptedIOException e) {
+      throw new InterruptedException(e.getMessage());
     } catch (IOException e) {
-      throw new EnvironmentalExecException(e);
+      throw new EnvironmentalExecException(
+          e,
+          FailureDetail.newBuilder()
+              .setMessage("Exec failed due to IOException")
+              .setSpawn(FailureDetails.Spawn.newBuilder().setCode(Code.EXEC_IO_EXCEPTION))
+              .build());
     } catch (SpawnExecException e) {
       ex = e;
       spawnResult = e.getSpawnResult();

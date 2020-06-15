@@ -18,6 +18,7 @@ import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionInputMap;
@@ -363,7 +364,7 @@ public class ActionMetadataHandlerTest {
     assertThat(handler.getMetadata(artifact).getSize()).isEqualTo(10);
 
     // Inject a remote file of size 42.
-    handler.injectRemoteFile(
+    handler.injectFile(
         artifact, new RemoteFileArtifactValue(new byte[] {1, 2, 3}, 42, 0, "ultimate-answer"));
     assertThat(handler.getMetadata(artifact).getSize()).isEqualTo(42);
 
@@ -390,7 +391,7 @@ public class ActionMetadataHandlerTest {
 
     byte[] digest = new byte[] {1, 2, 3};
     int size = 10;
-    handler.injectRemoteFile(
+    handler.injectFile(
         artifact, new RemoteFileArtifactValue(digest, size, /*locationIndex=*/ 1, "action-id"));
 
     FileArtifactValue v = handler.getMetadata(artifact);
@@ -427,8 +428,8 @@ public class ActionMetadataHandlerTest {
     RemoteFileArtifactValue child1Value = new RemoteFileArtifactValue(new byte[] {1, 2, 3}, 5, 1);
     RemoteFileArtifactValue child2Value = new RemoteFileArtifactValue(new byte[] {4, 5, 6}, 10, 1);
 
-    handler.injectRemoteFile(child1, child1Value);
-    handler.injectRemoteFile(child2, child2Value);
+    handler.injectFile(child1, child1Value);
+    handler.injectFile(child2, child2Value);
 
     FileArtifactValue treeMetadata = handler.getMetadata(treeArtifact);
     FileArtifactValue child1Metadata = handler.getMetadata(child1);
@@ -463,12 +464,12 @@ public class ActionMetadataHandlerTest {
         new RemoteFileArtifactValue(new byte[] {1, 2, 3}, 5, 1, "foo");
     RemoteFileArtifactValue barValue =
         new RemoteFileArtifactValue(new byte[] {4, 5, 6}, 10, 1, "bar");
-    Map<TreeFileArtifact, RemoteFileArtifactValue> children =
+    Map<TreeFileArtifact, FileArtifactValue> children =
         ImmutableMap.of(
             TreeFileArtifact.createTreeOutput(treeArtifact, "foo"), fooValue,
             TreeFileArtifact.createTreeOutput(treeArtifact, "bar"), barValue);
 
-    handler.injectRemoteDirectory(treeArtifact, children);
+    handler.injectDirectory(treeArtifact, children);
 
     FileArtifactValue value = handler.getMetadata(treeArtifact);
     assertThat(value).isNotNull();
@@ -479,11 +480,12 @@ public class ActionMetadataHandlerTest {
     assertThat(treeValue.getChildPaths())
         .containsExactly(PathFragment.create("foo"), PathFragment.create("bar"));
     assertThat(treeValue.getChildValues().values()).containsExactly(fooValue, barValue);
+
+    // Make sure that all children are transferred properly into the ActionExecutionValue. If any
+    // child is missing, getExistingFileArtifactValue will throw.
     ActionExecutionValue actionExecutionValue =
         ActionExecutionValue.createFromOutputStore(handler.getOutputStore(), null, null, false);
-    treeValue
-        .getChildren()
-        .forEach(t -> assertThat(actionExecutionValue.getArtifactValue(t)).isNotNull());
+    treeValue.getChildren().forEach(actionExecutionValue::getExistingFileArtifactValue);
   }
 
   @Test
@@ -514,6 +516,67 @@ public class ActionMetadataHandlerTest {
     assertThat(handler.getMetadata(ActionInputHelper.fromPath("/output/bin/target/bytestring3")))
         .isNull();
     assertThat(handler.getMetadata(ActionInputHelper.fromPath("/does/not/exist"))).isNull();
+  }
+
+  @Test
+  public void omitRegularArtifact() {
+    OutputStore store = new MinimalOutputStore();
+    Artifact omitted =
+        ActionsTestUtil.createArtifactWithRootRelativePath(
+            outputRoot, PathFragment.create("omitted"));
+    Artifact consumed =
+        ActionsTestUtil.createArtifactWithRootRelativePath(
+            outputRoot, PathFragment.create("consumed"));
+    ActionMetadataHandler handler =
+        new ActionMetadataHandler(
+            new ActionInputMap(1),
+            /*expandedFilesets=*/ ImmutableMap.of(),
+            /*missingArtifactsAllowed=*/ false,
+            ImmutableSet.of(omitted, consumed),
+            /*tsgm=*/ null,
+            ArtifactPathResolver.IDENTITY,
+            store,
+            outputRoot.getRoot().asPath());
+
+    handler.discardOutputMetadata();
+    handler.markOmitted(omitted);
+
+    assertThat(handler.artifactOmitted(omitted)).isTrue();
+    assertThat(handler.artifactOmitted(consumed)).isFalse();
+    assertThat(store.getAllArtifactData())
+        .containsExactly(omitted, FileArtifactValue.OMITTED_FILE_MARKER);
+    assertThat(store.getAllTreeArtifactData()).isEmpty();
+  }
+
+  @Test
+  public void omitTreeArtifact() {
+    OutputStore store = new MinimalOutputStore();
+    SpecialArtifact omittedTree =
+        ActionsTestUtil.createTreeArtifactWithGeneratingAction(
+            outputRoot, PathFragment.create("omitted"));
+    SpecialArtifact consumedTree =
+        ActionsTestUtil.createTreeArtifactWithGeneratingAction(
+            outputRoot, PathFragment.create("consumed"));
+    ActionMetadataHandler handler =
+        new ActionMetadataHandler(
+            new ActionInputMap(1),
+            /*expandedFilesets=*/ ImmutableMap.of(),
+            /*missingArtifactsAllowed=*/ false,
+            ImmutableSet.of(omittedTree, consumedTree),
+            /*tsgm=*/ null,
+            ArtifactPathResolver.IDENTITY,
+            store,
+            outputRoot.getRoot().asPath());
+
+    handler.discardOutputMetadata();
+    handler.markOmitted(omittedTree);
+    handler.markOmitted(omittedTree); // Marking a tree artifact as omitted twice is tolerated.
+
+    assertThat(handler.artifactOmitted(omittedTree)).isTrue();
+    assertThat(handler.artifactOmitted(consumedTree)).isFalse();
+    assertThat(store.getAllTreeArtifactData())
+        .containsExactly(omittedTree, TreeArtifactValue.OMITTED_TREE_MARKER);
+    assertThat(store.getAllArtifactData()).isEmpty();
   }
 
   private ImmutableMap<Artifact, ImmutableList<FilesetOutputSymlink>> createFilesetOutputSymlinkMap(

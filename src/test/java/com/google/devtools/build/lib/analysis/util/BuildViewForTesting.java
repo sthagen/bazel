@@ -511,7 +511,7 @@ public class BuildViewForTesting {
           execGroup.getKey(),
           ToolchainContextKey.key()
               .configurationKey(BuildConfigurationValue.key(targetConfig))
-              .requiredToolchainTypeLabels(execGroup.getValue().getRequiredToolchains())
+              .requiredToolchainTypeLabels(execGroup.getValue().requiredToolchains())
               .build());
     }
     String targetUnloadedToolchainContextKey = "target-unloaded-toolchain-context";
@@ -527,7 +527,7 @@ public class BuildViewForTesting {
             toolchainContextKeys.values(), ToolchainException.class);
 
     ToolchainCollection.Builder<UnloadedToolchainContext> unloadedToolchainContexts =
-        new ToolchainCollection.Builder<>();
+        ToolchainCollection.builder();
     for (Map.Entry<String, ToolchainContextKey> unloadedToolchainContextKey :
         toolchainContextKeys.entrySet()) {
       UnloadedToolchainContext unloadedToolchainContext =
@@ -552,7 +552,7 @@ public class BuildViewForTesting {
     String targetDescription = target.toString();
 
     ToolchainCollection.Builder<ResolvedToolchainContext> resolvedToolchainContext =
-        new ToolchainCollection.Builder<>();
+        ToolchainCollection.builder();
     for (Map.Entry<String, UnloadedToolchainContext> unloadedToolchainContext :
         unloadedToolchainCollection.getContextMap().entrySet()) {
       ResolvedToolchainContext toolchainContext =

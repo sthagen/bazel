@@ -42,6 +42,7 @@ import com.google.devtools.build.lib.packages.Aspect;
 import com.google.devtools.build.lib.packages.AspectClass;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundDefault;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.AttributeTransitionData;
@@ -54,6 +55,7 @@ import com.google.devtools.build.lib.packages.PackageGroup;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.Target;
+import com.google.devtools.build.lib.skyframe.ToolchainContextKey;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import java.util.ArrayList;
@@ -76,16 +78,39 @@ public abstract class DependencyResolver {
    */
   @AutoValue
   abstract static class PartiallyResolvedDependency {
-    public abstract Label getLabel();
+    abstract Label getLabel();
 
-    public abstract ConfigurationTransition getTransition();
+    abstract ConfigurationTransition getTransition();
 
-    public abstract ImmutableList<Aspect> getPropagatingAspects();
+    abstract ImmutableList<Aspect> getPropagatingAspects();
 
-    static PartiallyResolvedDependency of(
-        Label label, ConfigurationTransition transition, ImmutableList<Aspect> propagatingAspects) {
-      return new AutoValue_DependencyResolver_PartiallyResolvedDependency(
-          label, transition, propagatingAspects);
+    @Nullable
+    abstract ToolchainContextKey getToolchainContextKey();
+
+    /** A Builder to create instances of PartiallyResolvedDependency. */
+    @AutoValue.Builder
+    abstract static class Builder {
+      abstract Builder setLabel(Label label);
+
+      abstract Builder setTransition(ConfigurationTransition transition);
+
+      abstract Builder setPropagatingAspects(List<Aspect> propagatingAspects);
+
+      @Nullable
+      abstract Builder setToolchainContextKey(ToolchainContextKey toolchainContextKey);
+
+      abstract PartiallyResolvedDependency build();
+    }
+
+    static Builder builder() {
+      return new AutoValue_DependencyResolver_PartiallyResolvedDependency.Builder()
+          .setPropagatingAspects(ImmutableList.of());
+    }
+
+    public DependencyKey.Builder getDependencyKeyBuilder() {
+      return DependencyKey.builder()
+          .setLabel(getLabel())
+          .setToolchainContextKey(getToolchainContextKey());
     }
   }
 
@@ -186,8 +211,7 @@ public abstract class DependencyResolver {
     OrderedSetMultimap<DependencyKind, Label> outgoingLabels = OrderedSetMultimap.create();
 
     // TODO(bazel-team): Figure out a way to implement the below (and partiallyResolveDependencies)
-    // using
-    // LabelVisitationUtils.
+    // using LabelVisitationUtils.
     Rule fromRule = null;
     ConfiguredAttributeMapper attributeMap = null;
     if (target instanceof OutputFile) {
@@ -215,15 +239,46 @@ public abstract class DependencyResolver {
       return OrderedSetMultimap.create();
     }
 
+    // TODO(#10523): Remove this when the migration period for toolchain transitions has ended.
+    boolean useToolchainTransition =
+        shouldUseToolchainTransition(node.getConfiguration(), fromRule);
     OrderedSetMultimap<DependencyKind, PartiallyResolvedDependency> partiallyResolvedDeps =
         partiallyResolveDependencies(
-            outgoingLabels, fromRule, attributeMap, toolchainContexts, aspects);
+            outgoingLabels,
+            fromRule,
+            attributeMap,
+            toolchainContexts,
+            useToolchainTransition,
+            aspects);
 
     OrderedSetMultimap<DependencyKind, DependencyKey> outgoingEdges =
         fullyResolveDependencies(
             partiallyResolvedDeps, targetMap, node.getConfiguration(), trimmingTransitionFactory);
 
     return outgoingEdges;
+  }
+
+  /**
+   * Returns whether or not to use the new toolchain transition. Checks the global incompatible
+   * change flag and the rule's toolchain transition readiness attribute.
+   */
+  private static boolean shouldUseToolchainTransition(
+      @Nullable BuildConfiguration configuration, @Nullable Rule fromRule) {
+    // Check whether the global incompatible change flag is set.
+    if (configuration != null) {
+      PlatformOptions platformOptions = configuration.getOptions().get(PlatformOptions.class);
+      if (platformOptions != null && platformOptions.overrideToolchainTransition) {
+        return true;
+      }
+    }
+
+    // Check the rule definition to see if it is ready.
+    if (fromRule != null && fromRule.getRuleClassObject().useToolchainTransition()) {
+      return true;
+    }
+
+    // Default to false.
+    return false;
   }
 
   /**
@@ -240,6 +295,7 @@ public abstract class DependencyResolver {
           @Nullable Rule fromRule,
           ConfiguredAttributeMapper attributeMap,
           @Nullable ToolchainCollection<ToolchainContext> toolchainContexts,
+          boolean useToolchainTransition,
           Iterable<Aspect> aspects)
           throws EvalException {
     OrderedSetMultimap<DependencyKind, PartiallyResolvedDependency> partiallyResolvedDeps =
@@ -254,27 +310,51 @@ public abstract class DependencyResolver {
         // use sensible defaults. Not depending on their package makes the error message reporting
         // a missing toolchain a bit better.
         // TODO(lberki): This special-casing is weird. Find a better way to depend on toolchains.
-        partiallyResolvedDeps.put(
-            TOOLCHAIN_DEPENDENCY,
-            PartiallyResolvedDependency.of(
-                toLabel,
-                // TODO(jcater): Replace this with a proper transition for the execution platform.
-                HostTransition.INSTANCE,
-                ImmutableList.of()));
+        // TODO(#10523): Remove check when this is fully released.
+        if (useToolchainTransition) {
+          // We need to create an individual PRD for each distinct toolchain context that contains
+          // this toolchain, because each has a different ToolchainContextKey.
+          for (ToolchainContext toolchainContext :
+              toolchainContexts.getContextsForResolvedToolchain(toLabel)) {
+            partiallyResolvedDeps.put(
+                TOOLCHAIN_DEPENDENCY,
+                PartiallyResolvedDependency.builder()
+                    .setLabel(toLabel)
+                    .setTransition(NoTransition.INSTANCE)
+                    .setToolchainContextKey(toolchainContext.key())
+                    .build());
+          }
+        } else {
+          // Legacy approach: use a HostTransition.
+          partiallyResolvedDeps.put(
+              TOOLCHAIN_DEPENDENCY,
+              PartiallyResolvedDependency.builder()
+                  .setLabel(toLabel)
+                  .setTransition(HostTransition.INSTANCE)
+                  .build());
+        }
         continue;
       }
 
       if (entry.getKey() == VISIBILITY_DEPENDENCY) {
         partiallyResolvedDeps.put(
             VISIBILITY_DEPENDENCY,
-            PartiallyResolvedDependency.of(toLabel, NullTransition.INSTANCE, ImmutableList.of()));
+            PartiallyResolvedDependency.builder()
+                .setLabel(toLabel)
+                .setTransition(NullTransition.INSTANCE)
+                .setPropagatingAspects(ImmutableList.of())
+                .build());
         continue;
       }
 
       if (entry.getKey() == OUTPUT_FILE_RULE_DEPENDENCY) {
         partiallyResolvedDeps.put(
             OUTPUT_FILE_RULE_DEPENDENCY,
-            PartiallyResolvedDependency.of(toLabel, NoTransition.INSTANCE, ImmutableList.of()));
+            PartiallyResolvedDependency.builder()
+                .setLabel(toLabel)
+                .setTransition(NoTransition.INSTANCE)
+                .setPropagatingAspects(ImmutableList.of())
+                .build());
         continue;
       }
 
@@ -316,7 +396,11 @@ public abstract class DependencyResolver {
           attribute.getTransitionFactory().create(attributeTransitionData);
       partiallyResolvedDeps.put(
           entry.getKey(),
-          PartiallyResolvedDependency.of(toLabel, attributeTransition, propagatingAspects.build()));
+          PartiallyResolvedDependency.builder()
+              .setLabel(toLabel)
+              .setTransition(attributeTransition)
+              .setPropagatingAspects(propagatingAspects.build())
+              .build());
     }
     return partiallyResolvedDeps;
   }
@@ -341,9 +425,9 @@ public abstract class DependencyResolver {
 
     for (Map.Entry<DependencyKind, PartiallyResolvedDependency> entry :
         partiallyResolvedDeps.entries()) {
-      PartiallyResolvedDependency dep = entry.getValue();
+      PartiallyResolvedDependency partiallyResolvedDependency = entry.getValue();
 
-      Target toTarget = targetMap.get(dep.getLabel());
+      Target toTarget = targetMap.get(partiallyResolvedDependency.getLabel());
       if (toTarget == null) {
         // Dependency pointing to non-existent target. This error was reported in getTargets(), so
         // we can just ignore this dependency.
@@ -352,18 +436,19 @@ public abstract class DependencyResolver {
 
       ConfigurationTransition transition =
           TransitionResolver.evaluateTransition(
-              originalConfiguration, dep.getTransition(), toTarget, trimmingTransitionFactory);
+              originalConfiguration,
+              partiallyResolvedDependency.getTransition(),
+              toTarget,
+              trimmingTransitionFactory);
 
       AspectCollection requiredAspects =
-          filterPropagatingAspects(dep.getPropagatingAspects(), toTarget);
+          filterPropagatingAspects(partiallyResolvedDependency.getPropagatingAspects(), toTarget);
 
+      DependencyKey.Builder dependencyKeyBuilder =
+          partiallyResolvedDependency.getDependencyKeyBuilder();
       outgoingEdges.put(
           entry.getKey(),
-          DependencyKey.builder()
-              .setLabel(dep.getLabel())
-              .setTransition(transition)
-              .setAspects(requiredAspects)
-              .build());
+          dependencyKeyBuilder.setTransition(transition).setAspects(requiredAspects).build());
     }
     return outgoingEdges;
   }
@@ -480,6 +565,9 @@ public abstract class DependencyResolver {
             dependencyKind.getOwningAspect() == null
                 ? attributeMap.get(attribute.getName(), attribute.getType())
                 : attribute.getDefaultValue(rule);
+        if (attributeValue instanceof ComputedDefault) {
+          attributeValue = ((ComputedDefault) attributeValue).getDefault(attributeMap);
+        }
       } else if (attribute.isLateBound()) {
         attributeValue =
             resolveLateBoundDefault(rule, attributeMap, attribute, ruleConfig, hostConfig);

@@ -45,6 +45,7 @@ import com.google.devtools.build.lib.analysis.actions.SpawnActionTemplate;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.NullEventHandler;
+import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationDepsUtils;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -278,7 +279,7 @@ public class ArtifactFunctionTest extends ArtifactFunctionTestCase {
     omittedOutputs.add(treeFileArtifact2);
 
     SkyValue value = evaluateArtifactValue(artifact2);
-    assertThat(value).isEqualTo(FileArtifactValue.OMITTED_FILE_MARKER);
+    assertThat(value).isEqualTo(TreeArtifactValue.OMITTED_TREE_MARKER);
   }
 
   @Test
@@ -343,6 +344,7 @@ public class ArtifactFunctionTest extends ArtifactFunctionTestCase {
         .addDependency(
             Root.RootCodecDependencies.class,
             new Root.RootCodecDependencies(Root.absoluteRoot(root.getFileSystem())))
+        .addDependencies(SerializationDepsUtils.SERIALIZATION_DEPS_FOR_TEST)
         .runTests();
   }
 
@@ -434,8 +436,7 @@ public class ArtifactFunctionTest extends ArtifactFunctionTestCase {
     }
     SkyValue value = result.get(key);
     if (value instanceof ActionExecutionValue) {
-      return ((ActionExecutionValue) value)
-          .getExistingFileArtifactValue((DerivedArtifact) artifact);
+      return ((ActionExecutionValue) value).getExistingFileArtifactValue(artifact);
     }
     return value;
   }

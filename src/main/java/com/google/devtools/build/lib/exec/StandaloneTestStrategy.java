@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.exec;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -45,6 +46,7 @@ import com.google.devtools.build.lib.buildeventstream.TestFileNameConstants;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.server.FailureDetails.Execution.Code;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -244,11 +246,17 @@ public class StandaloneTestStrategy extends TestStrategy {
     Path renamedTestLog = null;
     for (Pair<String, Path> pair : testOutputs) {
       if (TestFileNameConstants.TEST_LOG.equals(pair.getFirst())) {
+        Preconditions.checkState(renamedTestLog == null, "multiple test_log matches");
         renamedTestLog = pair.getSecond();
       }
     }
 
     TestResultData.Builder dataBuilder = result.testResultDataBuilder();
+    // If the test log path does not exist, mark the test as incomplete
+    if (renamedTestLog == null) {
+      dataBuilder.setStatus(BlazeTestStatus.INCOMPLETE);
+    }
+
     if (dataBuilder.getStatus() == BlazeTestStatus.PASSED) {
       dataBuilder.setPassedLog(renamedTestLog.toString());
     } else if (dataBuilder.getStatus() == BlazeTestStatus.INCOMPLETE) {
@@ -400,11 +408,16 @@ public class StandaloneTestStrategy extends TestStrategy {
     return new TestResult(action, data, /*cached*/ true, execRoot);
   }
 
-  private static final class StandaloneFailedAttemptResult implements FailedAttemptResult {
+  @VisibleForTesting
+  static final class StandaloneFailedAttemptResult implements FailedAttemptResult {
     private final TestResultData testResultData;
 
     StandaloneFailedAttemptResult(TestResultData testResultData) {
       this.testResultData = testResultData;
+    }
+
+    TestResultData testResultData() {
+      return testResultData;
     }
   }
 
@@ -573,7 +586,7 @@ public class StandaloneTestStrategy extends TestStrategy {
           streamed.close();
         }
       } catch (IOException e) {
-        throw new EnvironmentalExecException(e);
+        throw new EnvironmentalExecException(e, Code.TEST_OUT_ERR_IO_EXCEPTION);
       }
 
       // SpawnActionContext guarantees the first entry to correspond to the spawn passed in (there

@@ -16,8 +16,8 @@ package com.google.devtools.build.lib.rules.android;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.analysis.Allowlist;
 import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.analysis.Whitelist;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.EmptyToNullLabelConverter;
@@ -76,14 +76,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
       extends EnumConverter<ManifestMergerOrder> {
     public ManifestMergerOrderConverter() {
       super(ManifestMergerOrder.class, "android manifest merger order");
-    }
-  }
-
-  // TODO(b/142520065): Remove.
-  /** Converter for {@link AndroidAaptVersion} */
-  public static final class AndroidAaptConverter extends EnumConverter<AndroidAaptVersion> {
-    public AndroidAaptConverter() {
-      super(AndroidAaptVersion.class, "android androidAaptVersion");
     }
   }
 
@@ -178,12 +170,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
     ALPHABETICAL_BY_CONFIGURATION,
     /** Library manifests come before the manifests of their dependencies. */
     DEPENDENCY;
-  }
-
-  /** Types of android manifest mergers. */
-  @Deprecated
-  public enum AndroidAaptVersion {
-    AAPT2;
   }
 
   /** Android configuration options. */
@@ -614,22 +600,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
                 + "before the manifests of its dependencies.")
     public ManifestMergerOrder manifestMergerOrder;
 
-    // TODO(b/142520065): Remove.
-    @Option(
-        name = "android_aapt",
-        defaultValue = "aapt2",
-        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-        effectTags = {
-          OptionEffectTag.AFFECTS_OUTPUTS,
-          OptionEffectTag.LOADING_AND_ANALYSIS,
-          OptionEffectTag.LOSES_INCREMENTAL_STATE,
-        },
-        converter = AndroidAaptConverter.class,
-        help =
-            "Selects the version of androidAaptVersion to use for android_binary rules."
-                + "Flag to help the test and transition to aapt2.")
-    public AndroidAaptVersion androidAaptVersion;
-
     @Option(
         name = "apk_signing_method",
         converter = ApkSigningMethodConverter.class,
@@ -926,7 +896,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
       host.useWorkersWithDexbuilder = useWorkersWithDexbuilder;
       host.manifestMerger = manifestMerger;
       host.manifestMergerOrder = manifestMergerOrder;
-      host.androidAaptVersion = androidAaptVersion;
       host.allowAndroidLibraryDepsWithoutSrcs = allowAndroidLibraryDepsWithoutSrcs;
       host.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
           oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
@@ -1058,11 +1027,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
     this.legacyMainDexListGenerator = options.legacyMainDexListGenerator;
     this.disableInstrumentationManifestMerging = options.disableInstrumentationManifestMerging;
 
-    if (options.androidAaptVersion != AndroidAaptVersion.AAPT2) {
-      throw new InvalidConfigurationException(
-          "--android_aapt is no longer available for setting aapt version to aapt");
-    }
-
     if (incrementalDexingShardsAfterProguard < 0) {
       throw new InvalidConfigurationException(
           "--experimental_incremental_dexing_after_proguard must be a positive number");
@@ -1179,7 +1143,7 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
 
   public boolean allowSrcsLessAndroidLibraryDeps(RuleContext ruleContext) {
     return allowAndroidLibraryDepsWithoutSrcs
-        && Whitelist.isAvailable(ruleContext, "allow_deps_without_srcs");
+        && Allowlist.isAvailable(ruleContext, "allow_deps_without_srcs");
   }
 
   @Override

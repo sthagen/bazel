@@ -68,9 +68,6 @@ public class NestedSetImplTest {
     NestedSet<String> linkOrderSet =
         NestedSetBuilder.<String>linkOrder().add("a").addTransitive(b).addTransitive(c).build();
     assertThat(linkOrderSet.toString()).isEqualTo("[a, b2, b1, c2, c1]");
-    // Stable order when printing children directly.
-    assertThat(NestedSet.childrenToString(linkOrderSet.getChildren()))
-        .isEqualTo("[c1, c2, b1, b2, a]");
 
     assertThat(nestedSetBuilder().addTransitive(b).build().toString()).isEqualTo("[b1, b2]");
   }
@@ -275,6 +272,54 @@ public class NestedSetImplTest {
       builder.addTransitive(new NestedSetBuilder<Integer>(transitiveOrder).add(transitive).build());
     }
     return builder.build();
+  }
+
+  @Test
+  public void memoizedFlattenAndGetSize() {
+    NestedSet<String> empty = NestedSetBuilder.<String>stableOrder().build();
+    checkSize(empty, 0); // {}
+
+    NestedSet<String> singleton = NestedSetBuilder.<String>stableOrder().add("a").build();
+    checkSize(singleton, 1); // {a}
+
+    NestedSet<String> deuce = NestedSetBuilder.<String>stableOrder().add("a").add("b").build();
+    checkSize(deuce, 2); // {a, b}
+
+    checkSize(
+        NestedSetBuilder.<String>stableOrder()
+            .add("a")
+            .addTransitive(deuce)
+            .addTransitive(singleton)
+            .addTransitive(empty)
+            .build(),
+        2); // {a, b}
+    checkSize(
+        NestedSetBuilder.<String>stableOrder()
+            .add("c")
+            .addTransitive(deuce)
+            .addTransitive(singleton)
+            .addTransitive(empty)
+            .build(),
+        3); // {a, b, c}
+
+    // 25000 has a 3-digit base128 encoding.
+    NestedSetBuilder<Integer> largeShallow = NestedSetBuilder.<Integer>stableOrder();
+    for (int i = 0; i < 25000; ++i) {
+      largeShallow.add(i);
+    }
+    checkSize(largeShallow.build(), 25000); // {0, 1, ..., 24999}
+
+    // a deep and narrow graph
+    NestedSet<String> deep = deuce;
+    for (int i = 0; i < 200; ++i) {
+      deep = NestedSetBuilder.<String>stableOrder().addTransitive(deep).add("c").build();
+    }
+    checkSize(deep, 3); // {a, b, c}
+  }
+
+  private static void checkSize(NestedSet<?> set, int size) {
+    assertThat(set.memoizedFlattenAndGetSize()).isEqualTo(size); // first call: flattens
+    assertThat(set.memoizedFlattenAndGetSize()).isEqualTo(size); // second call: memoized
   }
 
   @Test

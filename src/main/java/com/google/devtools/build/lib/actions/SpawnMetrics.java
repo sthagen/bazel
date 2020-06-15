@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.actions;
 
 import com.google.common.base.Joiner;
-import com.google.common.collect.ImmutableList;
+import com.google.common.base.Preconditions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,23 +24,32 @@ public final class SpawnMetrics {
 
   /** Indicates whether the metrics correspond to the remote, local or worker execution. */
   public static enum ExecKind {
-    REMOTE,
-    LOCAL,
-    WORKER
+    REMOTE("Remote"),
+    LOCAL("Local"),
+    WORKER("Worker"),
+    /**
+     * Other kinds of execution (or when it's not clear whether something happened locally or
+     * remotely).
+     */
+    OTHER("Other");
+
+    private final String name;
+
+    private ExecKind(String name) {
+      this.name = name;
+    }
+
+    @Override
+    public String toString() {
+      return name;
+    }
   }
 
   /** Any non important stats < than 10% will not be shown in the summary. */
   private static final double STATS_SHOW_THRESHOLD = 0.10;
 
-  /** Represents a zero cost/null statistic. */
-  public static final SpawnMetrics EMPTY = new Builder().build();
-
   public static SpawnMetrics forLocalExecution(Duration wallTime) {
-    return new Builder()
-        .setExecKind(ExecKind.LOCAL)
-        .setTotalTime(wallTime)
-        .setExecutionWallTime(wallTime)
-        .build();
+    return Builder.forLocalExec().setTotalTime(wallTime).setExecutionWallTime(wallTime).build();
   }
 
   private final ExecKind execKind;
@@ -57,36 +66,6 @@ public final class SpawnMetrics {
   private final long inputBytes;
   private final long inputFiles;
   private final long memoryEstimateBytes;
-
-  public SpawnMetrics(
-      Duration totalTime,
-      Duration parseTime,
-      Duration networkTime,
-      Duration fetchTime,
-      Duration queueTime,
-      Duration setupTime,
-      Duration uploadTime,
-      Duration executionWallTime,
-      Duration retryTime,
-      Duration processOutputsTime,
-      long inputBytes,
-      long inputFiles,
-      long memoryEstimateBytes) {
-    this.execKind = ExecKind.REMOTE;
-    this.totalTime = totalTime;
-    this.parseTime = parseTime;
-    this.networkTime = networkTime;
-    this.fetchTime = fetchTime;
-    this.queueTime = queueTime;
-    this.setupTime = setupTime;
-    this.uploadTime = uploadTime;
-    this.executionWallTime = executionWallTime;
-    this.retryTime = retryTime;
-    this.processOutputsTime = processOutputsTime;
-    this.inputBytes = inputBytes;
-    this.inputFiles = inputFiles;
-    this.memoryEstimateBytes = memoryEstimateBytes;
-  }
 
   private SpawnMetrics(Builder builder) {
     this.execKind = builder.execKind;
@@ -108,6 +87,11 @@ public final class SpawnMetrics {
   /** The kind of execution the metrics refer to (remote/local/worker). */
   public ExecKind execKind() {
     return execKind;
+  }
+
+  /** Returns true if {@link #totalTime()} is zero. */
+  public boolean isEmpty() {
+    return totalTime.isZero();
   }
 
   /**
@@ -265,34 +249,9 @@ public final class SpawnMetrics {
     return String.format("%.2f%%", duration.toMillis() * 100.0 / total.toMillis());
   }
 
-  /**
-   * Sums all the metrics (both duration and non-duration ones).
-   *
-   * @param spawnMetrics - collection of SpawnMetrics to aggregate
-   * @return a single SpawnMetrics object has the total duration (and other values)
-   */
-  public static SpawnMetrics sumAllMetrics(ImmutableList<SpawnMetrics> spawnMetrics) {
-    Builder builder = new Builder();
-    for (SpawnMetrics metric : spawnMetrics) {
-      builder.addDurations(metric);
-      builder.addNonDurations(metric);
-    }
-    return builder.build();
-  }
-
-  /** Sums all the duration metrics and selects the maximum of the non-duration ones. */
-  public static SpawnMetrics sumDurationsMaxOther(ImmutableList<SpawnMetrics> spawnMetrics) {
-    Builder builder = new Builder();
-    for (SpawnMetrics metric : spawnMetrics) {
-      builder.addDurations(metric);
-      builder.maxNonDurations(metric);
-    }
-    return builder.build();
-  }
-
   /** Builder class for SpawnMetrics. */
   public static class Builder {
-    private ExecKind execKind = ExecKind.REMOTE;
+    private ExecKind execKind = null;
     private Duration totalTime = Duration.ZERO;
     private Duration parseTime = Duration.ZERO;
     private Duration networkTime = Duration.ZERO;
@@ -307,7 +266,32 @@ public final class SpawnMetrics {
     private long inputFiles = 0;
     private long memoryEstimateBytes = 0;
 
+    public static Builder forLocalExec() {
+      return forExec(ExecKind.LOCAL);
+    }
+
+    public static Builder forRemoteExec() {
+      return forExec(ExecKind.REMOTE);
+    }
+
+    public static Builder forWorkerExec() {
+      return forExec(ExecKind.WORKER);
+    }
+
+    public static Builder forOtherExec() {
+      return forExec(ExecKind.OTHER);
+    }
+
+    public static Builder forExec(ExecKind kind) {
+      return new Builder().setExecKind(kind);
+    }
+
+    // Make the constructor private to force users to set the ExecKind by using one of the factory
+    // methods.
+    private Builder() {}
+
     public SpawnMetrics build() {
+      Preconditions.checkNotNull(execKind, "ExecKind must be explicitly set using `setExecKind`");
       // TODO(ulfjack): Add consistency checks here?
       return new SpawnMetrics(this);
     }

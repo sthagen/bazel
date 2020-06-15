@@ -67,10 +67,11 @@ import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.NoAnalyzeEvent;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.collect.nestedset.NestedSetView;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.Spawn;
+import com.google.devtools.build.lib.server.FailureDetails.Spawn.Code;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.util.DetailedExitCode;
-import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -276,10 +277,7 @@ public class BuildEventStreamerTest extends FoundationTestCase {
       BuildEventStreamProtos.NamedSetOfFiles.Builder builder =
           BuildEventStreamProtos.NamedSetOfFiles.newBuilder();
       for (NestedSet<Artifact> artifactset : artifacts) {
-        builder.addFileSets(
-            converters
-                .artifactGroupNamer()
-                .apply((new NestedSetView<Artifact>(artifactset)).identifier()));
+        builder.addFileSets(converters.artifactGroupNamer().apply(artifactset.toNode()));
       }
       return GenericBuildEvent.protoChaining(this).setNamedSetOfFiles(builder.build()).build();
     }
@@ -1153,12 +1151,18 @@ public class BuildEventStreamerTest extends FoundationTestCase {
   public void testSuccessfulActionsAreNotPublishedByDefault() {
     EventBusHandler handler = new EventBusHandler();
     eventBus.register(handler);
-
     ActionExecutedEvent failedActionExecutedEvent =
         new ActionExecutedEvent(
             ActionsTestUtil.DUMMY_ARTIFACT.getExecPath(),
             new ActionsTestUtil.NullAction(),
-            new ActionExecutionException("Exception", /* action= */ null, /* catastrophe= */ false),
+            new ActionExecutionException(
+                "Exception",
+                /* action= */ null,
+                /* catastrophe= */ false,
+                DetailedExitCode.of(
+                    FailureDetail.newBuilder()
+                        .setSpawn(Spawn.newBuilder().setCode(Code.EXECUTION_DENIED))
+                        .build())),
             ActionsTestUtil.DUMMY_ARTIFACT.getPath(),
             /* stdout= */ null,
             /* stderr= */ null,
@@ -1194,7 +1198,14 @@ public class BuildEventStreamerTest extends FoundationTestCase {
         new ActionExecutedEvent(
             ActionsTestUtil.DUMMY_ARTIFACT.getExecPath(),
             new ActionsTestUtil.NullAction(),
-            new ActionExecutionException("Exception", /* action= */ null, /* catastrophe= */ false),
+            new ActionExecutionException(
+                "Exception",
+                /* action= */ null,
+                /* catastrophe= */ false,
+                DetailedExitCode.of(
+                    FailureDetail.newBuilder()
+                        .setSpawn(Spawn.newBuilder().setCode(Code.EXECUTION_DENIED))
+                        .build())),
             ActionsTestUtil.DUMMY_ARTIFACT.getPath(),
             /* stdout= */ null,
             /* stderr= */ null,
@@ -1222,7 +1233,7 @@ public class BuildEventStreamerTest extends FoundationTestCase {
                 ProgressEvent.INITIAL_PROGRESS_UPDATE,
                 BuildEventIdUtil.buildFinished()));
     BuildCompleteEvent buildCompleteEvent =
-        buildCompleteEvent(ExitCode.BUILD_FAILURE, true, null, false);
+        buildCompleteEvent(createGenericDetailedExitCode(), true, null, false);
 
     streamer.buildEvent(startEvent);
     streamer.buildEvent(buildCompleteEvent);
@@ -1246,7 +1257,7 @@ public class BuildEventStreamerTest extends FoundationTestCase {
                 ProgressEvent.INITIAL_PROGRESS_UPDATE,
                 BuildEventIdUtil.buildFinished()));
     BuildCompleteEvent buildCompleteEvent =
-        buildCompleteEvent(ExitCode.BUILD_FAILURE, true, new RuntimeException(), false);
+        buildCompleteEvent(createGenericDetailedExitCode(), true, new RuntimeException(), false);
 
     streamer.buildEvent(startEvent);
     streamer.buildEvent(buildCompleteEvent);
@@ -1270,7 +1281,7 @@ public class BuildEventStreamerTest extends FoundationTestCase {
                 ProgressEvent.INITIAL_PROGRESS_UPDATE,
                 BuildEventIdUtil.buildFinished()));
     BuildCompleteEvent buildCompleteEvent =
-        buildCompleteEvent(ExitCode.BUILD_FAILURE, true, null, true);
+        buildCompleteEvent(createGenericDetailedExitCode(), true, null, true);
 
     streamer.buildEvent(startEvent);
     streamer.buildEvent(buildCompleteEvent);
@@ -1321,7 +1332,7 @@ public class BuildEventStreamerTest extends FoundationTestCase {
                 ProgressEvent.INITIAL_PROGRESS_UPDATE,
                 BuildEventIdUtil.buildFinished()));
     BuildCompleteEvent buildCompleteEvent =
-        buildCompleteEvent(ExitCode.BUILD_FAILURE, false, new RuntimeException(), false);
+        buildCompleteEvent(createGenericDetailedExitCode(), false, new RuntimeException(), false);
 
     streamer.buildEvent(startEvent);
     streamer.noAnalyze(new NoAnalyzeEvent());
@@ -1345,9 +1356,12 @@ public class BuildEventStreamerTest extends FoundationTestCase {
   }
 
   private BuildCompleteEvent buildCompleteEvent(
-      ExitCode exitCode, boolean stopOnFailure, Throwable crash, boolean catastrophe) {
+      DetailedExitCode detailedExitCode,
+      boolean stopOnFailure,
+      Throwable crash,
+      boolean catastrophe) {
     BuildResult result = new BuildResult(0);
-    result.setDetailedExitCode(DetailedExitCode.justExitCode(exitCode));
+    result.setDetailedExitCode(detailedExitCode);
     result.setStopOnFirstFailure(stopOnFailure);
     if (catastrophe) {
       result.setCatastrophe();
@@ -1422,5 +1436,12 @@ public class BuildEventStreamerTest extends FoundationTestCase {
                 .map(File::getUri)
                 .collect(ImmutableList.toImmutableList()))
         .containsExactly(testPath1.toString(), testPath2.toString());
+  }
+
+  private static DetailedExitCode createGenericDetailedExitCode() {
+    return DetailedExitCode.of(
+        FailureDetail.newBuilder()
+            .setSpawn(Spawn.newBuilder().setCode(Code.NON_ZERO_EXIT))
+            .build());
   }
 }

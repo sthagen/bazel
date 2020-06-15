@@ -51,7 +51,6 @@ import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
-import com.google.devtools.build.lib.actions.ArtifactResolver.ArtifactResolverSupplier;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CompletionContext.PathResolverFactory;
@@ -83,6 +82,7 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptions.OptionsDiffForReconstruction;
+import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.Fragment;
@@ -297,10 +297,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
   protected final AtomicReference<TimestampGranularityMonitor> tsgm = new AtomicReference<>();
   protected final AtomicReference<Map<String, String>> clientEnv = new AtomicReference<>();
 
-  // Under normal circumstances, the artifact factory persists for the life of a Blaze server, but
-  // since it is not yet created when we create the value builders, we have to use a supplier,
-  // initialized when the build view is created.
-  private final MutableArtifactFactorySupplier artifactFactory;
+  private final ArtifactFactory artifactFactory;
   private final ActionKeyContext actionKeyContext;
 
   protected boolean active = true;
@@ -354,21 +351,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
 
   private boolean siblingRepositoryLayout = false;
 
-  /** An {@link ArtifactResolverSupplier} that supports setting of an {@link ArtifactFactory}. */
-  public static class MutableArtifactFactorySupplier implements ArtifactResolverSupplier {
-
-    private ArtifactFactory artifactFactory;
-
-    void set(ArtifactFactory artifactFactory) {
-      this.artifactFactory = artifactFactory;
-    }
-
-    @Override
-    public ArtifactFactory get() {
-      return artifactFactory;
-    }
-  }
-
   class PathResolverFactoryImpl implements PathResolverFactory {
     @Override
     public boolean shouldCreatePathResolverForArtifactValues() {
@@ -413,7 +395,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       GraphInconsistencyReceiver graphInconsistencyReceiver,
       BuildOptions defaultBuildOptions,
       @Nullable PackageProgressReceiver packageProgress,
-      MutableArtifactFactorySupplier artifactResolverSupplier,
       @Nullable ConfiguredTargetProgressReceiver configuredTargetProgress,
       @Nullable NonexistentFileReceiver nonexistentFileReceiver,
       @Nullable ManagedDirectoriesKnowledge managedDirectoriesKnowledge) {
@@ -448,8 +429,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
         new SkyframeActionExecutor(actionKeyContext, statusReporterRef, this::getPathEntries);
     this.skyframeBuildView =
         new SkyframeBuildView(directories, this, ruleClassProvider, actionKeyContext);
-    this.artifactFactory = artifactResolverSupplier;
-    this.artifactFactory.set(skyframeBuildView.getArtifactFactory());
+    this.artifactFactory = skyframeBuildView.getArtifactFactory();
     this.externalFilesHelper =
         ExternalFilesHelper.create(
             pkgLocator,
@@ -479,6 +459,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     // We don't check for duplicates in order to allow extraSkyfunctions to override existing
     // entries.
     Map<SkyFunctionName, SkyFunction> map = new HashMap<>();
+    // IF YOU ADD A NEW SKYFUNCTION: If your Skyfunction can be used transitively by package
+    // loading, make sure to register it in AbstractPackageLoader as well.
     map.put(SkyFunctions.PRECOMPUTED, new PrecomputedFunction());
     map.put(SkyFunctions.CLIENT_ENVIRONMENT_VARIABLE, new ClientEnvironmentFunction(clientEnv));
     map.put(SkyFunctions.ACTION_ENVIRONMENT_VARIABLE, new ActionEnvironmentFunction());
@@ -501,7 +483,9 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     map.put(
         SkyFunctions.AST_FILE_LOOKUP,
         new ASTFileLookupFunction(ruleClassProvider, DigestHashFunction.getDefaultUnchecked()));
-    map.put(SkyFunctions.STARLARK_BUILTINS, new StarlarkBuiltinsFunction());
+    map.put(
+        SkyFunctions.STARLARK_BUILTINS,
+        new StarlarkBuiltinsFunction(ruleClassProvider, pkgFactory));
     map.put(SkyFunctions.BZL_LOAD, newBzlLoadFunction(ruleClassProvider, pkgFactory));
     map.put(SkyFunctions.GLOB, newGlobFunction());
     map.put(SkyFunctions.TARGET_PATTERN, new TargetPatternFunction());
@@ -598,7 +582,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
             () -> !skyframeActionExecutor.actionFileSystemType().inMemoryFileSystem()));
     map.put(
         SkyFunctions.BUILD_INFO_COLLECTION,
-        new BuildInfoCollectionFunction(actionKeyContext, artifactFactory::get));
+        new BuildInfoCollectionFunction(actionKeyContext, artifactFactory));
     map.put(SkyFunctions.BUILD_INFO, new WorkspaceStatusFunction(this::makeWorkspaceStatusAction));
     map.put(SkyFunctions.COVERAGE_REPORT, new CoverageReportFunction(actionKeyContext));
     ActionExecutionFunction actionExecutionFunction =
@@ -861,7 +845,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     clearTrimmingCache();
     skyframeBuildView.clearInvalidatedConfiguredTargets();
     skyframeBuildView.clearLegacyData();
-    ArtifactNestedSetFunction.getInstance().resetArtifactSkyKeyToValueOrException();
+    ArtifactNestedSetFunction.getInstance().resetArtifactNestedSetFunctionMaps();
   }
 
   /** Activates retroactive trimming (idempotently, so has no effect if already active). */
@@ -1113,11 +1097,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
           }
         };
     return workspaceStatusActionFactory.createWorkspaceStatusAction(env);
-  }
-
-  @VisibleForTesting
-  public ArtifactResolverSupplier getArtifactResolverSupplierForTesting() {
-    return artifactFactory;
   }
 
   @VisibleForTesting
@@ -1426,7 +1405,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
 
   private void setSiblingDirectoryLayout(boolean experimentalSiblingRepositoryLayout) {
     this.siblingRepositoryLayout = experimentalSiblingRepositoryLayout;
-    this.artifactFactory.get().setSiblingRepositoryLayout(experimentalSiblingRepositoryLayout);
+    this.artifactFactory.setSiblingRepositoryLayout(experimentalSiblingRepositoryLayout);
   }
 
   public StarlarkSemantics getEffectiveStarlarkSemantics(
@@ -1449,7 +1428,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       // (Some of the additional steps are carried out by ConfiguredTargetValueInvalidationListener,
       // and some by BuildView#buildHasIncompatiblePackageRoots and #updateSkyframe.)
       artifactFactory
-          .get()
           .setSourceArtifactRoots(
               createSourceArtifactRootMapOnNewPkgLocator(oldLocator, pkgLocator));
     }
@@ -1534,9 +1512,12 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     BuildConfiguration firstTargetConfig = topLevelTargetConfigs.get(0);
 
     BuildOptions targetOptions = firstTargetConfig.getOptions();
+    BuildOptionsView hostTransitionOptionsView =
+        new BuildOptionsView(
+            firstTargetConfig.getOptions(), HostTransition.INSTANCE.requiresOptionFragments());
     BuildOptions hostOptions =
         targetOptions.get(CoreOptions.class).useDistinctHostConfiguration
-            ? HostTransition.INSTANCE.patch(targetOptions, eventHandler)
+            ? HostTransition.INSTANCE.patch(hostTransitionOptionsView, eventHandler)
             : targetOptions;
     BuildConfiguration hostConfig = getConfiguration(eventHandler, hostOptions, keepGoing);
 
@@ -2713,23 +2694,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       dropConfiguredTargetsNow(eventHandler);
       lastAnalysisDiscarded = false;
     }
-  }
-
-  /**
-   * Updates ArtifactNestedSetFunction options if the flags' values changed.
-   *
-   * @return whether an update was made.
-   */
-  protected static boolean nestedSetAsSkyKeyOptionsChanged(OptionsProvider options) {
-    BuildRequestOptions buildRequestOptions = options.getOptions(BuildRequestOptions.class);
-    if (buildRequestOptions == null) {
-      return false;
-    }
-
-    return ArtifactNestedSetFunction.sizeThresholdUpdated(
-            buildRequestOptions.nestedSetAsSkyKeyThreshold)
-        || ArtifactNestedSetFunction.evalKeysAsOneGroupUpdated(
-            buildRequestOptions.nsosEvalKeysAsOneGroup);
   }
 
   protected void syncPackageLoading(

@@ -18,7 +18,7 @@ import com.google.devtools.build.lib.analysis.RuleContext.PrerequisiteValidator;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.Attribute;
-import com.google.devtools.build.lib.packages.FunctionSplitTransitionWhitelist;
+import com.google.devtools.build.lib.packages.FunctionSplitTransitionAllowlist;
 import com.google.devtools.build.lib.packages.InputFile;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.OutputFile;
@@ -107,15 +107,18 @@ public abstract class CommonPrerequisiteValidator implements PrerequisiteValidat
     }
 
     if (prerequisiteTarget instanceof PackageGroup) {
+      Attribute configuredAttribute = RawAttributeMapper.of(rule).getAttributeDefinition(attrName);
+      if (configuredAttribute == null) { // handles aspects
+        configuredAttribute = attribute;
+      }
       boolean containsPackageSpecificationProvider =
-          RawAttributeMapper.of(rule)
-              .getAttributeDefinition(attrName)
+          configuredAttribute
               .getRequiredProviders()
               .getDescription()
               .contains("PackageSpecificationProvider");
       // TODO(plf): Add the PackageSpecificationProvider to the 'visibility' attribute.
       if (!attrName.equals("visibility")
-          && !attrName.equals(FunctionSplitTransitionWhitelist.WHITELIST_ATTRIBUTE_NAME)
+          && !attrName.equals(FunctionSplitTransitionAllowlist.ATTRIBUTE_NAME)
           && !containsPackageSpecificationProvider) {
         context.attributeError(
             attrName,
