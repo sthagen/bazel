@@ -64,19 +64,6 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
   // <== Add new options here in alphabetic order ==>
 
   @Option(
-      name = "debug_depset_depth",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
-      metadataTags = {},
-      help =
-          "Enables an expensive additional check that causes depset construction to fail fast if "
-              + "the depset's depth would exceed the limit specified by "
-              + "`--nested_set_depth_limit`. Ordinarily this failure occurs only when the depset "
-              + "is flattened, which may be far from its point of creation.")
-  public boolean debugDepsetDepth;
-
-  @Option(
       name = "experimental_action_args",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
@@ -622,6 +609,18 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
   public boolean incompatibleLinkoptsToLinkLibs;
 
   @Option(
+      name = "incompatible_objc_provider_remove_compile_info",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If set to true, the ObjcProvider's APIs for compile info/merge_zip will be removed.")
+  public boolean incompatibleObjcProviderRemoveCompileInfo;
+
+  @Option(
       name = "max_computation_steps",
       defaultValue = "0",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
@@ -654,7 +653,6 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
     StarlarkSemantics semantics =
         StarlarkSemantics.builder()
             // <== Add new options here in alphabetic order ==>
-            .debugDepsetDepth(debugDepsetDepth)
             .experimentalActionArgs(experimentalActionArgs)
             .experimentalAllowIncrementalRepositoryUpdates(
                 experimentalAllowIncrementalRepositoryUpdates)
@@ -697,6 +695,7 @@ public class StarlarkSemanticsOptions extends OptionsBase implements Serializabl
             .incompatibleRequireLinkerInputCcApi(incompatibleRequireLinkerInputCcApi)
             .incompatibleRestrictStringEscapes(incompatibleRestrictStringEscapes)
             .incompatibleLinkoptsToLinkLibs(incompatibleLinkoptsToLinkLibs)
+            .incompatibleObjcProviderRemoveCompileInfo(incompatibleObjcProviderRemoveCompileInfo)
             .maxComputationSteps(maxComputationSteps)
             .recordRuleInstantiationCallstack(recordRuleInstantiationCallstack)
             .build();

@@ -28,8 +28,8 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
-import com.google.devtools.build.lib.analysis.skylark.StarlarkActionFactory;
-import com.google.devtools.build.lib.analysis.skylark.StarlarkRuleContext;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkActionFactory;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
@@ -240,6 +240,9 @@ public abstract class CcModule
       Object systemIncludeDirs,
       Object frameworkIncludeDirs,
       Object defines,
+      Object thinLtoIndex,
+      Object thinLtoInputBitcodeFile,
+      Object thinLtoOutputObjectFile,
       boolean usePic,
       boolean addLegacyCxxOptions)
       throws EvalException {
@@ -256,6 +259,9 @@ public abstract class CcModule
         /* isUsingFission= */ false,
         /* dwoFile= */ null,
         /* ltoIndexingFile= */ null,
+        convertFromNoneable(thinLtoIndex, /* defaultValue= */ null),
+        convertFromNoneable(thinLtoInputBitcodeFile, /* defaultValue=*/ null),
+        convertFromNoneable(thinLtoOutputObjectFile, /* defaultValue=*/ null),
         /* includes= */ ImmutableList.of(),
         userFlagsToIterable(userCompileFlags),
         /* cppModuleMap= */ null,
@@ -1738,7 +1744,8 @@ public abstract class CcModule
                 fdoContext,
                 TargetUtils.getExecutionInfo(
                     actions.getRuleContext().getRule(),
-                    actions.getRuleContext().isAllowTagsPropagation()))
+                    actions.getRuleContext().isAllowTagsPropagation()),
+                /* shouldProcessHeaders= */ true)
             .addPublicHeaders(publicHeaders)
             .addPrivateHeaders(privateHeaders)
             .addSources(sources)

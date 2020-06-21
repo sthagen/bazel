@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules.objc;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromTemplates;
 import static com.google.devtools.build.lib.rules.cpp.Link.LINK_LIBRARY_FILETYPES;
@@ -266,7 +267,8 @@ public class CompilationSupport {
       Artifact pchHdr,
       ObjcCppSemantics semantics,
       String purpose,
-      boolean generateModuleMap)
+      boolean generateModuleMap,
+      boolean shouldProcessHeaders)
       throws RuleErrorException, InterruptedException {
     CcCompilationHelper result =
         new CcCompilationHelper(
@@ -281,7 +283,8 @@ public class CompilationSupport {
                 fdoContext,
                 buildConfiguration,
                 TargetUtils.getExecutionInfo(
-                    ruleContext.getRule(), ruleContext.isAllowTagsPropagation()))
+                    ruleContext.getRule(), ruleContext.isAllowTagsPropagation()),
+                shouldProcessHeaders)
             .addSources(sources)
             .addPublicHeaders(publicHdrs)
             .addPublicTextualHeaders(objcCompilationContext.getPublicTextualHeaders())
@@ -391,7 +394,8 @@ public class CompilationSupport {
             pchHdr,
             semantics,
             purpose,
-            /* generateModuleMap= */ true);
+            /* generateModuleMap= */ true,
+            /* shouldProcessHeaders= */ true);
 
     purpose = String.format("%s_non_objc_arc", semantics.getPurpose());
     extensionBuilder.setArcEnabled(false);
@@ -410,7 +414,9 @@ public class CompilationSupport {
             semantics,
             purpose,
             // Only generate the module map once (see above) and re-use it here.
-            /* generateModuleMap= */ false);
+            /* generateModuleMap= */ false,
+            // We only need to validate headers once, in arc compilation above.
+            /* shouldProcessHeaders= */ false);
 
     FeatureConfiguration featureConfiguration =
         getFeatureConfiguration(ruleContext, ccToolchain, buildConfiguration);
@@ -584,9 +590,18 @@ public class CompilationSupport {
     activatedCrosstoolSelectables.addAll(CcCommon.getCoverageFeatures(cppConfiguration));
 
     try {
-      return ccToolchain
-          .getFeatures()
-          .getFeatureConfiguration(activatedCrosstoolSelectables.build());
+      ImmutableSet<String> activatedCrosstoolSelectablesSet;
+      if (!ccToolchain.supportsHeaderParsing()) {
+        // TODO(b/159096411): Remove once supports_header_parsing has been removed from the
+        // cc_toolchain rule.
+        activatedCrosstoolSelectablesSet =
+            activatedCrosstoolSelectables.build().stream()
+                .filter(feature -> !feature.equals(CppRuleClasses.PARSE_HEADERS))
+                .collect(toImmutableSet());
+      } else {
+        activatedCrosstoolSelectablesSet = activatedCrosstoolSelectables.build();
+      }
+      return ccToolchain.getFeatures().getFeatureConfiguration(activatedCrosstoolSelectablesSet);
     } catch (CollidingProvidesException e) {
       ruleContext.ruleError(e.getMessage());
       return FeatureConfiguration.EMPTY;

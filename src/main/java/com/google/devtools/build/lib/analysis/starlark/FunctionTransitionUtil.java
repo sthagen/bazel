@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.google.devtools.build.lib.analysis.skylark;
+package com.google.devtools.build.lib.analysis.starlark;
 
 import static java.util.stream.Collectors.joining;
 
@@ -135,7 +135,7 @@ public class FunctionTransitionUtil {
   }
 
   /** For all the options in the BuildOptions, build a map from option name to its information. */
-  private static Map<String, OptionInfo> buildOptionInfo(BuildOptions buildOptions) {
+  static ImmutableMap<String, OptionInfo> buildOptionInfo(BuildOptions buildOptions) {
     ImmutableMap.Builder<String, OptionInfo> builder = new ImmutableMap.Builder<>();
 
     ImmutableSet<Class<? extends FragmentOptions>> optionClasses =

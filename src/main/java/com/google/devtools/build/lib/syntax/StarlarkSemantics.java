@@ -99,6 +99,8 @@ public abstract class StarlarkSemantics {
     public static final String INCOMPATIBLE_NO_ATTR_LICENSE = "incompatible_no_attr_license";
     public static final String INCOMPATIBLE_ALLOW_TAGS_PROPAGATION =
         "incompatible_allow_tags_propagation";
+    public static final String INCOMPATIBLE_OBJC_PROVIDER_REMOVE_COMPILE_INFO =
+        "incompatible_objc_provider_remove_compile_info";
     public static final String INCOMPATIBLE_REQUIRE_LINKER_INPUT_CC_API =
         "incompatible_require_linker_input_cc_api";
     public static final String INCOMPATIBLE_LINKOPTS_TO_LINKLIBS =
@@ -147,6 +149,8 @@ public abstract class StarlarkSemantics {
         return incompatibleNoAttrLicense();
       case FlagIdentifier.INCOMPATIBLE_ALLOW_TAGS_PROPAGATION:
         return experimentalAllowTagsPropagation();
+      case FlagIdentifier.INCOMPATIBLE_OBJC_PROVIDER_REMOVE_COMPILE_INFO:
+        return incompatibleObjcProviderRemoveCompileInfo();
       case FlagIdentifier.INCOMPATIBLE_REQUIRE_LINKER_INPUT_CC_API:
         return incompatibleRequireLinkerInputCcApi();
       case FlagIdentifier.INCOMPATIBLE_LINKOPTS_TO_LINKLIBS:
@@ -194,8 +198,6 @@ public abstract class StarlarkSemantics {
       AutoValue_StarlarkSemantics.class;
 
   // <== Add new options here in alphabetic order ==>
-  public abstract boolean debugDepsetDepth();
-
   public abstract boolean experimentalActionArgs();
 
   public abstract boolean experimentalAllowIncrementalRepositoryUpdates();
@@ -264,6 +266,8 @@ public abstract class StarlarkSemantics {
 
   public abstract boolean incompatibleDepsetForLibrariesToLinkGetter();
 
+  public abstract boolean incompatibleObjcProviderRemoveCompileInfo();
+
   public abstract boolean incompatibleRequireLinkerInputCcApi();
 
   public abstract boolean incompatibleRestrictStringEscapes();
@@ -311,7 +315,6 @@ public abstract class StarlarkSemantics {
   public static final StarlarkSemantics DEFAULT =
       builder()
           // <== Add new options here in alphabetic order ==>
-          .debugDepsetDepth(false)
           .experimentalActionArgs(true)
           .experimentalAllowTagsPropagation(false)
           .experimentalBuiltinsBzlPath("")
@@ -347,6 +350,7 @@ public abstract class StarlarkSemantics {
           .internalStarlarkFlagTestCanary(false)
           .incompatibleDoNotSplitLinkingCmdline(true)
           .incompatibleDepsetForLibrariesToLinkGetter(true)
+          .incompatibleObjcProviderRemoveCompileInfo(false)
           .incompatibleRequireLinkerInputCcApi(false)
           .incompatibleRestrictStringEscapes(false)
           .incompatibleUseCcConfigureFromRulesCc(false)
@@ -360,8 +364,6 @@ public abstract class StarlarkSemantics {
   public abstract static class Builder {
 
     // <== Add new options here in alphabetic order ==>
-    public abstract Builder debugDepsetDepth(boolean value);
-
     public abstract Builder experimentalActionArgs(boolean value);
 
     public abstract Builder experimentalAllowIncrementalRepositoryUpdates(boolean value);
@@ -431,6 +433,8 @@ public abstract class StarlarkSemantics {
     public abstract Builder incompatibleDoNotSplitLinkingCmdline(boolean value);
 
     public abstract Builder incompatibleDepsetForLibrariesToLinkGetter(boolean value);
+
+    public abstract Builder incompatibleObjcProviderRemoveCompileInfo(boolean value);
 
     public abstract Builder incompatibleRequireLinkerInputCcApi(boolean value);
 

@@ -11,19 +11,22 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package com.google.devtools.build.lib.analysis.skylark;
+package com.google.devtools.build.lib.analysis.starlark;
 
-import static com.google.devtools.build.lib.analysis.skylark.FunctionTransitionUtil.COMMAND_LINE_OPTION_PREFIX;
+import static com.google.devtools.build.lib.analysis.starlark.FunctionTransitionUtil.COMMAND_LINE_OPTION_PREFIX;
 import static com.google.devtools.build.lib.packages.RuleClass.Builder.STARLARK_BUILD_SETTING_DEFAULT_ATTR_NAME;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.StarlarkDefinedConfigTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
+import com.google.devtools.build.lib.analysis.starlark.FunctionTransitionUtil.OptionInfo;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
@@ -75,6 +78,28 @@ public abstract class StarlarkTransition implements ConfigurationTransition {
 
   private List<String> getOutputs() {
     return starlarkDefinedConfigTransition.getOutputs();
+  }
+
+  @Override
+  public ImmutableSet<Class<? extends FragmentOptions>> requiresOptionFragments(
+      BuildOptions buildOptions) {
+    // TODO(bazel-team): complexity cleanup: merge buildOptionInfo with TransitiveOptionDetails.
+    Map<String, OptionInfo> optionToFragment = FunctionTransitionUtil.buildOptionInfo(buildOptions);
+    ImmutableSet.Builder<Class<? extends FragmentOptions>> fragments = ImmutableSet.builder();
+    for (String optionStarlarkName : Iterables.concat(getInputs(), getOutputs())) {
+      // TODO(bazel-team): support Starlark flags.
+      if (!optionStarlarkName.startsWith(COMMAND_LINE_OPTION_PREFIX)) {
+        continue;
+      }
+      String optionNativeName = optionStarlarkName.substring(COMMAND_LINE_OPTION_PREFIX.length());
+      OptionInfo optionInfo = optionToFragment.get(optionNativeName);
+      // A null optionInfo means the flag is invalid. Starlark transitions independently catch and
+      // report that (search the code for "do not correspond to valid settings").
+      if (optionInfo != null) {
+        fragments.add(optionInfo.getOptionClass());
+      }
+    }
+    return fragments.build();
   }
 
   /** Exception class for exceptions thrown during application of a starlark-defined transition */

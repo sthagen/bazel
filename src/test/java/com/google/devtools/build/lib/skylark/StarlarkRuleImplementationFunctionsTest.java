@@ -45,8 +45,8 @@ import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.Substitution;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
-import com.google.devtools.build.lib.analysis.skylark.Args;
-import com.google.devtools.build.lib.analysis.skylark.StarlarkRuleContext;
+import com.google.devtools.build.lib.analysis.starlark.Args;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleContext;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
@@ -381,6 +381,30 @@ public class StarlarkRuleImplementationFunctionsTest extends BuildViewTestCase {
     assertThat(action.getIncompleteEnvironmentForTesting()).containsExactly("a", "b");
     // We expect "timeout" to be filtered by TargetUtils.
     assertThat(action.getExecutionInfo()).containsExactly("block-network", "foo");
+  }
+
+  @Test
+  public void testCreateSpawnActionEnvAndExecInfo_withWorkerKeyMnemonic() throws Exception {
+    StarlarkRuleContext ruleContext = createRuleContext("//foo:foo");
+    setRuleContext(ruleContext);
+    ev.exec(
+        "ruleContext.actions.run_shell(",
+        "  inputs = ruleContext.files.srcs,",
+        "  outputs = ruleContext.files.srcs,",
+        "  env = {'a' : 'b'},",
+        "  execution_requirements = {",
+        "    'supports-workers': '1',",
+        "    'worker-key-mnemonic': 'MyMnemonic',",
+        "  },",
+        "  mnemonic = 'DummyMnemonic',",
+        "  command = 'dummy_command',",
+        "  progress_message = 'dummy_message')");
+    SpawnAction action =
+        (SpawnAction)
+            Iterables.getOnlyElement(
+                ruleContext.getRuleContext().getAnalysisEnvironment().getRegisteredActions());
+    assertThat(action.getExecutionInfo())
+        .containsExactly("supports-workers", "1", "worker-key-mnemonic", "MyMnemonic");
   }
 
   @Test
