@@ -717,7 +717,7 @@ directory enclosing the root of your workspace directory. For example:
 This makes it easier to find out which server process belongs to a given
 workspace. (Beware that with certain other options to `ps`, Bazel server
 processes may be named just `java`.) Bazel servers can be stopped using the
-[shutdown](#shutdown) command.
+[shutdown](user-manual.html#shutdown) command.
 
 When running `bazel`, the client first checks that the server is the appropriate
 version; if not, the server is stopped and a new one started. This ensures that
@@ -900,6 +900,10 @@ unintentional name sharing.
 `--config=foo` expands to the options defined in the rc files "in-place" so that
 the options specified for the config have the same precedence that the
 `--config=foo` option had.
+
+This syntax does not extend to the use of `startup` to set
+[startup options](#option-defaults), e.g. setting
+`startup:config-name --some_startup_option` in the .bazelrc will be ignored.
 
 #### Example
 

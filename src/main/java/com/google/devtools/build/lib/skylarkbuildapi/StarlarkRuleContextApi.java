@@ -26,7 +26,6 @@ import com.google.devtools.build.lib.skylarkbuildapi.platform.ToolchainContextAp
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.NoneType;
 import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
@@ -526,164 +525,6 @@ public interface StarlarkRuleContextApi<ConstraintValueT extends ConstraintValue
   String getBuildFileRelativePath() throws EvalException;
 
   @StarlarkMethod(
-      name = "action",
-      doc =
-          "DEPRECATED. Use <a href=\"actions.html#run\">ctx.actions.run()</a> or"
-              + " <a href=\"actions.html#run_shell\">ctx.actions.run_shell()</a>. <br>"
-              + "Creates an action that runs an executable or a shell command."
-              + " You must specify either <code>command</code> or <code>executable</code>.\n"
-              + "Actions and genrules are very similar, but have different use cases. Actions are "
-              + "used inside rules, and genrules are used inside macros. Genrules also have make "
-              + "variable expansion.",
-      parameters = {
-        @Param(
-            name = "outputs",
-            type = Sequence.class,
-            generic1 = FileApi.class,
-            named = true,
-            positional = false,
-            doc = "List of the output files of the action."),
-        @Param(
-            name = "inputs",
-            allowedTypes = {
-              @ParamType(type = Sequence.class),
-              @ParamType(type = Depset.class),
-            },
-            generic1 = FileApi.class,
-            defaultValue = "[]",
-            named = true,
-            positional = false,
-            doc = "List of the input files of the action."),
-        @Param(
-            name = "executable",
-            type = Object.class,
-            allowedTypes = {
-              @ParamType(type = FileApi.class),
-              @ParamType(type = String.class),
-              @ParamType(type = NoneType.class),
-            },
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc = "The executable file to be called by the action."),
-        @Param(
-            name = "tools",
-            allowedTypes = {
-              @ParamType(type = Sequence.class),
-              @ParamType(type = Depset.class),
-            },
-            generic1 = FileApi.class,
-            defaultValue = "unbound",
-            named = true,
-            positional = false,
-            doc =
-                "List of the any tools needed by the action. Tools are inputs with additional "
-                    + "runfiles that are automatically made available to the action."),
-        @Param(
-            name = "arguments",
-            allowedTypes = {
-              @ParamType(type = Sequence.class),
-            },
-            defaultValue = "[]",
-            named = true,
-            positional = false,
-            doc =
-                "Command line arguments of the action. Must be a list of strings or actions.args() "
-                    + "objects."),
-        @Param(
-            name = "mnemonic",
-            type = String.class,
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc = "A one-word description of the action, e.g. CppCompile or GoLink."),
-        @Param(
-            name = "command",
-            type = Object.class,
-            allowedTypes = {
-              @ParamType(type = String.class),
-              @ParamType(type = Sequence.class, generic1 = String.class),
-              @ParamType(type = NoneType.class),
-            },
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc =
-                "Shell command to execute. It is usually preferable to "
-                    + "use <code>executable</code> instead. "
-                    + "Arguments are available with <code>$1</code>, <code>$2</code>, etc."),
-        @Param(
-            name = "progress_message",
-            type = String.class,
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc =
-                "Progress message to show to the user during the build, "
-                    + "e.g. \"Compiling foo.cc to create foo.o\"."),
-        @Param(
-            name = "use_default_shell_env",
-            type = Boolean.class,
-            defaultValue = "False",
-            named = true,
-            positional = false,
-            doc = "Whether the action should use the built in shell environment or not."),
-        @Param(
-            name = "env",
-            type = Dict.class,
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc = "Sets the dictionary of environment variables."),
-        @Param(
-            name = "execution_requirements",
-            type = Dict.class,
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc =
-                "Information for scheduling the action. See "
-                    + "<a href=\"$BE_ROOT/common-definitions.html#common.tags\">tags</a> "
-                    + "for useful keys."),
-        @Param(
-            // TODO(bazel-team): The name here isn't accurate anymore. This is technically
-            // experimental,
-            // so folks shouldn't be too attached, but consider renaming to be more accurate/opaque.
-            name = "input_manifests",
-            type = Sequence.class,
-            noneable = true,
-            defaultValue = "None",
-            named = true,
-            positional = false,
-            doc =
-                "(Experimental) sets the input runfiles metadata; "
-                    + "they are typically generated by resolve_command.")
-      },
-      allowReturnNones = true,
-      useStarlarkThread = true)
-  NoneType action(
-      Sequence<?> outputs,
-      Object inputs,
-      Object executableUnchecked,
-      Object toolsUnchecked,
-      Object arguments,
-      Object mnemonicUnchecked,
-      Object commandUnchecked,
-      Object progressMessage,
-      Boolean useDefaultShellEnv,
-      Object envUnchecked,
-      Object executionRequirementsUnchecked,
-      Object inputManifestsUnchecked,
-      StarlarkThread thread)
-      throws EvalException;
-
-  @StarlarkMethod(
       name = "expand_location",
       doc =
           "Expands all <code>$(location ...)</code> templates in the given string by replacing "
@@ -714,30 +555,6 @@ public interface StarlarkRuleContextApi<ConstraintValueT extends ConstraintValue
       allowReturnNones = true,
       useStarlarkThread = true)
   String expandLocation(String input, Sequence<?> targets, StarlarkThread thread)
-      throws EvalException;
-
-  @StarlarkMethod(
-      name = "file_action",
-      doc =
-          "DEPRECATED. Use <a href =\"actions.html#write\">ctx.actions.write</a> instead. <br>"
-              + "Creates a file write action.",
-      parameters = {
-        @Param(name = "output", type = FileApi.class, named = true, doc = "The output file."),
-        @Param(
-            name = "content",
-            type = String.class,
-            named = true,
-            doc = "The contents of the file."),
-        @Param(
-            name = "executable",
-            type = Boolean.class,
-            defaultValue = "False",
-            named = true,
-            doc = "Whether the output file should be executable (default is False).")
-      },
-      allowReturnNones = true,
-      useStarlarkThread = true)
-  NoneType fileAction(FileApi output, String content, Boolean executable, StarlarkThread thread)
       throws EvalException;
 
   @StarlarkMethod(

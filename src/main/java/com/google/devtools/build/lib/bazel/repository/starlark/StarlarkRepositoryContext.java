@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.bazel.repository.starlark;
 
+import com.github.difflib.patch.PatchFailedException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
 import com.google.common.base.Joiner;
@@ -72,7 +73,6 @@ import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
-import difflib.PatchFailedException;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -107,7 +107,7 @@ public class StarlarkRepositoryContext
   private final Path outputDirectory;
   private final StructImpl attrObject;
   private final StarlarkOS osObject;
-  private final ImmutableSet<PathFragment> blacklistedPatterns;
+  private final ImmutableSet<PathFragment> ignoredPatterns;
   private final Environment env;
   private final DownloadManager downloadManager;
   private final double timeoutScaling;
@@ -124,7 +124,7 @@ public class StarlarkRepositoryContext
       Rule rule,
       PathPackageLocator packageLocator,
       Path outputDirectory,
-      ImmutableSet<PathFragment> blacklistedPatterns,
+      ImmutableSet<PathFragment> ignoredPatterns,
       Environment environment,
       Map<String, String> env,
       DownloadManager downloadManager,
@@ -137,7 +137,7 @@ public class StarlarkRepositoryContext
     this.rule = rule;
     this.packageLocator = packageLocator;
     this.outputDirectory = outputDirectory;
-    this.blacklistedPatterns = blacklistedPatterns;
+    this.ignoredPatterns = ignoredPatterns;
     this.env = environment;
     this.osObject = new StarlarkOS(env);
     this.downloadManager = downloadManager;
@@ -178,8 +178,8 @@ public class StarlarkRepositoryContext
     }
     Path workspaceRoot = packageLocator.getWorkspaceFile().getParentDirectory();
     PathFragment relativePath = path.relativeTo(workspaceRoot);
-    for (PathFragment blacklistedPattern : blacklistedPatterns) {
-      if (relativePath.startsWith(blacklistedPattern)) {
+    for (PathFragment ignoredPattern : ignoredPatterns) {
+      if (relativePath.startsWith(ignoredPattern)) {
         return starlarkPath;
       }
     }

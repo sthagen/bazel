@@ -38,9 +38,13 @@ import com.google.devtools.build.lib.actions.MissingInputFileException;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.server.FailureDetails.Execution;
+import com.google.devtools.build.lib.server.FailureDetails.Execution.Code;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalFunction.RecursiveFilesystemTraversalException;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.ResolvedFile;
 import com.google.devtools.build.lib.skyframe.RecursiveFilesystemTraversalValue.TraversalRequest;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.RootedPath;
@@ -154,8 +158,15 @@ class ArtifactFunction implements SkyFunction {
           .handle(Event.error(actionForFailure.getOwner().getLocation(), errorMessage));
       // We could throw this as an IOException and expect our callers to catch and reprocess it,
       // but we know the action at fault, so we should be in charge.
+      DetailedExitCode code =
+          DetailedExitCode.of(
+              FailureDetail.newBuilder()
+                  .setMessage(errorMessage)
+                  .setExecution(
+                      Execution.newBuilder().setCode(Code.TREE_ARTIFACT_DIRECTORY_CREATION_FAILURE))
+                  .build());
       throw new ArtifactFunctionException(
-          new ActionExecutionException(errorMessage, e, actionForFailure, false));
+          new ActionExecutionException(errorMessage, e, actionForFailure, false, code));
     }
   }
 
@@ -243,13 +254,13 @@ class ArtifactFunction implements SkyFunction {
     try {
       fileValue = (FileValue) env.getValueOrThrow(fileSkyKey, IOException.class);
     } catch (IOException e) {
-      return makeMissingInputFileValue(artifact, e);
+      return makeMissingSourceInputFileValue(artifact, e);
     }
     if (fileValue == null) {
       return null;
     }
     if (!fileValue.exists()) {
-      return makeMissingInputFileValue(artifact, null);
+      return makeMissingSourceInputFileValue(artifact, null);
     }
 
     // For directory artifacts that are not Filesets, we initiate a directory traversal here, and
@@ -294,15 +305,25 @@ class ArtifactFunction implements SkyFunction {
     try {
       return FileArtifactValue.createForSourceArtifact(artifact, fileValue);
     } catch (IOException e) {
-      return makeMissingInputFileValue(artifact, e);
+      return makeMissingSourceInputFileValue(artifact, e);
     }
   }
 
-  static MissingFileArtifactValue makeMissingInputFileValue(Artifact artifact, Exception failure) {
-    String extraMsg = (failure == null) ? "" : (": " + failure.getMessage());
+  static MissingFileArtifactValue makeMissingSourceInputFileValue(
+      Artifact artifact, Exception failure) {
     MissingInputFileException ex =
-        new MissingInputFileException(constructErrorMessage(artifact) + extraMsg, null);
+        new MissingInputFileException(
+            FailureDetail.newBuilder()
+                .setMessage(makeMissingInputFileMessage(artifact, failure))
+                .setExecution(Execution.newBuilder().setCode(Code.SOURCE_INPUT_MISSING))
+                .build(),
+            null);
     return new MissingFileArtifactValue(ex);
+  }
+
+  static String makeMissingInputFileMessage(Artifact artifact, Exception failure) {
+    return constructErrorMessage(artifact)
+        + ((failure == null) ? "" : (": " + failure.getMessage()));
   }
 
   @Nullable

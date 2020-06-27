@@ -76,14 +76,12 @@ import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.shell.ShellUtils.TokenizationException;
-import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkbuildapi.StarlarkRuleContextApi;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.NoneType;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.syntax.Starlark;
@@ -874,72 +872,6 @@ public final class StarlarkRuleContext implements StarlarkRuleContextApi<Constra
     return pkg.getSourceRoot().get().relativize(pkg.getBuildFile().getPath()).getPathString();
   }
 
-  /**
-   * A Starlark built-in function to create and register a SpawnAction using a dictionary of
-   * parameters: action( inputs = [input1, input2, ...], outputs = [output1, output2, ...],
-   * executable = executable, arguments = [argument1, argument2, ...], mnemonic = 'Mnemonic',
-   * command = 'command', )
-   */
-  @Override
-  public NoneType action(
-      Sequence<?> outputs,
-      Object inputs,
-      Object executableUnchecked,
-      Object toolsUnchecked,
-      Object arguments,
-      Object mnemonicUnchecked,
-      Object commandUnchecked,
-      Object progressMessage,
-      Boolean useDefaultShellEnv,
-      Object envUnchecked,
-      Object executionRequirementsUnchecked,
-      Object inputManifestsUnchecked,
-      StarlarkThread thread)
-      throws EvalException {
-    checkDeprecated(
-        "ctx.actions.run or ctx.actions.run_shell", "ctx.action", thread.getSemantics());
-    checkMutable("action");
-    if ((commandUnchecked == Starlark.NONE) == (executableUnchecked == Starlark.NONE)) {
-      throw Starlark.errorf("You must specify either 'command' or 'executable' argument");
-    }
-    boolean hasCommand = commandUnchecked != Starlark.NONE;
-    if (!hasCommand) {
-      actions()
-          .run(
-              outputs,
-              inputs,
-              /*unusedInputsList=*/ Starlark.NONE,
-              executableUnchecked,
-              toolsUnchecked,
-              arguments,
-              mnemonicUnchecked,
-              progressMessage,
-              useDefaultShellEnv,
-              envUnchecked,
-              executionRequirementsUnchecked,
-              inputManifestsUnchecked,
-              /* execGroupUnchecked= */ Starlark.NONE);
-
-    } else {
-      actions()
-          .runShell(
-              outputs,
-              inputs,
-              toolsUnchecked,
-              arguments,
-              mnemonicUnchecked,
-              commandUnchecked,
-              progressMessage,
-              useDefaultShellEnv,
-              envUnchecked,
-              executionRequirementsUnchecked,
-              inputManifestsUnchecked,
-              /* execGroupUnchecked= */ Starlark.NONE,
-              thread);
-    }
-    return Starlark.NONE;
-  }
-
   @Override
   public String expandLocation(String input, Sequence<?> targets, StarlarkThread thread)
       throws EvalException {
@@ -952,16 +884,6 @@ public final class StarlarkRuleContext implements StarlarkRuleContextApi<Constra
     } catch (IllegalStateException ise) {
       throw new EvalException(null, ise);
     }
-  }
-
-  @Override
-  public NoneType fileAction(
-      FileApi output, String content, Boolean executable, StarlarkThread thread)
-      throws EvalException {
-    checkDeprecated("ctx.actions.write", "ctx.file_action", thread.getSemantics());
-    checkMutable("file_action");
-    actions().write(output, content, executable);
-    return Starlark.NONE;
   }
 
   @Override

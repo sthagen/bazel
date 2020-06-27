@@ -826,11 +826,10 @@ public class ActionExecutionFunction implements SkyFunction {
             state.updateFileSystemContext(
                 skyframeActionExecutor, env, metadataHandler, ImmutableMap.of());
           } catch (IOException e) {
-            throw new ActionExecutionException(
-                "Failed to update filesystem context: " + e.getMessage(),
-                e,
-                action,
-                /*catastrophe=*/ false);
+            String message = "Failed to update filesystem context: " + e.getMessage();
+            DetailedExitCode code =
+                createDetailedExitCode(message, Code.FILESYSTEM_CONTEXT_UPDATE_FAILURE);
+            throw new ActionExecutionException(message, e, action, /*catastrophe=*/ false, code);
           }
           try {
             state.discoveredInputs =
@@ -844,11 +843,10 @@ public class ActionExecutionFunction implements SkyFunction {
                     env,
                     state.actionFileSystem);
           } catch (IOException e) {
-            throw new ActionExecutionException(
-                "Failed during input discovery: " + e.getMessage(),
-                e,
-                action,
-                /*catastrophe=*/ false);
+            String message = "Failed during input discovery: " + e.getMessage();
+            DetailedExitCode code =
+                createDetailedExitCode(message, Code.INPUT_DISCOVERY_IO_EXCEPTION);
+            throw new ActionExecutionException(message, e, action, /*catastrophe=*/ false, code);
           } finally {
             discoveredInputsDuration = Duration.ofNanos(BlazeClock.nanoTime() - actionStartTime);
           }
@@ -902,11 +900,10 @@ public class ActionExecutionFunction implements SkyFunction {
     try {
       state.updateFileSystemContext(skyframeActionExecutor, env, metadataHandler, expandedFilesets);
     } catch (IOException e) {
-      throw new ActionExecutionException(
-          "Failed to update filesystem context: " + e.getMessage(),
-          e,
-          action,
-          /*catastrophe=*/ false);
+      String message = "Failed to update filesystem context: " + e.getMessage();
+      DetailedExitCode code =
+          createDetailedExitCode(message, Code.FILESYSTEM_CONTEXT_UPDATE_FAILURE);
+      throw new ActionExecutionException(message, e, action, /*catastrophe=*/ false, code);
     }
 
     ActionExecutionContext actionExecutionContext =
@@ -947,8 +944,9 @@ public class ActionExecutionFunction implements SkyFunction {
       try {
         actionExecutionContext.close();
       } catch (IOException e) {
-        throw new ActionExecutionException(
-            "Failed to close action output: " + e.getMessage(), e, action, /*catastrophe=*/ false);
+        String message = "Failed to close action output: " + e.getMessage();
+        DetailedExitCode code = createDetailedExitCode(message, Code.ACTION_OUTPUT_CLOSE_FAILURE);
+        throw new ActionExecutionException(message, e, action, /*catastrophe=*/ false, code);
       }
     }
     return result;
@@ -1053,12 +1051,11 @@ public class ActionExecutionFunction implements SkyFunction {
               new IllegalStateException("Non-source artifact had IO Exception" + input, e));
         }
 
-        MissingFileArtifactValue missingValue =
-            ArtifactFunction.makeMissingInputFileValue(input, e);
-        MissingInputFileException missingException = missingValue.getException();
         skyframeActionExecutor.printError(
             String.format(
-                "%s: %s", actionForError.getOwner().getLabel(), missingException.getMessage()),
+                "%s: %s",
+                actionForError.getOwner().getLabel(),
+                ArtifactFunction.makeMissingInputFileMessage(input, e)),
             actionForError,
             null);
         // We don't create a specific cause for the artifact as we do in #handleMissingFile because
@@ -1288,7 +1285,7 @@ public class ActionExecutionFunction implements SkyFunction {
           missingArtifactCauses.add(
               handleMissingFile(
                   input,
-                  ArtifactFunction.makeMissingInputFileValue(input, e),
+                  ArtifactFunction.makeMissingInputFileMessage(input, e),
                   action.getOwner().getLabel()));
           continue;
         }
@@ -1449,17 +1446,21 @@ public class ActionExecutionFunction implements SkyFunction {
 
   static LabelCause handleMissingFile(
       Artifact input, MissingFileArtifactValue missingValue, Label labelInCaseOfBug) {
-    MissingInputFileException e = missingValue.getException();
+    return handleMissingFile(input, missingValue.getException().getMessage(), labelInCaseOfBug);
+  }
+
+  static LabelCause handleMissingFile(
+      Artifact input, String missingMessage, Label labelInCaseOfBug) {
     Label inputLabel = input.getOwner();
     if (inputLabel == null) {
       BugReport.sendBugReport(
           new IllegalStateException(
               String.format(
                   "Artifact %s with missing value %s should have owner (%s)",
-                  input, e.getMessage(), labelInCaseOfBug)));
+                  input, missingMessage, labelInCaseOfBug)));
       inputLabel = labelInCaseOfBug;
     }
-    return new LabelCause(inputLabel, e.getMessage());
+    return new LabelCause(inputLabel, missingMessage);
   }
 
   @Override
@@ -1751,7 +1752,7 @@ public class ActionExecutionFunction implements SkyFunction {
         missingArtifactCauses.add(
             handleMissingFile(
                 input,
-                ArtifactFunction.makeMissingInputFileValue(input, e),
+                ArtifactFunction.makeMissingInputFileMessage(input, e),
                 action.getOwner().getLabel()));
       }
     }
