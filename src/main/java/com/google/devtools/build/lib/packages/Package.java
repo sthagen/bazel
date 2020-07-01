@@ -892,6 +892,11 @@ public class Package {
       return generatorNameByLocation;
     }
 
+    // Value of '$implicit_tests' attribute shared by all test_suite rules in the
+    // package that don't specify an explicit 'tests' attribute value.
+    // It contains the label of each non-manual test in the package, in label order.
+    final List<Label> testSuiteImplicitTests = new ArrayList<>();
+
     @ThreadCompatible
     private static class ThreadCompatibleInterner<T> implements Interner<T> {
       private final Map<T, T> interns = new HashMap<>();
@@ -1232,15 +1237,15 @@ public class Package {
      * Creates a new {@link Rule} {@code r} where {@code r.getPackage()} is the {@link Package}
      * associated with this {@link Builder}.
      *
-     * <p>The created {@link Rule} will have no attribute values, no output files, and therefore
-     * will be in an invalid state.
+     * <p>The created {@link Rule} will have no output files and therefore will be in an invalid
+     * state.
      */
     Rule createRule(
         Label label,
         RuleClass ruleClass,
         Location location,
         List<StarlarkThread.CallStackEntry> callstack,
-        AttributeContainer attributeContainer) {
+        AttributeContainer attributeContainer) { // required by WorkspaceFactory.setParent hack
       return new Rule(
           pkg, label, ruleClass, location, callStackBuilder.of(callstack), attributeContainer);
     }
@@ -1255,7 +1260,6 @@ public class Package {
         RuleClass ruleClass,
         Location location,
         List<StarlarkThread.CallStackEntry> callstack,
-        AttributeContainer attributeContainer,
         ImplicitOutputsFunction implicitOutputsFunction) {
       return new Rule(
           pkg,
@@ -1263,7 +1267,7 @@ public class Package {
           ruleClass,
           location,
           callStackBuilder.of(callstack),
-          attributeContainer,
+          new AttributeContainer(ruleClass),
           implicitOutputsFunction);
     }
 
@@ -1498,47 +1502,49 @@ public class Package {
       // current instance here.
       buildFile = (InputFile) Preconditions.checkNotNull(targets.get(buildFileLabel.getName()));
 
-      List<Label> labelsOfTestTargets = new ArrayList<>();
-      List<Rule> implicitTestSuiteRuleInstances = new ArrayList<>();
-      Map<Label, InputFile> newInputFiles = new HashMap<>();
+      List<Label> tests = new ArrayList<>();
+      Map<String, InputFile> newInputFiles = new HashMap<>();
       for (final Rule rule : getTargets(Rule.class)) {
         if (discoverAssumedInputFiles) {
-          // All labels mentioned in a rule that refer to an unknown target in the
-          // current package are assumed to be InputFiles, so let's create them:
-          for (AttributeMap.DepEdge depEdge : AggregatingAttributeMapper.of(rule).visitLabels()) {
-            InputFile inputFile = createInputFileMaybe(depEdge.getLabel(), rule.getLocation());
-            if (inputFile != null && !newInputFiles.containsKey(depEdge.getLabel())) {
-              newInputFiles.put(depEdge.getLabel(), inputFile);
+          // All labels mentioned by a rule that refer to an unknown target in the
+          // current package are assumed to be InputFiles, so let's create them.
+          // (We add them to a temporary map while we are iterating over this.targets.)
+          for (AttributeMap.DepEdge edge : AggregatingAttributeMapper.of(rule).visitLabels()) {
+            Label label = edge.getLabel();
+            if (label.getPackageIdentifier().equals(pkg.getPackageIdentifier())
+                && !targets.containsKey(label.getName())
+                && !newInputFiles.containsKey(label.getName())) {
+              Location loc = rule.getLocation();
+              newInputFiles.put(
+                  label.getName(),
+                  noImplicitFileExport
+                      ? new InputFile(
+                          pkg, label, loc, ConstantRuleVisibility.PRIVATE, License.NO_LICENSE)
+                      : new InputFile(pkg, label, loc));
             }
           }
         }
 
         // "test_suite" rules have the idiosyncratic semantics of implicitly
-        // depending on all tests in the package, iff tests=[] and suites=[].
+        // depending on all tests in the package, iff tests=[] and suites=[],
+        // which is about 20% of >1M test_suite instances in Google's corpus.
         // Note, we implement this here when the Package is fully constructed,
         // since clearly this information isn't available at Rule construction
         // time, as forward references are permitted.
         if (TargetUtils.isTestRule(rule) && !TargetUtils.hasManualTag(rule)) {
-          labelsOfTestTargets.add(rule.getLabel());
-        }
-
-        AttributeMap attributes = NonconfigurableAttributeMapper.of(rule);
-        if (rule.getRuleClass().equals("test_suite")
-            && attributes.get("tests", BuildType.LABEL_LIST).isEmpty()) {
-          implicitTestSuiteRuleInstances.add(rule);
+          // Update the testSuiteImplicitTests list shared
+          // by all test_suite.$implicit_test attributes.
+          tests.add(rule.getLabel());
         }
       }
 
-      for (InputFile inputFile : newInputFiles.values()) {
-        addInputFile(inputFile);
+      Collections.sort(tests); // (for determinism)
+      this.testSuiteImplicitTests.addAll(tests);
+
+      for (InputFile file : newInputFiles.values()) {
+        addInputFile(file);
       }
 
-      if (!implicitTestSuiteRuleInstances.isEmpty()) {
-        Collections.sort(labelsOfTestTargets);
-        for (Rule rule : implicitTestSuiteRuleInstances) {
-          rule.setAttributeValueByName("$implicit_tests", labelsOfTestTargets);
-        }
-      }
       return this;
     }
 
@@ -1590,22 +1596,6 @@ public class Package {
       }
       beforeBuild(discoverAssumedInputFiles);
       return finishBuild();
-    }
-
-    /**
-     * If "label" refers to a non-existent target in the current package, create an InputFile
-     * target.
-     */
-    private InputFile createInputFileMaybe(Label label, Location location) {
-      if (label != null && label.getPackageIdentifier().equals(pkg.getPackageIdentifier())) {
-        if (!targets.containsKey(label.getName())) {
-          return noImplicitFileExport
-              ? new InputFile(
-                  pkg, label, location, ConstantRuleVisibility.PRIVATE, License.NO_LICENSE)
-              : new InputFile(pkg, label, location);
-        }
-      }
-      return null;
     }
 
     private InputFile addInputFile(Label label, Location location) {

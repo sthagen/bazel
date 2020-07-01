@@ -1,4 +1,4 @@
-// Copyright 2014 The Bazel Authors. All rights reserved.
+// Copyright 2020 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,17 +11,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.devtools.build.lib.bazel.rules.sh;
 
-package com.google.devtools.build.lib.packages;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.InstrumentationSpec;
+import com.google.devtools.build.lib.util.FileTypeSet;
 
-/** Exception indicating an attempt to access something which is not found or does not exist. */
-public class NoSuchThingException extends Exception {
+/** Common logic for coverage for sh_* rules. */
+final class ShCoverage {
 
-  public NoSuchThingException(String message) {
-    super(message);
-  }
+  private ShCoverage() {}
 
-  public NoSuchThingException(String message, Throwable cause) {
-    super(message, cause);
-  }
+  public static final InstrumentationSpec INSTRUMENTATION_SPEC =
+      new InstrumentationSpec(FileTypeSet.ANY_FILE, "srcs", "deps", "data");
 }

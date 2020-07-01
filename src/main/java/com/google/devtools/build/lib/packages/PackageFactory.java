@@ -37,6 +37,8 @@ import com.google.devtools.build.lib.packages.RuleFactory.BuildLangTypedAttribut
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.PackageLoading;
 import com.google.devtools.build.lib.syntax.Argument;
 import com.google.devtools.build.lib.syntax.CallExpression;
 import com.google.devtools.build.lib.syntax.DefStatement;
@@ -66,6 +68,8 @@ import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.syntax.StringLiteral;
 import com.google.devtools.build.lib.syntax.Tuple;
+import com.google.devtools.build.lib.util.DetailedExitCode;
+import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -386,8 +390,7 @@ public final class PackageFactory {
             ruleClass,
             new BuildLangTypedAttributeValuesMap(kwargs),
             thread.getSemantics(),
-            thread.getCallStack(),
-            new AttributeContainer(ruleClass));
+            thread.getCallStack());
       } catch (RuleFactory.InvalidRuleException | Package.NameConflictException e) {
         throw new EvalException(null, e.getMessage());
       }
@@ -521,9 +524,7 @@ public final class PackageFactory {
     Globber globber =
         createLegacyGlobber(
             buildFile.asPath().getParentDirectory(), packageId, ImmutableSet.of(), locator);
-    ParserInput input =
-        ParserInput.create(
-            FileSystemUtils.convertFromLatin1(buildFileBytes), buildFile.asPath().toString());
+    ParserInput input = ParserInput.fromLatin1(buildFileBytes, buildFile.asPath().toString());
     // Options for processing BUILD files. (No prelude, so recordScope(true) is safe.)
     FileOptions options =
         FileOptions.builder()
@@ -671,11 +672,22 @@ public final class PackageFactory {
     long maxSteps = starlarkSemantics.maxComputationSteps();
     long steps = pkg.getComputationSteps();
     if (maxSteps > 0 && steps > maxSteps) {
-      throw new InvalidPackageException(
-          pkg.getPackageIdentifier(),
+      String message =
           String.format(
               "BUILD file computation took %d steps, but --max_computation_steps=%d",
-              steps, maxSteps));
+              steps, maxSteps);
+      throw new InvalidPackageException(
+          pkg.getPackageIdentifier(),
+          message,
+          DetailedExitCode.of(
+              ExitCode.BUILD_FAILURE,
+              FailureDetail.newBuilder()
+                  .setMessage(message)
+                  .setPackageLoading(
+                      PackageLoading.newBuilder()
+                          .setCode(PackageLoading.Code.MAX_COMPUTATION_STEPS_EXCEEDED)
+                          .build())
+                  .build()));
     }
 
     packageLoadingListener.onLoadingCompleteAndSuccessful(pkg, starlarkSemantics, loadTimeNanos);
