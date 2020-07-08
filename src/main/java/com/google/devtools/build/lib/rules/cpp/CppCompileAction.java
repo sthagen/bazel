@@ -57,7 +57,6 @@ import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.analysis.starlark.Args;
 import com.google.devtools.build.lib.bugreport.BugReport;
-import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -214,8 +213,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
    *     succeed, can be empty but not null, for example, extra sources for FDO.
    * @param inputsForInvalidation are there only to invalidate this action when they change, but are
    *     not needed during actual execution.
-   * @param outputFile the object file that is written as result of the compilation, or the fake
-   *     object for {@link FakeCppCompileAction}s
+   * @param outputFile the object file that is written as result of the compilation
    * @param dotdFile the .d file that is generated as a side-effect of compilation
    * @param gcnoFile the coverage notes that are written in coverage mode, can be null
    * @param dwoFile the .dwo output file where debug information is stored for Fission builds (null
@@ -439,10 +437,9 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         throw new IllegalStateException(e.getCause());
       }
     } catch (ExecException e) {
-      Label label = getOwner().getLabel();
       throw e.toActionExecutionException(
-          "Include scanning of rule '" + label + "'",
-          actionExecutionContext.showVerboseFailures(label),
+          "Include scanning of rule '" + getOwner().getLabel() + "'",
+          actionExecutionContext.getVerboseFailures(),
           this);
     }
   }
@@ -1309,7 +1306,10 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
 
   /** For actions that discover inputs, the key must include input names. */
   @Override
-  public void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp)
+  public void computeKey(
+      ActionKeyContext actionKeyContext,
+      @Nullable Artifact.ArtifactExpander artifactExpander,
+      Fingerprint fp)
       throws CommandLineExpansionException {
     computeKey(
         actionKeyContext,
@@ -1829,10 +1829,9 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         dotDContents = getDotDContents(spawnResults.get(0));
       } catch (ExecException e) {
         copyTempOutErrToActionOutErr();
-        Label label = getOwner().getLabel();
         throw e.toActionExecutionException(
-            "C++ compilation of rule '" + label + "'",
-            actionExecutionContext.showVerboseFailures(label),
+            "C++ compilation of rule '" + getOwner().getLabel() + "'",
+            actionExecutionContext.getVerboseFailures(),
             CppCompileAction.this);
       } catch (InterruptedException e) {
         copyTempOutErrToActionOutErr();
@@ -1924,7 +1923,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
                   e, createFailureDetail("OutErr copy failure", Code.COPY_OUT_ERR_FAILURE))
               .toActionExecutionException(
                   getRawProgressMessage(),
-                  actionExecutionContext.showVerboseFailures(getOwner().getLabel()),
+                  actionExecutionContext.getVerboseFailures(),
                   CppCompileAction.this);
         }
       }
