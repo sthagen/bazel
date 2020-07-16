@@ -167,7 +167,7 @@ public class BuildConfiguration implements BuildConfigurationApi {
       return false;
     }
     BuildConfiguration otherConfig = (BuildConfiguration) other;
-    return fragments.values().equals(otherConfig.fragments.values())
+    return fragments.values().asList().equals(otherConfig.fragments.values().asList())
         && buildOptions.equals(otherConfig.buildOptions);
   }
 
@@ -659,6 +659,10 @@ public class BuildConfiguration implements BuildConfigurationApi {
 
   public boolean experimentalForwardInstrumentedFilesInfoByDefault() {
     return options.experimentalForwardInstrumentedFilesInfoByDefault;
+  }
+
+  public boolean experimentalIgnoreDeprecatedInstrumentationSpec() {
+    return options.experimentalIgnoreDeprecatedInstrumentationSpec;
   }
 
   public RunUnder getRunUnder() {

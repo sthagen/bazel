@@ -105,7 +105,7 @@ public final class CoverageReportActionBuilder {
     private final String locationMessage;
     private final RunfilesSupplier runfilesSupplier;
 
-    protected CoverageReportAction(
+    CoverageReportAction(
         ActionOwner owner,
         NestedSet<Artifact> inputs,
         ImmutableSet<Artifact> outputs,
@@ -218,7 +218,7 @@ public final class CoverageReportActionBuilder {
               reportGenerator, workspaceName, htmlReport),
           argsFunction, locationFunc);
       return new CoverageReportActionsWrapper(
-          reporter, lcovFileAction, coverageReportAction, actionKeyContext);
+          lcovFileAction, coverageReportAction, actionKeyContext);
     } else {
       reporter.handle(
           Event.error("Cannot generate coverage report - no coverage information was collected"));

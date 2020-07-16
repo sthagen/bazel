@@ -76,8 +76,8 @@ import javax.annotation.Nullable;
  * <p>Given a {@link Label} referencing a .bzl file, attempts to locate the file and load it. The
  * Label must be absolute, and must not reference the special {@code external} package. If loading
  * is successful, returns a {@link BzlLoadValue} that encapsulates the loaded {@link Module} and its
- * transitive digest and {@link StarlarkFileDependency} information. If loading is unsuccessful,
- * throws a {@link BzlLoadFunctionException} that encapsulates the cause of the failure.
+ * transitive digest information. If loading is unsuccessful, throws a {@link
+ * BzlLoadFunctionException} that encapsulates the cause of the failure.
  *
  * <p>This Skyframe function supports a special "inlining" mode in which all (indirectly) recursive
  * calls to {@code BzlLoadFunction} are made in the same thread rather than through Skyframe. The
@@ -566,7 +566,7 @@ public class BzlLoadFunction implements SkyFunction {
       throw BzlLoadFailedException.starlarkErrors(filePath);
     }
 
-    // Process the load statements in the file,
+    // Process load statements in .bzl file (recursive .bzl -> .bzl loads),
     // resolving labels relative to the current repo mapping.
     ImmutableMap<RepositoryName, RepositoryName> repoMapping = getRepositoryMapping(key, env);
     if (repoMapping == null) {
@@ -605,14 +605,11 @@ public class BzlLoadFunction implements SkyFunction {
     // loads. Loop iteration order matches the source order of load statements.
     Fingerprint fp = new Fingerprint();
     fp.addBytes(astLookupValue.getDigest());
-    Map<String, Module> loadedModules = Maps.newHashMapWithExpectedSize(loads.size());
-    ImmutableList.Builder<StarlarkFileDependency> fileDependencies =
-        ImmutableList.builderWithExpectedSize(loads.size());
+    Map<String, Module> loadedModules = Maps.newLinkedHashMapWithExpectedSize(loads.size());
     for (int i = 0; i < loads.size(); i++) {
       String loadString = loads.get(i).first;
       BzlLoadValue v = bzlLoads.get(i);
-      loadedModules.put(loadString, v.getModule());
-      fileDependencies.add(v.getDependency());
+      loadedModules.put(loadString, v.getModule()); // dups ok
       fp.addBytes(v.getTransitiveDigest());
     }
     byte[] transitiveDigest = fp.digestAndReset();
@@ -620,7 +617,16 @@ public class BzlLoadFunction implements SkyFunction {
     Module module =
         Module.withPredeclared(
             starlarkSemantics, getPredeclaredEnvironment(key, starlarkBuiltinsValue));
-    module.setClientData(BazelModuleContext.create(label, transitiveDigest));
+
+    // Record the module's filename, label, digest, and the set of modules it loads,
+    // forming a complete representation of the load DAG.
+    module.setClientData(
+        BazelModuleContext.create(
+            label,
+            file.getStartLocation().file(),
+            ImmutableMap.copyOf(loadedModules),
+            transitiveDigest));
+
     // executeBzlFile may post events to the Environment's handler, but events do not matter when
     // caching BzlLoadValues. Note that executing the module mutates it.
     executeBzlFile(
@@ -631,10 +637,7 @@ public class BzlLoadFunction implements SkyFunction {
         starlarkSemantics,
         env.getListener(),
         repoMapping);
-    BzlLoadValue result =
-        new BzlLoadValue(
-            module, transitiveDigest, new StarlarkFileDependency(label, fileDependencies.build()));
-    return result;
+    return new BzlLoadValue(module, transitiveDigest);
   }
 
   private static ImmutableMap<RepositoryName, RepositoryName> getRepositoryMapping(

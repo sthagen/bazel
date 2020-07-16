@@ -65,6 +65,7 @@ import com.google.devtools.build.lib.packages.RuleVisibility;
 import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.profiler.memory.CurrentRuleTracker;
+import com.google.devtools.build.lib.rules.cpp.DeniedImplicitOutputMarkerProvider;
 import com.google.devtools.build.lib.skyframe.AspectValueKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
@@ -85,6 +86,11 @@ import javax.annotation.Nullable;
  */
 @ThreadSafe
 public final class ConfiguredTargetFactory {
+
+  public static final String CC_LIB_IMPLICIT_OUTPUTS_ERROR =
+      "Using implicit outputs from cc_library (%s) is forbidden. Use"
+          + " the rule cc_implicit_output as an alternative.";
+
   // This class is not meant to be outside of the analysis phase machinery and is only public
   // in order to be accessible from the .view.skyframe package.
 
@@ -221,6 +227,14 @@ public final class ConfiguredTargetFactory {
                   Optional.empty());
       Verify.verifyNotNull(rule);
       Artifact artifact = rule.getArtifactByOutputLabel(outputFile.getLabel());
+
+      if (rule.get(DeniedImplicitOutputMarkerProvider.PROVIDER) != null) {
+        analysisEnvironment
+            .getEventHandler()
+            .handle(Event.error(String.format(CC_LIB_IMPLICIT_OUTPUTS_ERROR, rule.getLabel())));
+        return null;
+      }
+
       return new OutputFileConfiguredTarget(targetContext, outputFile, rule, artifact);
     } else if (target instanceof InputFile) {
       InputFile inputFile = (InputFile) target;
@@ -442,7 +456,7 @@ public final class ConfiguredTargetFactory {
       OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> map, Target target) {
     OrderedSetMultimap<Attribute, ConfiguredTargetAndData> result = OrderedSetMultimap.create();
     for (Map.Entry<DependencyKind, ConfiguredTargetAndData> entry : map.entries()) {
-      if (entry.getKey() == DependencyKind.TOOLCHAIN_DEPENDENCY) {
+      if (DependencyKind.isToolchain(entry.getKey())) {
         continue;
       }
       Attribute attribute = entry.getKey().getAttribute();
@@ -494,6 +508,9 @@ public final class ConfiguredTargetFactory {
             .setConfigConditions(configConditions)
             .setUniversalFragments(ruleClassProvider.getUniversalFragments())
             .setToolchainContext(toolchainContext)
+            // TODO(b/161222568): Implement the exec_properties attr for aspects and read its value
+            // here.
+            .setExecProperties(ImmutableMap.of())
             .setConstraintSemantics(ruleClassProvider.getConstraintSemantics())
             .setRequiredConfigFragments(
                 RequiredFragmentsUtil.getRequiredFragments(

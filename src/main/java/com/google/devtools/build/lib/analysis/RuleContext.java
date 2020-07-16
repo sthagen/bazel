@@ -258,7 +258,7 @@ public final class RuleContext extends TargetContext
     this.actionOwnerSymbolGenerator = new SymbolGenerator<>(actionLookupKey);
     reporter = builder.reporter;
     this.toolchainContexts = toolchainContexts;
-    this.execProperties = parseExecProperties();
+    this.execProperties = parseExecProperties(builder.rawExecProperties);
     this.constraintSemantics = constraintSemantics;
     this.requiredConfigFragments = requiredConfigFragments;
   }
@@ -483,8 +483,11 @@ public final class RuleContext extends TargetContext
   }
 
   @Nullable
-  protected <T extends Fragment> T getFragment(Class<T> fragment, String name,
-      String additionalErrorMessage, ConfigurationTransition transition) {
+  <T extends Fragment> T getFragment(
+      Class<T> fragment,
+      String name,
+      String additionalErrorMessage,
+      ConfigurationTransition transition) {
     // TODO(bazel-team): The fragments can also be accessed directly through BuildConfiguration.
     // Can we lock that down somehow?
     Preconditions.checkArgument(isLegalFragment(fragment, transition),
@@ -708,6 +711,7 @@ public final class RuleContext extends TargetContext
    * configuration. The choice of which tree to use is based on the rule with which this target
    * (which must be an OutputFile or a Rule) is associated.
    */
+  @Override
   public ArtifactRoot getBinOrGenfilesDirectory() {
     return rule.hasBinaryOutput()
         ? getConfiguration().getBinDirectory(rule.getRepository())
@@ -1284,13 +1288,13 @@ public final class RuleContext extends TargetContext
     return ans.build();
   }
 
-  private ImmutableMap<String, ImmutableMap<String, String>> parseExecProperties()
-      throws InvalidExecGroupException {
-    if (!isAttrDefined(RuleClass.EXEC_PROPERTIES, Type.STRING_DICT)) {
+  private ImmutableMap<String, ImmutableMap<String, String>> parseExecProperties(
+      Map<String, String> execProperties) throws InvalidExecGroupException {
+    if (execProperties.isEmpty()) {
       return ImmutableMap.of(DEFAULT_EXEC_GROUP_NAME, ImmutableMap.of());
     } else {
       return parseExecProperties(
-          attributes.get(RuleClass.EXEC_PROPERTIES, Type.STRING_DICT),
+          execProperties,
           toolchainContexts == null ? ImmutableSet.of() : toolchainContexts.getExecGroups());
     }
   }
@@ -1508,12 +1512,12 @@ public final class RuleContext extends TargetContext
   }
 
   /**
-   * Returns a path fragment qualified by the rule name and unique fragment to
-   * disambiguate artifacts produced from the source file appearing in
-   * multiple rules.
+   * Returns a path fragment qualified by the rule name and unique fragment to disambiguate
+   * artifacts produced from the source file appearing in multiple rules.
    *
    * <p>For example "pkg/dir/name" -> "pkg/&lt;fragment>/rule/dir/name.
    */
+  @Override
   public final PathFragment getUniqueDirectory(PathFragment fragment) {
     return AnalysisUtils.getUniqueDirectory(getLabel(), fragment);
   }
@@ -1743,6 +1747,7 @@ public final class RuleContext extends TargetContext
     private ImmutableMap<String, Attribute> aspectAttributes;
     private ImmutableList<Aspect> aspects;
     private ToolchainCollection<ResolvedToolchainContext> toolchainContexts;
+    private ImmutableMap<String, String> rawExecProperties;
     private ConstraintSemantics<RuleContext> constraintSemantics;
     private ImmutableSet<String> requiredConfigFragments = ImmutableSet.of();
 
@@ -1785,6 +1790,14 @@ public final class RuleContext extends TargetContext
       ListMultimap<String, ConfiguredTargetAndData> targetMap = createTargetMap();
       ListMultimap<String, ConfiguredFilesetEntry> filesetEntryMap =
           createFilesetEntryMap(target.getAssociatedRule(), configConditions);
+      if (rawExecProperties == null) {
+        if (!attributes.has(RuleClass.EXEC_PROPERTIES, Type.STRING_DICT)) {
+          rawExecProperties = ImmutableMap.of();
+        } else {
+          rawExecProperties =
+              ImmutableMap.copyOf(attributes.get(RuleClass.EXEC_PROPERTIES, Type.STRING_DICT));
+        }
+      }
       return new RuleContext(
           this,
           attributes,
@@ -1870,6 +1883,15 @@ public final class RuleContext extends TargetContext
           this.toolchainContexts == null,
           "toolchainContexts has already been set for this Builder");
       this.toolchainContexts = toolchainContexts;
+      return this;
+    }
+
+    /**
+     * Warning: if you set the exec properties using this method any exec_properties attribute value
+     * will be ignored in favor of this value.
+     */
+    public Builder setExecProperties(ImmutableMap<String, String> execProperties) {
+      this.rawExecProperties = execProperties;
       return this;
     }
 

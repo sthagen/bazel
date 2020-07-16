@@ -164,7 +164,6 @@ java_library(
         ":local_repository_lookup_value",
         ":managed_directories_knowledge",
         ":map_as_package_roots",
-        ":minimal_output_store",
         ":output_store",
         ":package_error_function",
         ":package_error_message_function",
@@ -198,7 +197,6 @@ java_library(
         ":skyframe_aware_action",
         ":skyframe_incremental_build_monitor",
         ":skylark_module_cycle_reporter",
-        ":starlark_file_dependency",
         ":state_informing_sky_function_environment",
         ":target_pattern_error_function",
         ":target_pattern_phase_value",
@@ -1625,15 +1623,6 @@ java_library(
 )
 
 java_library(
-    name = "minimal_output_store",
-    srcs = ["MinimalOutputStore.java"],
-    deps = [
-        ":output_store",
-        "//src/main/java/com/google/devtools/build/lib/actions",
-    ],
-)
-
-java_library(
     name = "mutable_supplier",
     srcs = ["MutableSupplier.java"],
     deps = ["//third_party:guava"],
@@ -2308,21 +2297,10 @@ java_library(
 )
 
 java_library(
-    name = "starlark_file_dependency",
-    srcs = ["StarlarkFileDependency.java"],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib/cmdline",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
-        "//third_party:guava",
-    ],
-)
-
-java_library(
     name = "bzl_load_value",
     srcs = ["BzlLoadValue.java"],
     deps = [
         ":sky_functions",
-        ":starlark_file_dependency",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
