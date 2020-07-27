@@ -14,13 +14,11 @@
 package com.google.devtools.build.lib.actions.cache;
 
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
-import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
-import java.util.Map;
+import com.google.devtools.build.lib.skyframe.TreeArtifactInjector;
 
 /** Supports metadata injection of action outputs into skyframe. */
-public interface MetadataInjector {
+public interface MetadataInjector extends TreeArtifactInjector {
 
   /**
    * Injects the metadata of a file.
@@ -29,20 +27,10 @@ public interface MetadataInjector {
    *
    * <p>{@linkplain Artifact#isTreeArtifact Tree artifacts} and their {@linkplain
    * Artifact#isChildOfDeclaredDirectory children} must not be passed here. Instead, they should be
-   * passed to {@link #injectDirectory}.
+   * passed to {@link #injectTree}.
    *
    * @param output a regular output file
    * @param metadata the file metadata
    */
   void injectFile(Artifact output, FileArtifactValue metadata);
-
-  /**
-   * Injects the metadata of a tree artifact.
-   *
-   * <p>This can be used to save filesystem operations when the metadata is already known.
-   *
-   * @param output an output directory {@linkplain Artifact#isTreeArtifact tree artifact}
-   * @param children the metadata of the files stored in the directory
-   */
-  void injectDirectory(SpecialArtifact output, Map<TreeFileArtifact, FileArtifactValue> children);
 }

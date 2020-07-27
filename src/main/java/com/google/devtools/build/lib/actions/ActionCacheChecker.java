@@ -19,7 +19,7 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.cache.ActionCache;
 import com.google.devtools.build.lib.actions.cache.DigestUtils;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
@@ -250,6 +250,7 @@ public class ActionCacheChecker {
       Map<String, String> clientEnv,
       EventHandler handler,
       MetadataHandler metadataHandler,
+      ArtifactExpander artifactExpander,
       Map<String, String> remoteDefaultPlatformProperties) {
     // TODO(bazel-team): (2010) For RunfilesAction/SymlinkAction and similar actions that
     // produce only symlinks we should not check whether inputs are valid at all - all that matters
@@ -293,6 +294,7 @@ public class ActionCacheChecker {
         entry,
         handler,
         metadataHandler,
+        artifactExpander,
         actionInputs,
         clientEnv,
         remoteDefaultPlatformProperties)) {
@@ -308,11 +310,12 @@ public class ActionCacheChecker {
     return null;
   }
 
-  protected boolean mustExecute(
+  private boolean mustExecute(
       Action action,
       @Nullable ActionCache.Entry entry,
       EventHandler handler,
       MetadataHandler metadataHandler,
+      ArtifactExpander artifactExpander,
       NestedSet<Artifact> actionInputs,
       Map<String, String> clientEnv,
       Map<String, String> remoteDefaultPlatformProperties) {
@@ -337,9 +340,7 @@ public class ActionCacheChecker {
       reportChanged(handler, action);
       actionCache.accountMiss(MissReason.DIFFERENT_FILES);
       return true;
-    } else if (!entry
-        .getActionKey()
-        .equals(action.getKey(actionKeyContext, /*artifactExpander=*/ null))) {
+    } else if (!entry.getActionKey().equals(action.getKey(actionKeyContext, artifactExpander))) {
       reportCommand(handler, action);
       actionCache.accountMiss(MissReason.DIFFERENT_ACTION_KEY);
       return true;
@@ -383,6 +384,7 @@ public class ActionCacheChecker {
       Action action,
       Token token,
       MetadataHandler metadataHandler,
+      ArtifactExpander artifactExpander,
       Map<String, String> clientEnv,
       Map<String, String> remoteDefaultPlatformProperties)
       throws IOException {
@@ -398,7 +400,7 @@ public class ActionCacheChecker {
         computeUsedEnv(action, clientEnv, remoteDefaultPlatformProperties);
     ActionCache.Entry entry =
         new ActionCache.Entry(
-            action.getKey(actionKeyContext, /*artifactExpander=*/ null),
+            action.getKey(actionKeyContext, artifactExpander),
             usedEnvironment,
             action.discoversInputs());
     for (Artifact output : action.getOutputs()) {

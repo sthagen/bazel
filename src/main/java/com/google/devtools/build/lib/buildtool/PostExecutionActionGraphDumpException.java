@@ -13,28 +13,15 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
-import com.google.common.base.Preconditions;
-import com.google.devtools.build.lib.actions.CommandLineExpansionException;
-import java.io.IOException;
 
 /** For exceptions that arise from the post-execution action graph dump. */
 public class PostExecutionActionGraphDumpException extends Exception {
-  private final Exception rootCause;
 
-  PostExecutionActionGraphDumpException(Exception rootCause) {
-    Preconditions.checkArgument(
-        rootCause instanceof CommandLineExpansionException || rootCause instanceof IOException,
-        "Unexpected exception type: %s",
-        rootCause);
-    this.rootCause = rootCause;
+  PostExecutionActionGraphDumpException(Throwable cause) {
+    super(cause);
   }
 
-  public Exception getRootCause() {
-    return rootCause;
-  }
-
-  @Override
-  public String getMessage() {
-    return rootCause.getMessage();
+  PostExecutionActionGraphDumpException(String message, Throwable cause) {
+    super(message, cause);
   }
 }
