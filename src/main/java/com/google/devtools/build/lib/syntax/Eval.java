@@ -505,11 +505,8 @@ final class Eval {
     Object object = eval(fr, dot.getObject());
     String name = dot.getField().getName();
     try {
-      Object result = EvalUtils.getAttr(fr.thread, object, name);
-      if (result == null) {
-        throw EvalUtils.getMissingAttrException(object, name, fr.thread.getSemantics());
-      }
-      return result;
+      return Starlark.getattr(
+          fr.thread.mutability(), fr.thread.getSemantics(), object, name, /*defaultValue=*/ null);
     } catch (EvalException ex) {
       throw ex.ensureLocation(dot.getDotLocation());
     }
@@ -807,8 +804,9 @@ final class Eval {
 
   /** Returns an exception which should be thrown instead of the original one. */
   private static EvalException maybeTransformException(Node node, EvalException original) {
-    // TODO(adonovan): the only place that should be doing this is Starlark.fastcall,
-    // and it should grab the entire callstack from the thread at that moment.
+    // TODO(adonovan): the only place that should be adding stack frames to the
+    // exception is Starlark.fastcall, and it should grab the entire callstack
+    // from the thread at that moment, with no reference to syntax.
 
     // If there is already a non-empty stack trace, we only add this node iff it describes a
     // new scope (e.g. CallExpression).

@@ -160,6 +160,7 @@ def _cc_import_impl(ctx):
         static_library = static_library,
         pic_static_library = pic_static_library,
         interface_library = ctx.file.interface_library,
+        dynamic_library = ctx.file.shared_library,
         pic_objects = ctx.files.pic_objects,
         objects = ctx.files.objects,
         alwayslink = ctx.attr.alwayslink,
@@ -184,7 +185,14 @@ def _cc_import_impl(ctx):
         name = ctx.label.name,
     )
 
-    return [CcInfo(compilation_context = compilation_context, linking_context = linking_context)]
+    this_cc_info = CcInfo(compilation_context = compilation_context, linking_context = linking_context)
+    cc_infos = [this_cc_info]
+
+    for dep in ctx.attr.deps:
+        cc_infos.append(dep[CcInfo])
+    merged_cc_info = cc_common.merge_cc_infos(cc_infos = cc_infos)
+
+    return [merged_cc_info]
 
 cc_import = rule(
     implementation = _cc_import_impl,
@@ -192,7 +200,7 @@ cc_import = rule(
         "hdrs": attr.label_list(allow_files = [".h"]),
         "static_library": attr.label(allow_single_file = [".a", ".lib"]),
         "pic_static_library": attr.label(allow_single_file = [".pic.a", ".pic.lib"]),
-        "shared_library": attr.label(allow_single_file = True),
+        "shared_library": attr.label(allow_single_file = [".so", ".dll", ".dylib"]),
         "interface_library": attr.label(
             allow_single_file = [".ifso", ".tbd", ".lib", ".so", ".dylib"],
         ),
@@ -206,6 +214,7 @@ cc_import = rule(
         "alwayslink": attr.bool(default = False),
         "linkopts": attr.string_list(),
         "includes": attr.string_list(),
+        "deps": attr.label_list(),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
     },
     toolchains = ["@rules_cc//cc:toolchain_type"],  # copybara-use-repo-external-label
