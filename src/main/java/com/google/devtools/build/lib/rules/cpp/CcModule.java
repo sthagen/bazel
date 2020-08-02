@@ -59,7 +59,7 @@ import com.google.devtools.build.lib.rules.cpp.CcToolchainVariables.StringValueP
 import com.google.devtools.build.lib.rules.cpp.CppActionConfigs.CppPlatform;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkingMode;
-import com.google.devtools.build.lib.skylarkbuildapi.cpp.CcModuleApi;
+import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcModuleApi;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
@@ -1818,10 +1818,12 @@ public abstract class CcModule
             .setHeadersCheckingMode(
                 getSemantics()
                     .determineStarlarkHeadersCheckingMode(
+                        actions.getRuleContext(),
                         actions
                             .getActionConstructionContext()
                             .getConfiguration()
-                            .getFragment(CppConfiguration.class)));
+                            .getFragment(CppConfiguration.class),
+                        ccToolchainProvider));
     if (disallowNopicOutputs) {
       helper.setGenerateNoPicAction(false);
     }

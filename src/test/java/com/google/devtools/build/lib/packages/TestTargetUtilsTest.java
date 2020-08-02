@@ -72,7 +72,7 @@ public class TestTargetUtilsTest extends PackageLoadingTestCase {
         "",
         "py_binary(name = 'notest',",
         "        srcs = ['notest.py'])",
-        "cc_library(name = 'xUnit', data = ['//tools:test_sharding_compliant'])",
+        "cc_library(name = 'xUnit')",
         "",
         "test_suite( name = 'smallTests', tags=['small'])");
 
@@ -184,7 +184,7 @@ public class TestTargetUtilsTest extends PackageLoadingTestCase {
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
             .setNumThreads(1)
-            .setEventHander(reporter)
+            .setEventHandler(reporter)
             .build();
     EvaluationResult<TestsForTargetPatternValue> result =
         getSkyframeExecutor().getDriver().evaluate(ImmutableList.of(key), evaluationContext);

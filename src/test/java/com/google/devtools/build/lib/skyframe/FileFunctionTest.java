@@ -20,7 +20,6 @@ import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -86,6 +85,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -104,7 +104,7 @@ public class FileFunctionTest {
       EvaluationContext.newBuilder()
           .setKeepGoing(false)
           .setNumThreads(DEFAULT_THREAD_COUNT)
-          .setEventHander(NullEventHandler.INSTANCE)
+          .setEventHandler(NullEventHandler.INSTANCE)
           .build();
 
   private InMemoryFileSystem fs;
@@ -202,7 +202,7 @@ public class FileFunctionTest {
     RepositoryDelegatorFunction.REPOSITORY_OVERRIDES.set(differencer, ImmutableMap.of());
     PrecomputedValue.STARLARK_SEMANTICS.set(differencer, StarlarkSemantics.DEFAULT);
     RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE.set(
-        differencer, Optional.absent());
+        differencer, Optional.empty());
     return new SequentialBuildDriver(evaluator);
   }
 
@@ -1011,7 +1011,7 @@ public class FileFunctionTest {
         EvaluationContext.newBuilder()
             .setKeepGoing(true)
             .setNumThreads(DEFAULT_THREAD_COUNT)
-            .setEventHander(eventHandler)
+            .setEventHandler(eventHandler)
             .build();
     EvaluationResult<FileValue> result = driver.evaluate(keys, evaluationContext);
     assertThat(result.hasError()).isTrue();
@@ -1161,7 +1161,7 @@ public class FileFunctionTest {
         EvaluationContext.newBuilder()
             .setKeepGoing(true)
             .setNumThreads(DEFAULT_THREAD_COUNT)
-            .setEventHander(eventHandler)
+            .setEventHandler(eventHandler)
             .build();
     EvaluationResult<FileValue> result = driver.evaluate(keys, evaluationContext);
     assertThat(result.hasError()).isTrue();
@@ -1222,7 +1222,7 @@ public class FileFunctionTest {
         EvaluationContext.newBuilder()
             .setKeepGoing(true)
             .setNumThreads(DEFAULT_THREAD_COUNT)
-            .setEventHander(eventHandler)
+            .setEventHandler(eventHandler)
             .build();
     EvaluationResult<FileValue> result =
         driver.evaluate(ImmutableList.of(keyABC), evaluationContext);
@@ -1265,7 +1265,7 @@ public class FileFunctionTest {
         EvaluationContext.newBuilder()
             .setKeepGoing(true)
             .setNumThreads(DEFAULT_THREAD_COUNT)
-            .setEventHander(eventHandler)
+            .setEventHandler(eventHandler)
             .build();
     EvaluationResult<FileValue> result =
         driver.evaluate(ImmutableList.of(keyDir1AB), evaluationContext);
@@ -1308,7 +1308,7 @@ public class FileFunctionTest {
         EvaluationContext.newBuilder()
             .setKeepGoing(true)
             .setNumThreads(1)
-            .setEventHander(NullEventHandler.INSTANCE)
+            .setEventHandler(NullEventHandler.INSTANCE)
             .build();
     EvaluationResult<FileValue> result =
         driver.evaluate(ImmutableList.of(fooKey), evaluationContext);
