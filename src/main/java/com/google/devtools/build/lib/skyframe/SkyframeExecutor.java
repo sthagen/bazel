@@ -145,6 +145,7 @@ import com.google.devtools.build.lib.runtime.KeepGoingOption;
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.BuildConfiguration.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns;
 import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.FileDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
@@ -278,7 +279,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
 
   // Cache of parsed bzl files, for use when we're inlining ASTFileLookupFunction in
   // BzlLoadFunction. See the comments in BzlLoadFunction for motivations and details.
-  private final Cache<Label, ASTFileLookupValue> astFileLookupValueCache =
+  private final Cache<ASTFileLookupValue.Key, ASTFileLookupValue> astFileLookupValueCache =
       CacheBuilder.newBuilder().build();
 
   private final AtomicInteger numPackagesLoaded = new AtomicInteger(0);
@@ -488,10 +489,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     map.put(SkyFunctions.CONTAINING_PACKAGE_LOOKUP, new ContainingPackageLookupFunction());
     map.put(
         SkyFunctions.AST_FILE_LOOKUP,
-        new ASTFileLookupFunction(ruleClassProvider, DigestHashFunction.getDefaultUnchecked()));
-    map.put(
-        SkyFunctions.STARLARK_BUILTINS,
-        new StarlarkBuiltinsFunction(ruleClassProvider, pkgFactory));
+        new ASTFileLookupFunction(pkgFactory, DigestHashFunction.getDefaultUnchecked()));
+    map.put(SkyFunctions.STARLARK_BUILTINS, new StarlarkBuiltinsFunction(pkgFactory));
     map.put(SkyFunctions.BZL_LOAD, newBzlLoadFunction(ruleClassProvider, pkgFactory));
     map.put(SkyFunctions.GLOB, newGlobFunction());
     map.put(SkyFunctions.TARGET_PATTERN, new TargetPatternFunction());
@@ -651,10 +650,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
   protected SkyFunction newBzlLoadFunction(
       RuleClassProvider ruleClassProvider, PackageFactory pkgFactory) {
     return BzlLoadFunction.create(
-        ruleClassProvider,
-        this.pkgFactory,
-        DigestHashFunction.getDefaultUnchecked(),
-        astFileLookupValueCache);
+        this.pkgFactory, DigestHashFunction.getDefaultUnchecked(), astFileLookupValueCache);
   }
 
   protected PerBuildSyscallCache newPerBuildSyscallCache(int concurrencyLevel) {
@@ -1422,9 +1418,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       // We need to take additional steps to keep the corresponding data structures in sync.
       // (Some of the additional steps are carried out by ConfiguredTargetValueInvalidationListener,
       // and some by BuildView#buildHasIncompatiblePackageRoots and #updateSkyframe.)
-      artifactFactory
-          .setSourceArtifactRoots(
-              createSourceArtifactRootMapOnNewPkgLocator(oldLocator, pkgLocator));
+      artifactFactory.setSourceArtifactRoots(
+          createSourceArtifactRootMapOnNewPkgLocator(oldLocator, pkgLocator));
     }
   }
 
@@ -2887,7 +2882,9 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       ErrorInfo errorInfo = evalResult.getError(key);
       TargetParsingException exc;
       if (!errorInfo.getCycleInfo().isEmpty()) {
-        exc = new TargetParsingException("cycles detected during target parsing");
+        exc =
+            new TargetParsingException(
+                "cycles detected during target parsing", TargetPatterns.Code.CYCLE);
         getCyclesReporter().reportCycles(errorInfo.getCycleInfo(), key, eventHandler);
         // Fallback: we don't know which patterns failed, specifically, so we report the entire
         // set as being in error.
@@ -2909,17 +2906,13 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       eventHandler.post(PatternExpandingError.failed(targetPatterns, e.getMessage()));
     }
 
-    // Following SkyframeTargetPatternEvaluator, we convert any exception into a
-    // TargetParsingException or DetailedTargetParsingException if DetailedExitCode is
-    // available.
+    // Following SkyframeTargetPatternEvaluator, we create with a new TargetParsingException either
+    // with an existing DetailedExitCode, or with a FailureDetail Code.
+    Throwable cause = e instanceof TargetParsingException ? e.getCause() : e;
     return detailedExitCode != null
-        ? new DetailedTargetParsingException(
-            (e instanceof TargetParsingException) ? e.getCause() : e,
-            e.getMessage(),
-            detailedExitCode)
-        : (e instanceof TargetParsingException)
-            ? (TargetParsingException) e
-            : new TargetParsingException(e.getMessage(), e);
+        ? new TargetParsingException(e.getMessage(), cause, detailedExitCode)
+        : new TargetParsingException(
+            e.getMessage(), cause, TargetPatterns.Code.TARGET_PATTERN_PARSE_FAILURE);
   }
 
   @Nullable

@@ -178,7 +178,7 @@ public class ObjcStarlarkTest extends ObjcRuleTestCase {
         "examples/rule/apple_rules.bzl",
         "def my_rule_impl(ctx):",
         "   dep = ctx.attr.deps[0]",
-        "   objc_provider = dep.objc",
+        "   objc_provider = dep.objc", // this is line 3
         "   return []",
         "my_rule = rule(implementation = my_rule_impl,",
         "   attrs = {",
@@ -204,11 +204,12 @@ public class ObjcStarlarkTest extends ObjcRuleTestCase {
     assertThat(e)
         .hasMessageThat()
         .contains("File \"/workspace/examples/apple_starlark/BUILD\", line 3");
-      assertThat(e).hasMessageThat().contains("my_rule(name = 'my_target')");
-      assertThat(e)
-          .hasMessageThat()
-          .contains("File \"/workspace/examples/rule/apple_rules.bzl\", line 3, in my_rule_impl");
-      assertThat(e).hasMessageThat().contains("dep.objc");
+    assertThat(e).hasMessageThat().contains("my_rule(name = 'my_target')"); // (fake source)
+    assertThat(e)
+        .hasMessageThat()
+        .contains(
+            "File \"/workspace/examples/rule/apple_rules.bzl\", line 3, column 23, in"
+                + " my_rule_impl");
     assertThat(e)
         .hasMessageThat()
         .contains(
@@ -1313,7 +1314,7 @@ public class ObjcStarlarkTest extends ObjcRuleTestCase {
         .containsExactly(PathFragment.create("path1"));
 
     scratch.file(
-        "examples/objc_skylark2/BUILD",
+        "examples/objc_starlark2/BUILD",
         "objc_library(",
         "   name = 'direct_dep',",
         "   deps = ['//examples/objc_starlark:my_target']",
@@ -1324,13 +1325,13 @@ public class ObjcStarlarkTest extends ObjcRuleTestCase {
         ")");
 
     ObjcProvider starlarkProviderDirectDepender =
-        getConfiguredTarget("//examples/objc_skylark2:direct_dep")
+        getConfiguredTarget("//examples/objc_starlark2:direct_dep")
             .get(ObjcProvider.STARLARK_CONSTRUCTOR);
     assertThat(starlarkProviderDirectDepender.include())
         .containsExactly(PathFragment.create("path2"));
 
     ObjcProvider starlarkProviderIndirectDepender =
-        getConfiguredTarget("//examples/objc_skylark2:indirect_dep")
+        getConfiguredTarget("//examples/objc_starlark2:indirect_dep")
             .get(ObjcProvider.STARLARK_CONSTRUCTOR);
     assertThat(starlarkProviderIndirectDepender.include())
         .containsExactly(PathFragment.create("path2"));
@@ -1357,14 +1358,14 @@ public class ObjcStarlarkTest extends ObjcRuleTestCase {
         .containsExactly(PathFragment.create("path1"));
 
     scratch.file(
-        "examples/objc_skylark2/BUILD",
+        "examples/objc_starlark2/BUILD",
         "objc_library(",
         "   name = 'direct_dep',",
         "   deps = ['//examples/objc_starlark:my_target']",
         ")");
 
     ObjcProvider starlarkProviderDirectDepender =
-        getConfiguredTarget("//examples/objc_skylark2:direct_dep")
+        getConfiguredTarget("//examples/objc_starlark2:direct_dep")
             .get(ObjcProvider.STARLARK_CONSTRUCTOR);
     assertThat(starlarkProviderDirectDepender.include()).isEmpty();
   }
@@ -1383,14 +1384,14 @@ public class ObjcStarlarkTest extends ObjcRuleTestCase {
         .containsExactly(PathFragment.create("path"));
 
     scratch.file(
-        "examples/objc_skylark2/BUILD",
+        "examples/objc_starlark2/BUILD",
         "objc_library(",
         "   name = 'direct_dep',",
         "   deps = ['//examples/objc_starlark:my_target']",
         ")");
 
     ObjcProvider starlarkProviderDirectDepender =
-        getConfiguredTarget("//examples/objc_skylark2:direct_dep")
+        getConfiguredTarget("//examples/objc_starlark2:direct_dep")
             .get(ObjcProvider.STARLARK_CONSTRUCTOR);
     assertThat(starlarkProviderDirectDepender.getStrictDependencyIncludes()).isEmpty();
   }

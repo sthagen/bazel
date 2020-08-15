@@ -51,7 +51,6 @@ import com.google.devtools.build.lib.packages.util.MockToolsConfig;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.server.FailureDetails.PackageLoading;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
-import com.google.devtools.build.lib.skyframe.DetailedTargetParsingException;
 import com.google.devtools.build.lib.skyframe.PatternExpandingError;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
@@ -661,6 +660,20 @@ public class LoadingPhaseRunnerTest {
         .containsExactlyElementsIn(getLabels("//cc:my_test"));
   }
 
+  @Test
+  public void testBuildFilterDoesNotApplyToTests() throws Exception {
+    tester.addFile(
+        "foo/BUILD",
+        "sh_test(name = 'foo', srcs = ['foo.sh'])",
+        "sh_library(name = 'lib', srcs = ['lib.sh'])",
+        "sh_library(name = 'nofoo', srcs = ['nofoo.sh'], tags = ['nofoo'])");
+    tester.useLoadingOptions("--build_tag_filters=nofoo");
+    TargetPatternPhaseValue result = assertNoErrors(tester.loadTests("//foo:all"));
+    assertThat(result.getTargetLabels())
+        .containsExactlyElementsIn(getLabels("//foo:foo", "//foo:nofoo"));
+    assertThat(result.getTestsToRunLabels()).containsExactlyElementsIn(getLabels("//foo:foo"));
+  }
+
   /**
    * Regression test for bug: "blaze is lying to me about what tests exist (have been specified)"
    */
@@ -1139,8 +1152,8 @@ public class LoadingPhaseRunnerTest {
       assertThat(value.hasError()).isTrue();
       tester.assertContainsWarning("Target pattern parsing failed");
     } else {
-      DetailedTargetParsingException exn =
-          assertThrows(DetailedTargetParsingException.class, () -> tester.load(patterns));
+      TargetParsingException exn =
+          assertThrows(TargetParsingException.class, () -> tester.load(patterns));
       assertThat(exn).hasCauseThat().isInstanceOf(BuildFileContainsErrorsException.class);
       assertThat(exn).hasCauseThat().hasMessageThat().contains("Extension 'bad/f1.bzl' has errors");
       DetailedExitCode detailedExitCode = exn.getDetailedExitCode();

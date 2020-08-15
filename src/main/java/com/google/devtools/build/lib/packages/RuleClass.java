@@ -58,7 +58,6 @@ import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.syntax.Starlark;
 import com.google.devtools.build.lib.syntax.StarlarkCallable;
 import com.google.devtools.build.lib.syntax.StarlarkThread;
@@ -235,19 +234,19 @@ public class RuleClass {
      * configured target creation in cases where it can no longer continue.
      */
     final class RuleErrorException extends Exception {
-      RuleErrorException() {
+      public RuleErrorException() {
         super();
       }
 
-      RuleErrorException(String message) {
+      public RuleErrorException(String message) {
         super(message);
       }
 
-      RuleErrorException(Throwable cause) {
+      public RuleErrorException(Throwable cause) {
         super(cause);
       }
 
-      RuleErrorException(String message, Throwable cause) {
+      public RuleErrorException(String message, Throwable cause) {
         super(message, cause);
       }
     }
@@ -658,7 +657,6 @@ public class RuleClass {
     private final boolean starlark;
     private boolean starlarkTestable = false;
     private boolean documented;
-    private boolean publicByDefault = false;
     private boolean binaryOutput = true;
     private boolean workspaceOnly = false;
     private boolean isExecutableStarlark = false;
@@ -876,7 +874,6 @@ public class RuleClass {
           starlark,
           starlarkTestable,
           documented,
-          publicByDefault,
           binaryOutput,
           workspaceOnly,
           isExecutableStarlark,
@@ -1046,11 +1043,6 @@ public class RuleClass {
 
     public Builder setUndocumented() {
       documented = false;
-      return this;
-    }
-
-    public Builder publicByDefault() {
-      publicByDefault = true;
       return this;
     }
 
@@ -1558,7 +1550,6 @@ public class RuleClass {
   private final boolean isStarlark;
   private final boolean starlarkTestable;
   private final boolean documented;
-  private final boolean publicByDefault;
   private final boolean binaryOutput;
   private final boolean workspaceOnly;
   private final boolean isExecutableStarlark;
@@ -1696,7 +1687,6 @@ public class RuleClass {
       boolean isStarlark,
       boolean starlarkTestable,
       boolean documented,
-      boolean publicByDefault,
       boolean binaryOutput,
       boolean workspaceOnly,
       boolean isExecutableStarlark,
@@ -1735,7 +1725,6 @@ public class RuleClass {
     this.targetKind = name + Rule.targetKindSuffix();
     this.starlarkTestable = starlarkTestable;
     this.documented = documented;
-    this.publicByDefault = publicByDefault;
     this.binaryOutput = binaryOutput;
     this.implicitOutputsFunction = implicitOutputsFunction;
     this.transitionFactory = transitionFactory;
@@ -2326,30 +2315,6 @@ public class RuleClass {
         /*explicit=*/false);
   }
 
-  public void checkAttributesNonEmpty(
-      RuleErrorConsumer ruleErrorConsumer, AttributeMap attributes) {
-    for (String attributeName : attributes.getAttributeNames()) {
-      Attribute attr = attributes.getAttributeDefinition(attributeName);
-      if (!attr.isNonEmpty()) {
-        continue;
-      }
-      Object attributeValue = attributes.get(attributeName, attr.getType());
-
-      boolean isEmpty = false;
-      if (attributeValue instanceof Sequence) {
-        isEmpty = ((Sequence<?>) attributeValue).isEmpty();
-      } else if (attributeValue instanceof List<?>) {
-        isEmpty = ((List<?>) attributeValue).isEmpty();
-      } else if (attributeValue instanceof Map<?, ?>) {
-        isEmpty = ((Map<?, ?>) attributeValue).isEmpty();
-      }
-
-      if (isEmpty) {
-        ruleErrorConsumer.attributeError(attr.getName(), "attribute must be non empty");
-      }
-    }
-  }
-
   /**
    * Report an error for each label that appears more than once in a LABEL_LIST attribute
    * of the given rule.
@@ -2573,10 +2538,6 @@ public class RuleClass {
 
   public boolean isDocumented() {
     return documented;
-  }
-
-  public boolean isPublicByDefault() {
-    return publicByDefault;
   }
 
   /**
