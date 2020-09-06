@@ -1104,8 +1104,10 @@ public class CcLibraryConfiguredTargetTest extends BuildViewTestCase {
             "cc_library(name = 'z', srcs = ['z.cc'])");
     String hiddenTopLevel =
         ActionsTestUtil.baseNamesOf(getOutputGroup(x, OutputGroupInfo.HIDDEN_TOP_LEVEL));
-    assertThat(hiddenTopLevel).contains("y.h.processed");
+    assertThat(hiddenTopLevel).doesNotContain("y.h.processed");
     assertThat(hiddenTopLevel).doesNotContain("z.pic.o");
+    String validation = ActionsTestUtil.baseNamesOf(getOutputGroup(x, OutputGroupInfo.VALIDATION));
+    assertThat(validation).contains("y.h.processed");
   }
 
   @Test
@@ -1598,12 +1600,12 @@ public class CcLibraryConfiguredTargetTest extends BuildViewTestCase {
         "def _impl(settings, attr):",
         "    _ignore = (settings, attr)",
         "    return [",
-        "        {'//command_line_option:cpu': 'k8'},",
+        "        {'//command_line_option:test_arg': ['foo']},",
         "    ]",
         "cpu_transition = transition(",
         "    implementation = _impl,",
         "    inputs = [],",
-        "    outputs = ['//command_line_option:cpu'],",
+        "    outputs = ['//command_line_option:test_arg'],",
         ")",
         "def _transitioned_file_impl(ctx):",
         "    return DefaultInfo(files = depset([ctx.file.src]))",

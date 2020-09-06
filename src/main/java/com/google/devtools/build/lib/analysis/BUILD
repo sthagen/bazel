@@ -146,7 +146,6 @@ java_library(
         ":toolchain_collection",
         ":toolchain_context",
         ":top_level_artifact_context",
-        ":transition_mode",
         ":transitive_info_collection",
         ":transitive_info_provider",
         ":transitive_info_provider_effective_class_helper",
@@ -361,7 +360,6 @@ java_library(
         ":toolchain_collection",
         ":toolchain_context",
         ":top_level_artifact_context",
-        ":transition_mode",
         ":transitive_info_collection",
         ":transitive_info_provider",
         ":transitive_info_provider_effective_class_helper",
@@ -1089,11 +1087,6 @@ java_library(
 )
 
 java_library(
-    name = "transition_mode",
-    srcs = ["TransitionMode.java"],
-)
-
-java_library(
     name = "transitive_info_collection",
     srcs = ["TransitiveInfoCollection.java"],
     deps = [
@@ -1297,7 +1290,6 @@ java_library(
         ":actions/abstract_file_write_action",
         ":actions/deterministic_writer",
         ":analysis_cluster",
-        ":transition_mode",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
@@ -2272,6 +2264,7 @@ java_library(
     srcs = ["test/TestTrimmingTransitionFactory.java"],
     deps = [
         ":config/build_options",
+        ":config/build_options_cache",
         ":config/fragment_options",
         ":config/transitions/no_transition",
         ":config/transitions/patch_transition",

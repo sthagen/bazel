@@ -30,9 +30,37 @@ load(
 )
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
+# The Xcode version from which that has support for deterministic mode
+_SUPPORTS_DETERMINISTIC_MODE = "10.2"
+
+def _compare_versions(dv1, v2):
+    """Return value is <0, 0, >0 depending on DottedVersion dv1 comparison to string v2."""
+    return dv1.compare_to(apple_common.dotted_version(v2))
+
+def _can_use_deterministic_libtool(ctx):
+    """Returns `True` if the current version of `libtool` has support for
+    deterministic mode, and `False` otherwise."""
+    xcode_config = ctx.attr._xcode_config[apple_common.XcodeVersionConfig]
+    xcode_version = xcode_config.xcode_version()
+    if _compare_versions(xcode_version, _SUPPORTS_DETERMINISTIC_MODE) >= 0:
+        return True
+    else:
+        return False
+
+def _deterministic_libtool_flags(ctx):
+    """Returns additional `libtool` flags to enable deterministic mode, if they
+    are available."""
+    if _can_use_deterministic_libtool(ctx):
+        return ["-D"]
+    return []
+
 def _impl(ctx):
     if (ctx.attr.cpu == "darwin_x86_64"):
         toolchain_identifier = "darwin_x86_64"
+    elif (ctx.attr.cpu == "darwin_arm64"):
+        toolchain_identifier = "darwin_arm64"
+    elif (ctx.attr.cpu == "darwin_arm64e"):
+        toolchain_identifier = "darwin_arm64e"
     elif (ctx.attr.cpu == "ios_arm64"):
         toolchain_identifier = "ios_arm64"
     elif (ctx.attr.cpu == "ios_arm64e"):
@@ -63,6 +91,8 @@ def _impl(ctx):
     if (ctx.attr.cpu == "armeabi-v7a"):
         host_system_name = "armeabi-v7a"
     elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -100,6 +130,10 @@ def _impl(ctx):
         target_system_name = "x86_64-apple-ios"
     elif (ctx.attr.cpu == "darwin_x86_64"):
         target_system_name = "x86_64-apple-macosx"
+    elif (ctx.attr.cpu == "darwin_arm64"):
+        target_system_name = "arm64-apple-macosx"
+    elif (ctx.attr.cpu == "darwin_arm64e"):
+        target_system_name = "arm64e-apple-macosx"
     elif (ctx.attr.cpu == "tvos_x86_64"):
         target_system_name = "x86_64-apple-tvos"
     elif (ctx.attr.cpu == "watchos_x86_64"):
@@ -111,6 +145,10 @@ def _impl(ctx):
         target_cpu = "armeabi-v7a"
     elif (ctx.attr.cpu == "darwin_x86_64"):
         target_cpu = "darwin_x86_64"
+    elif (ctx.attr.cpu == "darwin_arm64"):
+        target_cpu = "darwin_arm64"
+    elif (ctx.attr.cpu == "darwin_arm64e"):
+        target_cpu = "darwin_arm64e"
     elif (ctx.attr.cpu == "ios_arm64"):
         target_cpu = "ios_arm64"
     elif (ctx.attr.cpu == "ios_arm64e"):
@@ -144,7 +182,9 @@ def _impl(ctx):
           ctx.attr.cpu == "ios_i386" or
           ctx.attr.cpu == "ios_x86_64"):
         target_libc = "ios"
-    elif (ctx.attr.cpu == "darwin_x86_64"):
+    elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e"):
         target_libc = "macosx"
     elif (ctx.attr.cpu == "tvos_arm64" or
           ctx.attr.cpu == "tvos_x86_64"):
@@ -163,7 +203,9 @@ def _impl(ctx):
         abi_version = "armeabi-v7a"
     elif (ctx.attr.cpu == "darwin_x86_64"):
         abi_version = "darwin_x86_64"
-    elif (ctx.attr.cpu == "ios_arm64" or
+    elif (ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
+          ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
           ctx.attr.cpu == "ios_i386" or
@@ -182,7 +224,9 @@ def _impl(ctx):
         abi_libc_version = "armeabi-v7a"
     elif (ctx.attr.cpu == "darwin_x86_64"):
         abi_libc_version = "darwin_x86_64"
-    elif (ctx.attr.cpu == "ios_arm64" or
+    elif (ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
+          ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
           ctx.attr.cpu == "ios_i386" or
@@ -296,6 +340,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -395,7 +441,8 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "ios_arm64" or
-          ctx.attr.cpu == "tvos_arm64"):
+          ctx.attr.cpu == "tvos_arm64" or
+          ctx.attr.cpu == "darwin_arm64"):
         objc_compile_action = action_config(
             action_name = ACTION_NAMES.objc_compile,
             flag_sets = [
@@ -427,7 +474,8 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "ios_arm64e"):
+    elif (ctx.attr.cpu == "ios_arm64e" or
+          ctx.attr.cpu == "darwin_arm64e"):
         objc_compile_action = action_config(
             action_name = ACTION_NAMES.objc_compile,
             flag_sets = [
@@ -752,7 +800,8 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "ios_arm64" or
-          ctx.attr.cpu == "tvos_arm64"):
+          ctx.attr.cpu == "tvos_arm64" or
+          ctx.attr.cpu == "darwin_arm64"):
         objcpp_executable_action = action_config(
             action_name = "objc++-executable",
             flag_sets = [
@@ -814,7 +863,8 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "ios_arm64e"):
+    elif (ctx.attr.cpu == "ios_arm64e" or
+          ctx.attr.cpu == "darwin_arm64e"):
         objcpp_executable_action = action_config(
             action_name = "objc++-executable",
             flag_sets = [
@@ -1160,6 +1210,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -1240,6 +1292,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -1301,6 +1355,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -1416,7 +1472,8 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "ios_arm64" or
-          ctx.attr.cpu == "tvos_arm64"):
+          ctx.attr.cpu == "tvos_arm64" or
+          ctx.attr.cpu == "darwin_arm64"):
         objcpp_compile_action = action_config(
             action_name = ACTION_NAMES.objcpp_compile,
             flag_sets = [
@@ -1451,7 +1508,8 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "ios_arm64e"):
+    elif (ctx.attr.cpu == "ios_arm64e" or
+          ctx.attr.cpu == "darwin_arm64e"):
         objcpp_compile_action = action_config(
             action_name = ACTION_NAMES.objcpp_compile,
             flag_sets = [
@@ -1694,6 +1752,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -1753,6 +1813,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -1794,7 +1856,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -1825,7 +1887,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -1850,14 +1912,15 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "ios_arm64" or
-          ctx.attr.cpu == "tvos_arm64"):
+          ctx.attr.cpu == "tvos_arm64" or
+          ctx.attr.cpu == "darwin_arm64"):
         objc_archive_action = action_config(
             action_name = "objc-archive",
             flag_sets = [
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -1881,14 +1944,15 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "ios_arm64e"):
+    elif (ctx.attr.cpu == "ios_arm64e" or
+          ctx.attr.cpu == "darwin_arm64e"):
         objc_archive_action = action_config(
             action_name = "objc-archive",
             flag_sets = [
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -1919,7 +1983,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -1950,7 +2014,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -1982,7 +2046,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -2016,7 +2080,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-filelist",
@@ -2176,7 +2240,8 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "ios_arm64" or
-          ctx.attr.cpu == "tvos_arm64"):
+          ctx.attr.cpu == "tvos_arm64" or
+          ctx.attr.cpu == "darwin_arm64"):
         objc_executable_action = action_config(
             action_name = "objc-executable",
             flag_sets = [
@@ -2242,7 +2307,8 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "ios_arm64e"):
+    elif (ctx.attr.cpu == "ios_arm64e" or
+          ctx.attr.cpu == "darwin_arm64e"):
         objc_executable_action = action_config(
             action_name = "objc-executable",
             flag_sets = [
@@ -2607,6 +2673,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -2692,6 +2760,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -2755,6 +2825,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -2798,7 +2870,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -2839,7 +2911,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -2881,7 +2953,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -2922,7 +2994,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -2963,7 +3035,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -3004,7 +3076,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -3046,7 +3118,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -3081,6 +3153,8 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_x86_64" or
           ctx.attr.cpu == "tvos_x86_64" or
           ctx.attr.cpu == "watchos_x86_64"):
@@ -3090,7 +3164,7 @@ def _impl(ctx):
                 flag_set(
                     flag_groups = [
                         flag_group(
-                            flags = [
+                            flags = _deterministic_libtool_flags(ctx) + [
                                 "-no_warning_for_no_symbols",
                                 "-static",
                                 "-arch_only",
@@ -3134,6 +3208,8 @@ def _impl(ctx):
             tools = [tool(path = "/bin/false")],
         )
     elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -3194,7 +3270,9 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "darwin_x86_64"):
+    elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e"):
         apply_default_compiler_flags_feature = feature(
             name = "apply_default_compiler_flags",
             flag_sets = [
@@ -3328,6 +3406,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -3421,6 +3501,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -3503,7 +3585,9 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "darwin_x86_64"):
+    elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e"):
         contains_objc_source_feature = feature(
             name = "contains_objc_source",
             flag_sets = [
@@ -3789,6 +3873,78 @@ def _impl(ctx):
                 ),
             ],
         )
+    elif (ctx.attr.cpu == "darwin_arm64"):
+        default_link_flags_feature = feature(
+            name = "default_link_flags",
+            enabled = True,
+            flag_sets = [
+                flag_set(
+                    actions = all_link_actions +
+                              ["objc-executable", "objc++-executable"],
+                    flag_groups = [
+                        flag_group(
+                            flags = [
+                                "-no-canonical-prefixes",
+                                "-target",
+                                "arm64-apple-macosx",
+                            ],
+                        ),
+                    ],
+                ),
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.cpp_link_dynamic_library,
+                        ACTION_NAMES.cpp_link_nodeps_dynamic_library,
+                    ],
+                    flag_groups = [flag_group(flags = ["-undefined", "dynamic_lookup"])],
+                ),
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.cpp_link_executable,
+                        "objc-executable",
+                        "objc++-executable",
+                    ],
+                    flag_groups = [flag_group(flags = ["-undefined", "dynamic_lookup"])],
+                    with_features = [with_feature_set(features = ["dynamic_linking_mode"])],
+                ),
+            ],
+        )
+    elif (ctx.attr.cpu == "darwin_arm64e"):
+        default_link_flags_feature = feature(
+            name = "default_link_flags",
+            enabled = True,
+            flag_sets = [
+                flag_set(
+                    actions = all_link_actions +
+                              ["objc-executable", "objc++-executable"],
+                    flag_groups = [
+                        flag_group(
+                            flags = [
+                                "-no-canonical-prefixes",
+                                "-target",
+                                "arm64e-apple-macos",
+                            ],
+                        ),
+                    ],
+                ),
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.cpp_link_dynamic_library,
+                        ACTION_NAMES.cpp_link_nodeps_dynamic_library,
+                    ],
+                    flag_groups = [flag_group(flags = ["-undefined", "dynamic_lookup"])],
+                ),
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.cpp_link_executable,
+                        "objc-executable",
+                        "objc++-executable",
+                    ],
+                    flag_groups = [flag_group(flags = ["-undefined", "dynamic_lookup"])],
+                    with_features = [with_feature_set(features = ["dynamic_linking_mode"])],
+                ),
+            ],
+        )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "watchos_arm64_32" or
           ctx.attr.cpu == "watchos_x86_64"):
@@ -4032,7 +4188,9 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "darwin_x86_64"):
+    elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e"):
         version_min_feature = feature(
             name = "version_min",
             flag_sets = [
@@ -4427,7 +4585,9 @@ def _impl(ctx):
                 ),
             ],
         )
-    elif (ctx.attr.cpu == "darwin_x86_64"):
+    elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e"):
         apply_implicit_frameworks_feature = feature(
             name = "apply_implicit_frameworks",
             flag_sets = [
@@ -4939,6 +5099,68 @@ def _impl(ctx):
                 ),
             ],
         )
+    elif (ctx.attr.cpu == "darwin_arm64"):
+        unfiltered_compile_flags_feature = feature(
+            name = "unfiltered_compile_flags",
+            flag_sets = [
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.assemble,
+                        ACTION_NAMES.preprocess_assemble,
+                        ACTION_NAMES.c_compile,
+                        ACTION_NAMES.cpp_compile,
+                        ACTION_NAMES.cpp_header_parsing,
+                        ACTION_NAMES.cpp_module_compile,
+                        ACTION_NAMES.cpp_module_codegen,
+                        ACTION_NAMES.linkstamp_compile,
+                    ],
+                    flag_groups = [
+                        flag_group(
+                            flags = [
+                                "-no-canonical-prefixes",
+                                "-Wno-builtin-macro-redefined",
+                                "-D__DATE__=\"redacted\"",
+                                "-D__TIMESTAMP__=\"redacted\"",
+                                "-D__TIME__=\"redacted\"",
+                                "-target",
+                                "arm64-apple-macosx",
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
+    elif (ctx.attr.cpu == "darwin_arm64e"):
+        unfiltered_compile_flags_feature = feature(
+            name = "unfiltered_compile_flags",
+            flag_sets = [
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.assemble,
+                        ACTION_NAMES.preprocess_assemble,
+                        ACTION_NAMES.c_compile,
+                        ACTION_NAMES.cpp_compile,
+                        ACTION_NAMES.cpp_header_parsing,
+                        ACTION_NAMES.cpp_module_compile,
+                        ACTION_NAMES.cpp_module_codegen,
+                        ACTION_NAMES.linkstamp_compile,
+                    ],
+                    flag_groups = [
+                        flag_group(
+                            flags = [
+                                "-no-canonical-prefixes",
+                                "-Wno-builtin-macro-redefined",
+                                "-D__DATE__=\"redacted\"",
+                                "-D__TIMESTAMP__=\"redacted\"",
+                                "-D__TIME__=\"redacted\"",
+                                "-target",
+                                "arm64e-apple-macosx",
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64"):
         unfiltered_compile_flags_feature = feature(
@@ -5003,7 +5225,12 @@ def _impl(ctx):
                 actions = [ACTION_NAMES.cpp_link_static_library],
                 flag_groups = [
                     flag_group(
-                        flags = ["-no_warning_for_no_symbols", "-static", "-o", "%{output_execpath}"],
+                        flags = _deterministic_libtool_flags(ctx) + [
+                            "-no_warning_for_no_symbols",
+                            "-static",
+                            "-o",
+                            "%{output_execpath}",
+                        ],
                         expand_if_available = "output_execpath",
                     ),
                 ],
@@ -5092,6 +5319,8 @@ def _impl(ctx):
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
           ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -5298,6 +5527,8 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_armv7" or
           ctx.attr.cpu == "ios_i386" or
@@ -5484,7 +5715,9 @@ def _impl(ctx):
         ],
     )
 
-    if (ctx.attr.cpu == "darwin_x86_64"):
+    # Kernel extensions for Apple Silicon are arm64e.
+    if (ctx.attr.cpu == "darwin_x86_64" or
+        ctx.attr.cpu == "darwin_arm64e"):
         kernel_extension_feature = feature(
             name = "kernel_extension",
             flag_sets = [
@@ -5506,6 +5739,7 @@ def _impl(ctx):
             ],
         )
     elif (ctx.attr.cpu == "armeabi-v7a" or
+          ctx.attr.cpu == "darwin_arm64" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or
@@ -5624,7 +5858,9 @@ def _impl(ctx):
         provides = ["profile"],
     )
 
-    if (ctx.attr.cpu == "darwin_x86_64"):
+    if (ctx.attr.cpu == "darwin_x86_64" or
+        ctx.attr.cpu == "darwin_arm64" or
+        ctx.attr.cpu == "darwin_arm64e"):
         link_cocoa_feature = feature(
             name = "link_cocoa",
             flag_sets = [
@@ -5701,7 +5937,9 @@ def _impl(ctx):
         ctx.attr.cpu == "tvos_arm64" or
         ctx.attr.cpu == "watchos_arm64_32" or
         ctx.attr.cpu == "watchos_armv7k" or
-        ctx.attr.cpu == "darwin_x86_64"):
+        ctx.attr.cpu == "darwin_x86_64" or
+        ctx.attr.cpu == "darwin_arm64" or
+        ctx.attr.cpu == "darwin_arm64e"):
         bitcode_embedded_feature = feature(
             name = "bitcode_embedded",
             flag_sets = [
@@ -5763,6 +6001,28 @@ def _impl(ctx):
         bitcode_embedded_markers_feature = feature(name = "bitcode_embedded_markers")
         bitcode_embedded_feature = feature(name = "bitcode_embedded")
 
+    generate_linkmap_feature = feature(
+        name = "generate_linkmap",
+        flag_sets = [
+            flag_set(
+                actions = [
+                    ACTION_NAMES.objc_executable,
+                    ACTION_NAMES.objcpp_executable,
+                ],
+                flag_groups = [
+                    flag_group(
+                        flags = [
+                            "-Xlinker",
+                            "-map",
+                            "-Xlinker",
+                            "%{linkmap_exec_path}",
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
     if (ctx.attr.cpu == "ios_arm64" or
         ctx.attr.cpu == "ios_arm64e" or
         ctx.attr.cpu == "ios_armv7" or
@@ -5787,6 +6047,7 @@ def _impl(ctx):
             default_compile_flags_feature,
             debug_prefix_map_pwd_is_dot_feature,
             generate_dsym_file_feature,
+            generate_linkmap_feature,
             oso_prefix_feature,
             contains_objc_source_feature,
             objc_actions_feature,
@@ -5845,7 +6106,9 @@ def _impl(ctx):
             compiler_output_flags_feature,
             objcopy_embed_flags_feature,
         ]
-    elif (ctx.attr.cpu == "darwin_x86_64"):
+    elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e"):
         features = [
             fastbuild_feature,
             no_legacy_features_feature,
@@ -5859,6 +6122,7 @@ def _impl(ctx):
             default_compile_flags_feature,
             debug_prefix_map_pwd_is_dot_feature,
             generate_dsym_file_feature,
+            generate_linkmap_feature,
             oso_prefix_feature,
             contains_objc_source_feature,
             objc_actions_feature,
@@ -5933,6 +6197,7 @@ def _impl(ctx):
             default_compile_flags_feature,
             debug_prefix_map_pwd_is_dot_feature,
             generate_dsym_file_feature,
+            generate_linkmap_feature,
             oso_prefix_feature,
             contains_objc_source_feature,
             objc_actions_feature,
@@ -6020,6 +6285,8 @@ def _impl(ctx):
             "strip": "/bin/false",
         }
     elif (ctx.attr.cpu == "darwin_x86_64" or
+          ctx.attr.cpu == "darwin_arm64" or
+          ctx.attr.cpu == "darwin_arm64e" or
           ctx.attr.cpu == "ios_arm64" or
           ctx.attr.cpu == "ios_arm64e" or
           ctx.attr.cpu == "ios_armv7" or

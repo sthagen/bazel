@@ -178,6 +178,7 @@ message Interrupted {
     MOBILE_INSTALL_COMMAND = 21 [(metadata) = { exit_code: 8 }];
     QUERY = 22 [(metadata) = { exit_code: 8 }];
     RUN_COMMAND = 23 [(metadata) = { exit_code: 8 }];
+    OPTIONS_PARSING = 27 [(metadata) = { exit_code: 8 }];
 
     reserved 1 to 3; // For internal use
     reserved 11 to 16; // For internal use
@@ -414,6 +415,7 @@ message Execution {
     CYCLE = 35 [(metadata) = { exit_code: 1 }];
     SOURCE_INPUT_MISSING = 36 [(metadata) = { exit_code: 1 }];
     UNEXPECTED_EXCEPTION = 37 [(metadata) = { exit_code: 1 }];
+    reserved 38;
   }
 
   Code code = 1;
@@ -596,7 +598,7 @@ message Query {
     QUERY_STDOUT_FLUSH_FAILURE = 13 [(metadata) = { exit_code: 36 }];
     ANALYSIS_QUERY_PREREQ_UNMET = 14 [(metadata) = { exit_code: 2 }];
     QUERY_RESULTS_FLUSH_FAILURE = 15 [(metadata) = { exit_code: 36 }];
-    UNCLOSED_QUOTATION_EXPRESSION_ERROR = 16 [(metadata) = { exit_code: 2 }];
+    reserved 16;
     VARIABLE_NAME_INVALID = 17 [(metadata) = { exit_code: 7 }];
     VARIABLE_UNDEFINED = 18 [(metadata) = { exit_code: 7 }];
     BUILDFILES_AND_LOADFILES_CANNOT_USE_OUTPUT_LOCATION_ERROR = 19
@@ -612,12 +614,13 @@ message Query {
     ARGUMENTS_MISSING = 28 [(metadata) = { exit_code: 7 }];
     RBUILDFILES_FUNCTION_REQUIRES_SKYQUERY = 29 [(metadata) = { exit_code: 7 }];
     FULL_TARGETS_NOT_SUPPORTED = 30 [(metadata) = { exit_code: 7 }];
-    UNEXPECTED_TOKEN_ERROR = 31 [(metadata) = { exit_code: 2 }];
-    INTEGER_LITERAL_MISSING = 32 [(metadata) = { exit_code: 2 }];
-    INVALID_STARTING_CHARACTER_ERROR = 33 [(metadata) = { exit_code: 2 }];
-    PREMATURE_END_OF_INPUT_ERROR = 34 [(metadata) = { exit_code: 2 }];
+    reserved 31 to 34;
+    // Indicates the user specified invalid query syntax.
     SYNTAX_ERROR = 35 [(metadata) = { exit_code: 2 }];
     OUTPUT_FORMATTER_IO_EXCEPTION = 36 [(metadata) = { exit_code: 36 }];
+    SKYQUERY_TRANSITIVE_TARGET_ERROR = 37 [(metadata) = { exit_code: 7 }];
+    SKYQUERY_TARGET_EXCEPTION = 38 [(metadata) = { exit_code: 7 }];
+    INVALID_LABEL_IN_TEST_SUITE = 39 [(metadata) = { exit_code: 7 }];
 
     reserved 7 to 12; // For internal use
   }
@@ -813,6 +816,8 @@ message ConfigurableQuery {
     ATTRIBUTE_MISSING = 7 [(metadata) = { exit_code: 2 }];
     INCORRECT_CONFIG_ARGUMENT_ERROR = 8 [(metadata) = { exit_code: 2 }];
     TARGET_MISSING = 9 [(metadata) = { exit_code: 2 }];
+    STARLARK_SYNTAX_ERROR = 10 [(metadata) = { exit_code: 2 }];
+    STARLARK_EVAL_ERROR = 11 [(metadata) = { exit_code: 2 }];
   }
 
   Code code = 1;
