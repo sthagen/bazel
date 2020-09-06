@@ -46,7 +46,6 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.ShToolchain;
-import com.google.devtools.build.lib.analysis.TransitionMode;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.FragmentCollection;
@@ -80,7 +79,6 @@ import com.google.devtools.build.lib.starlarkbuildapi.StarlarkRuleContextApi;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Dict;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.syntax.Starlark;
@@ -529,21 +527,21 @@ public final class StarlarkRuleContext implements StarlarkRuleContextApi<Constra
     return splitAttributes;
   }
 
-  /** See {@link RuleContext#getExecutablePrerequisite(String, TransitionMode)}. */
+  /** See {@link RuleContext#getExecutablePrerequisite(String)}. */
   @Override
   public StructImpl getExecutable() throws EvalException {
     checkMutable("executable");
     return attributesCollection.getExecutable();
   }
 
-  /** See {@link RuleContext#getPrerequisiteArtifact(String, TransitionMode)}. */
+  /** See {@link RuleContext#getPrerequisiteArtifact(String)}. */
   @Override
   public StructImpl getFile() throws EvalException {
     checkMutable("file");
     return attributesCollection.getFile();
   }
 
-  /** See {@link RuleContext#getPrerequisiteArtifacts(String, TransitionMode)}. */
+  /** See {@link RuleContext#getPrerequisiteArtifacts(String)}. */
   @Override
   public StructImpl getFiles() throws EvalException {
     checkMutable("files");
@@ -952,7 +950,7 @@ public final class StarlarkRuleContext implements StarlarkRuleContextApi<Constra
       command =
           helper.resolveCommandAndExpandLabels(command, attribute, /*allowDataInLabel=*/ false);
     }
-    if (!EvalUtils.isNullOrNone(makeVariablesUnchecked)) {
+    if (!Starlark.isNullOrNone(makeVariablesUnchecked)) {
       Map<String, String> makeVariables =
           Type.STRING_DICT.convert(makeVariablesUnchecked, "make_variables", ruleLabel);
       command = expandMakeVariables(attribute, command, makeVariables);

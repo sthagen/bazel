@@ -69,7 +69,7 @@ import com.google.devtools.build.lib.exec.RemoteLocalFallbackRegistry;
 import com.google.devtools.build.lib.exec.SpawnStrategyRegistry;
 import com.google.devtools.build.lib.exec.SpawnStrategyResolver;
 import com.google.devtools.build.lib.exec.SymlinkTreeStrategy;
-import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.profiler.GoogleAutoProfilerUtils;
 import com.google.devtools.build.lib.profiler.ProfilePhase;
@@ -133,7 +133,8 @@ public class ExecutionTool {
   private final SpawnStrategyRegistry spawnStrategyRegistry;
   private final ModuleActionContextRegistry actionContextRegistry;
 
-  ExecutionTool(CommandEnvironment env, BuildRequest request) throws AbruptExitException {
+  ExecutionTool(CommandEnvironment env, BuildRequest request)
+      throws AbruptExitException, InterruptedException {
     this.env = env;
     this.runtime = env.getRuntime();
     this.request = request;
@@ -474,8 +475,7 @@ public class ExecutionTool {
                 getExecRoot(),
                 runtime.getProductName(),
                 nonSymlinkedDirectoriesUnderExecRoot,
-                request.getOptions(StarlarkSemanticsOptions.class)
-                    .experimentalSiblingRepositoryLayout);
+                request.getOptions(BuildLanguageOptions.class).experimentalSiblingRepositoryLayout);
         symlinkForest.plantSymlinkForest();
       } catch (IOException e) {
         throw new AbruptExitException(
