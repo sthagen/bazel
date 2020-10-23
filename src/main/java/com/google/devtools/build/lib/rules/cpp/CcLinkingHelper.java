@@ -41,12 +41,12 @@ import com.google.devtools.build.lib.rules.cpp.Link.LinkerOrArchiver;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkingMode;
 import com.google.devtools.build.lib.rules.cpp.Link.Picness;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.LinkingInfoApi;
-import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
 
 /**
  * A class to create C/C++ link actions in a way that is consistent with cc_library. Rules that
@@ -201,6 +201,10 @@ public final class CcLinkingHelper {
       Preconditions.checkArgument(!Link.ARCHIVE_LIBRARY_FILETYPES.matches(basename));
       Preconditions.checkArgument(!Link.SHARED_LIBRARY_FILETYPES.matches(basename));
       this.nonCodeLinkerInputs.add(nonCodeLinkerInput);
+    }
+    if (fdoContext.getPropellerOptimizeInputFile() != null
+        && fdoContext.getPropellerOptimizeInputFile().getLdArtifact() != null) {
+      this.nonCodeLinkerInputs.add(fdoContext.getPropellerOptimizeInputFile().getLdArtifact());
     }
     return this;
   }

@@ -18,7 +18,6 @@ import static com.google.devtools.build.lib.analysis.ToolchainCollection.DEFAULT
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
-import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -72,9 +71,6 @@ import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.Spawn.Code;
 import com.google.devtools.build.lib.starlarkbuildapi.CommandLineArgsApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.StarlarkList;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.LazyString;
@@ -92,6 +88,9 @@ import java.util.Map;
 import java.util.function.Consumer;
 import javax.annotation.CheckReturnValue;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.StarlarkList;
 
 /** An Action representing an arbitrary subprocess to be forked and exec'd. */
 public class SpawnAction extends AbstractAction implements CommandAction {
@@ -321,9 +320,9 @@ public class SpawnAction extends AbstractAction implements CommandAction {
       beforeExecute(actionExecutionContext);
       spawn = getSpawn(actionExecutionContext);
     } catch (ExecException e) {
-      throw toActionExecutionException(e, actionExecutionContext.getVerboseFailures());
+      throw e.toActionExecutionException(this);
     } catch (CommandLineExpansionException e) {
-      throw createDetailedException(e, Code.COMMAND_LINE_EXPANSION_FAILURE);
+      throw createCommandLineException(e);
     }
     SpawnContinuation spawnContinuation =
         actionExecutionContext
@@ -332,52 +331,15 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     return new SpawnActionContinuation(actionExecutionContext, spawnContinuation);
   }
 
-  private ActionExecutionException createDetailedException(Exception e, Code detailedCode) {
+  private ActionExecutionException createCommandLineException(CommandLineExpansionException e) {
     DetailedExitCode detailedExitCode =
         DetailedExitCode.of(
             FailureDetail.newBuilder()
                 .setMessage(Strings.nullToEmpty(e.getMessage()))
-                .setSpawn(FailureDetails.Spawn.newBuilder().setCode(detailedCode))
+                .setSpawn(
+                    FailureDetails.Spawn.newBuilder().setCode(Code.COMMAND_LINE_EXPANSION_FAILURE))
                 .build());
     return new ActionExecutionException(e, this, /*catastrophe=*/ false, detailedExitCode);
-  }
-
-  private ActionExecutionException toActionExecutionException(
-      ExecException e, boolean verboseFailures) {
-    String failMessage;
-    if (isShellCommand()) {
-      // The possible reasons it could fail are: shell executable not found, shell
-      // exited non-zero, or shell died from signal.  The first is impossible
-      // and the second two aren't very interesting, so in the interests of
-      // keeping the noise-level down, we don't print a reason why, just the
-      // command that failed.
-      //
-      // 0=shell executable, 1=shell command switch, 2=command
-      try {
-        failMessage =
-            "error executing shell command: "
-                + "'"
-                + truncate(Joiner.on(" ").join(getArguments()), 200)
-                + "'";
-      } catch (CommandLineExpansionException commandLineExpansionException) {
-        failMessage =
-            "error executing shell command, and error expanding command line: "
-                + commandLineExpansionException;
-      }
-    } else {
-      failMessage = getRawProgressMessage();
-    }
-    return e.toActionExecutionException(failMessage, verboseFailures, this);
-  }
-
-  /**
-   * Returns s, truncated to no more than maxLen characters, appending an
-   * ellipsis if truncation occurred.
-   */
-  private static String truncate(String s, int maxLen) {
-    return s.length() > maxLen
-        ? s.substring(0, maxLen - "...".length()) + "..."
-        : s;
   }
 
   /**
@@ -1405,7 +1367,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         }
         return new SpawnActionContinuation(actionExecutionContext, nextContinuation);
       } catch (ExecException e) {
-        throw toActionExecutionException(e, actionExecutionContext.getVerboseFailures());
+        throw e.toActionExecutionException(SpawnAction.this);
       }
     }
   }

@@ -56,11 +56,6 @@ import com.google.devtools.build.lib.packages.RuleFactory.AttributeValues;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkCallable;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -80,6 +75,11 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Location;
 
 /**
  * Instances of RuleClass encapsulate the set of attributes of a given "class" of rule, such as
@@ -750,8 +750,6 @@ public class RuleClass {
         }
         configurationFragmentPolicy
             .includeConfigurationFragmentsFrom(parent.getConfigurationFragmentPolicy());
-        configurationFragmentPolicy.setMissingFragmentPolicy(
-            parent.getConfigurationFragmentPolicy().getMissingFragmentPolicy());
         supportsConstraintChecking = parent.supportsConstraintChecking;
 
         addRequiredToolchains(parent.getRequiredToolchains());
@@ -1033,11 +1031,12 @@ public class RuleClass {
     }
 
     /**
-     * Sets the policy for the case where the configuration is missing required fragments (see
+     * Sets the policy for the case where the configuration is missing required fragment class (see
      * {@link #requiresConfigurationFragments}).
      */
-    public Builder setMissingFragmentPolicy(MissingFragmentPolicy missingFragmentPolicy) {
-      configurationFragmentPolicy.setMissingFragmentPolicy(missingFragmentPolicy);
+    public Builder setMissingFragmentPolicy(
+        Class<?> fragmentClass, MissingFragmentPolicy missingFragmentPolicy) {
+      configurationFragmentPolicy.setMissingFragmentPolicy(fragmentClass, missingFragmentPolicy);
       return this;
     }
 
@@ -2021,7 +2020,7 @@ public class RuleClass {
   }
 
   /**
-   * Same as {@link #createRule}, except without some internal sanity checks.
+   * Same as {@link #createRule}, except without some internal checks.
    *
    * <p>Don't call this function unless you know what you're doing.
    */

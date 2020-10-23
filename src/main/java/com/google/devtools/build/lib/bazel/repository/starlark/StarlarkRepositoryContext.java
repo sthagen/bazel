@@ -54,13 +54,6 @@ import com.google.devtools.build.lib.runtime.ProcessWrapper;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor.ExecutionResult;
 import com.google.devtools.build.lib.starlarkbuildapi.repository.StarlarkRepositoryContextApi;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.util.OsUtils;
 import com.google.devtools.build.lib.util.StringUtilities;
 import com.google.devtools.build.lib.util.io.OutErr;
@@ -81,7 +74,9 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -89,6 +84,14 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Mutability;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
 
 /** Starlark API for the repository_rule's context. */
 public class StarlarkRepositoryContext
@@ -533,13 +536,14 @@ public class StarlarkRepositoryContext
   @Override
   public StarlarkExecutionResult execute(
       Sequence<?> arguments, // <String> or <StarlarkPath> or <Label> expected
-      Integer timeout,
+      StarlarkInt timeoutI,
       Dict<?, ?> uncheckedEnvironment, // <String, String> expected
       boolean quiet,
       String workingDirectory,
       StarlarkThread thread)
       throws EvalException, RepositoryFunctionException, InterruptedException {
     validateExecuteArguments(arguments);
+    int timeout = Starlark.toInt(timeoutI, "timeout");
 
     Map<String, String> environment =
         Dict.cast(uncheckedEnvironment, String.class, String.class, "environment");
@@ -573,7 +577,7 @@ public class StarlarkRepositoryContext
     env.getListener().post(w);
     createDirectory(outputDirectory);
 
-    long timeoutMillis = Math.round(timeout.longValue() * 1000 * timeoutScaling);
+    long timeoutMillis = Math.round(timeout * 1000L * timeoutScaling);
     if (processWrapper != null) {
       args =
           processWrapper
@@ -620,8 +624,9 @@ public class StarlarkRepositoryContext
   }
 
   @Override
-  public void patch(Object patchFile, Integer strip, StarlarkThread thread)
+  public void patch(Object patchFile, StarlarkInt stripI, StarlarkThread thread)
       throws EvalException, RepositoryFunctionException, InterruptedException {
+    int strip = Starlark.toInt(stripI, "strip");
     StarlarkPath starlarkPath = getPath("patch()", patchFile);
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newPatchEvent(
@@ -860,14 +865,21 @@ public class StarlarkRepositoryContext
             rule.getLabel().toString(),
             thread.getCallerLocation());
 
-    // Download to outputDirectory and delete it after extraction
     StarlarkPath outputPath = getPath("download_and_extract()", output);
     checkInOutputDirectory("write", outputPath);
     createDirectory(outputPath.getPath());
 
     Path downloadedPath;
+    Path downloadDirectory;
     try (SilentCloseable c =
         Profiler.instance().profile("fetching: " + rule.getLabel().toString())) {
+
+      // Download to temp directory inside the outputDirectory and delete it after extraction
+      java.nio.file.Path tempDirectory =
+          Files.createTempDirectory(Paths.get(outputPath.toString()), "temp");
+      downloadDirectory =
+          outputDirectory.getFileSystem().getPath(tempDirectory.toFile().getAbsolutePath());
+
       downloadedPath =
           downloadManager.download(
               urls,
@@ -875,7 +887,7 @@ public class StarlarkRepositoryContext
               checksum,
               canonicalId,
               Optional.of(type),
-              outputPath.getPath(),
+              downloadDirectory,
               env.getListener(),
               osObject.getEnvironmentVariables(),
               getName());
@@ -914,13 +926,13 @@ public class StarlarkRepositoryContext
 
     StructImpl downloadResult = calculateDownloadResult(checksum, downloadedPath);
     try {
-      if (downloadedPath.exists()) {
-        downloadedPath.delete();
+      if (downloadDirectory.exists()) {
+        downloadDirectory.deleteTree();
       }
     } catch (IOException e) {
       throw new RepositoryFunctionException(
           new IOException(
-              "Couldn't delete temporary file (" + downloadedPath.getPathString() + ")", e),
+              "Couldn't delete temporary directory (" + downloadDirectory.getPathString() + ")", e),
           Transience.TRANSIENT);
     }
     return downloadResult;

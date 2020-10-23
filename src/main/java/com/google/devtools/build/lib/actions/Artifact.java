@@ -23,6 +23,8 @@ import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
+import com.google.common.collect.Collections2;
+import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Streams;
@@ -40,9 +42,6 @@ import com.google.devtools.build.lib.skyframe.serialization.SerializationContext
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Starlark;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.vfs.Path;
@@ -59,6 +58,9 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Starlark;
 
 /**
  * An Artifact represents a file used by the build system, whether it's a source file or a derived
@@ -103,6 +105,11 @@ import javax.annotation.Nullable;
  *       affect the result of a build, such as timestamp files.
  *   <li>A 'Fileset' special Artifact. This is a legacy type of Artifact and should not be used by
  *       new rule implementations.
+ *   <li>A 'symlink' special Artifact. While a symlink can also be represented by a regular
+ *       Artifact, using a symlink special Artifact would result in deriving the Artifact's SkyValue
+ *       from the symlinks themselves (lstat, not stat), and not following the symlinks like in
+ *       regular Artifacts. The underlying symlink can be unresolved, otherwise known as a dangling
+ *       symlink.
  * </ul>
  *
  * <p>While Artifact implements {@link SkyKey} for memory-saving purposes, Skyframe requests
@@ -192,8 +199,9 @@ public abstract class Artifact
     return ((DerivedArtifact) artifact).getGeneratingActionKey();
   }
 
-  public static Iterable<SkyKey> keys(Iterable<Artifact> artifacts) {
-    return Iterables.transform(artifacts, Artifact::key);
+  public static Iterable<SkyKey> keys(Collection<Artifact> artifacts) {
+    // Use Collections2 instead of Iterables#transform to ensure O(1) size().
+    return Collections2.transform(artifacts, Artifact::key);
   }
 
   @Override
@@ -213,12 +221,15 @@ public abstract class Artifact
     void expand(Artifact artifact, Collection<? super Artifact> output);
 
     /**
-     * Retrieve the expansion of Filesets for the given artifact.
+     * Returns the expansion of Fileset for the given artifact.
      *
      * @param artifact {@code artifact.isFileset()} must be true.
+     * @throws MissingExpansionException if the expander is missing data needed to expand provided
+     *     fileset.
      */
-    default ImmutableList<FilesetOutputSymlink> getFileset(Artifact artifact) {
-      throw new UnsupportedOperationException();
+    default ImmutableList<FilesetOutputSymlink> getFileset(Artifact artifact)
+        throws MissingExpansionException {
+      throw new MissingExpansionException("Cannot expand fileset " + artifact);
     }
 
     /**
@@ -234,14 +245,25 @@ public abstract class Artifact
     }
   }
 
+  /**
+   * Exception thrown when attempting to {@linkplain ArtifactExpander expand} an artifact for which
+   * we do not have the necessary data.
+   */
+  public static final class MissingExpansionException extends Exception {
+
+    public MissingExpansionException(String message) {
+      super(message);
+    }
+  }
+
   /** Implementation of {@link ArtifactExpander} */
   public static class ArtifactExpanderImpl implements ArtifactExpander {
-    private final Map<Artifact, Collection<Artifact>> expandedInputs;
+    private final Map<Artifact, ImmutableCollection<Artifact>> expandedInputs;
     private final Map<SpecialArtifact, ArchivedTreeArtifact> archivedTreeArtifacts;
     private final Map<Artifact, ImmutableList<FilesetOutputSymlink>> expandedFilesets;
 
     public ArtifactExpanderImpl(
-        Map<Artifact, Collection<Artifact>> expandedInputs,
+        Map<Artifact, ImmutableCollection<Artifact>> expandedInputs,
         Map<SpecialArtifact, ArchivedTreeArtifact> archivedTreeArtifacts,
         Map<Artifact, ImmutableList<FilesetOutputSymlink>> expandedFilesets) {
       this.expandedInputs = expandedInputs;
@@ -253,16 +275,21 @@ public abstract class Artifact
     public void expand(Artifact artifact, Collection<? super Artifact> output) {
       Preconditions.checkState(
           artifact.isMiddlemanArtifact() || artifact.isTreeArtifact(), artifact);
-      Collection<Artifact> result = expandedInputs.get(artifact);
+      ImmutableCollection<Artifact> result = expandedInputs.get(artifact);
       if (result != null) {
         output.addAll(result);
       }
     }
 
     @Override
-    public ImmutableList<FilesetOutputSymlink> getFileset(Artifact artifact) {
+    public ImmutableList<FilesetOutputSymlink> getFileset(Artifact artifact)
+        throws MissingExpansionException {
       Preconditions.checkState(artifact.isFileset());
-      return Preconditions.checkNotNull(expandedFilesets.get(artifact));
+      ImmutableList<FilesetOutputSymlink> filesetLinks = expandedFilesets.get(artifact);
+      if (filesetLinks == null) {
+        throw new MissingExpansionException("Missing expansion for fileset: " + artifact);
+      }
+      return filesetLinks;
     }
 
     @Override
@@ -274,8 +301,9 @@ public abstract class Artifact
   /** A Predicate that evaluates to true if the Artifact is not a middleman artifact. */
   public static final Predicate<Artifact> MIDDLEMAN_FILTER = input -> !input.isMiddlemanArtifact();
 
+  protected final ArtifactRoot root;
+
   private final int hashCode;
-  private final ArtifactRoot root;
   private final PathFragment execPath;
 
   private Artifact(ArtifactRoot root, PathFragment execPath) {
@@ -591,10 +619,57 @@ public abstract class Artifact
   }
 
   /**
-   * Returns the relative path to this artifact relative to its root. (Useful when deriving output
-   * filenames from input files, etc.)
+   * Returns the relative path to this artifact relative to its root. It makes no guarantees as to
+   * the semantic meaning or the completeness of the returned path value. In other words, no
+   * assumptions should be made in terms of where the root portion of the path ends, and the
+   * returned value almost always needs to be used in conjunction with its root.
+   *
+   * <p>{#link Artifact#getOutputDirRelativePath()} is more versatile for general use cases.
    */
   public abstract PathFragment getRootRelativePath();
+
+  /**
+   * Returns the fully-qualified package path to this artifact. By "fully-qualified", it means the
+   * returned path is prefixed with "external/<repository name>" if this artifact is in an external
+   * repository.
+   *
+   * <p>Do not call this method just because you need a path prefixed with the "external/<repository
+   * name>" fragment for external repository artifacts. {@link * Artifact#getOutputDirRelativePath}
+   * is the right one to use in almost all cases.
+   *
+   * @deprecated This method is only to be used for $(location) and getOutputDirRelativePath
+   *     implementations.
+   */
+  @Deprecated
+  public PathFragment getPathForLocationExpansion() {
+    return getRootRelativePath();
+  }
+
+  /**
+   * Returns the path to this artifact relative to an output directory, e.g. the bin directory. Note
+   * that this is available on every Artifact type, including source artifacts. As a matter of fact,
+   * one of its most common use cases is to construct a derived artifact's output path out of a
+   * sibling source artifact's by replacing the basename in its output-dir-relative path.
+   *
+   * <p>This is just a wrapper over {@link Artifact#getPathForLocationExpansion} at the moment.
+   * However, since it will be kept in sync with the output directory layout, which is planned for
+   * an overhaul, it must be preferred over {@link Artifact#getPathForLocationExpansion} whenever
+   * possible.
+   */
+  public final PathFragment getOutputDirRelativePath(boolean siblingRepositoryLayout) {
+    return getPathForLocationExpansion();
+  }
+
+  /**
+   * Returns the path to this artifact relative to its repository root. As a result, the returned
+   * path always starts with a corresponding package name, if exists.
+   */
+  public PathFragment getRepositoryRelativePath() {
+    PathFragment fullPath = getPathForLocationExpansion();
+    return fullPath.startsWith(LabelConstants.EXTERNAL_PATH_PREFIX)
+        ? fullPath.subFragment(2)
+        : fullPath;
+  }
 
   /** Returns this.getExecPath().getPathString(). */
   @Override
@@ -604,6 +679,10 @@ public abstract class Artifact
 
   public final String getRootRelativePathString() {
     return getRootRelativePath().getPathString();
+  }
+
+  public final String getRepositoryRelativePathString() {
+    return getRepositoryRelativePath().getPathString();
   }
 
   @Override
@@ -715,7 +794,8 @@ public abstract class Artifact
    * runfiles tree. For local targets, it returns the rootRelativePath.
    */
   public final PathFragment getRunfilesPath() {
-    PathFragment relativePath = getRootRelativePath();
+    PathFragment relativePath = getOutputDirRelativePath(false);
+    // We can't use root.isExternalSource() here since it needs to handle derived artifacts too.
     if (relativePath.startsWith(LabelConstants.EXTERNAL_PATH_PREFIX)) {
       // Turn external/repo/foo into ../repo/foo.
       relativePath = relativePath.relativeTo(LabelConstants.EXTERNAL_PATH_PREFIX);
@@ -816,12 +896,17 @@ public abstract class Artifact
 
     @Override
     public PathFragment getRootRelativePath() {
-      // flag-less way of checking of the root is <execroot>/.., or sibling of __main__.
-      if (getExecPath().startsWith(LabelConstants.EXPERIMENTAL_EXTERNAL_PATH_PREFIX)) {
-        return LabelConstants.EXTERNAL_PATH_PREFIX.getRelative(getExecPath().subFragment(1));
-      }
+      return root.isExternalSourceRoot() ? getExecPath().subFragment(1) : getExecPath();
+    }
 
+    @Override
+    public PathFragment getPathForLocationExpansion() {
       return getExecPath();
+    }
+
+    @Override
+    public PathFragment getRepositoryRelativePath() {
+      return root.isExternalSourceRoot() ? getExecPath().subFragment(2) : getExecPath();
     }
 
     @Override
@@ -1052,6 +1137,15 @@ public abstract class Artifact
               0, rootPathFragment.segmentCount() - artifactRoot.getExecPath().segmentCount());
       return rootPath.getFileSystem().getPath(execRootPath);
     }
+
+    @AutoCodec.VisibleForSerialization
+    @AutoCodec.Instantiator
+    static ArchivedTreeArtifact createForDeserialization(
+        SpecialArtifact treeArtifact, ArtifactRoot root, PathFragment execPath) {
+      ArchivedTreeArtifact result = new ArchivedTreeArtifact(treeArtifact, root, execPath);
+      result.setGeneratingActionKey(treeArtifact.getGeneratingActionKey());
+      return result;
+    }
   }
 
   /**
@@ -1240,6 +1334,9 @@ public abstract class Artifact
   /** Formatter for execPath PathFragment output. */
   public static final Function<Artifact, String> ROOT_RELATIVE_PATH_STRING =
       artifact -> artifact.getRootRelativePath().getPathString();
+
+  public static final Function<Artifact, String> OUTPUT_DIR_RELATIVE_PATH_STRING =
+      artifact -> artifact.getOutputDirRelativePath(false).getPathString();
 
   /**
    * Converts a collection of artifacts into execution-time path strings, and

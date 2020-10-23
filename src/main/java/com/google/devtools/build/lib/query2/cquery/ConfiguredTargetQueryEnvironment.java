@@ -52,6 +52,7 @@ import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetValue;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import java.io.OutputStream;
@@ -113,7 +114,7 @@ public class ConfiguredTargetQueryEnvironment
       TopLevelConfigurations topLevelConfigurations,
       BuildConfiguration hostConfiguration,
       Collection<SkyKey> transitiveConfigurationKeys,
-      String parserPrefix,
+      PathFragment parserPrefix,
       PathPackageLocator pkgPath,
       Supplier<WalkableGraph> walkableGraphSupplier,
       Set<Setting> settings)
@@ -146,7 +147,7 @@ public class ConfiguredTargetQueryEnvironment
       TopLevelConfigurations topLevelConfigurations,
       BuildConfiguration hostConfiguration,
       Collection<SkyKey> transitiveConfigurationKeys,
-      String parserPrefix,
+      PathFragment parserPrefix,
       PathPackageLocator pkgPath,
       Supplier<WalkableGraph> walkableGraphSupplier,
       CqueryOptions cqueryOptions)
@@ -251,6 +252,13 @@ public class ConfiguredTargetQueryEnvironment
             OutputType.JSON),
         new BuildOutputFormatterCallback(
             eventHandler, cqueryOptions, out, skyframeExecutor, accessor),
+        new GraphOutputFormatterCallback(
+            eventHandler,
+            cqueryOptions,
+            out,
+            skyframeExecutor,
+            accessor,
+            ct -> getFwdDeps(ImmutableList.of(ct))),
         new StarlarkOutputFormatterCallback(
             eventHandler, cqueryOptions, out, skyframeExecutor, accessor));
   }

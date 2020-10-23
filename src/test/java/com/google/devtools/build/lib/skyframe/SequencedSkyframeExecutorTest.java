@@ -102,7 +102,6 @@ import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.LoadedPackageProvider;
 import com.google.devtools.build.lib.pkgcache.PackageManager;
 import com.google.devtools.build.lib.pkgcache.TransitivePackageLoader;
-import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.runtime.KeepGoingOption;
 import com.google.devtools.build.lib.server.FailureDetails.Crash;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
@@ -116,9 +115,6 @@ import com.google.devtools.build.lib.skyframe.serialization.DeserializationConte
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.CrashFailureDetails;
@@ -161,6 +157,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.StarlarkSemantics;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -188,7 +187,6 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
   @Before
   public final void createSkyframeExecutorAndVisitor() throws Exception {
     skyframeExecutor = getSkyframeExecutor();
-    skyframeExecutor.setRemoteOutputsMode(RemoteOutputsMode.ALL);
     visitor = skyframeExecutor.pkgLoader();
     options =
         OptionsParser.builder()
@@ -527,8 +525,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     assertThat(conflict).isNotNull();
     ArtifactRoot root =
         getTargetConfiguration()
-            .getBinDirectory(
-                conflict.getConfiguredTarget().getLabel().getPackageIdentifier().getRepository());
+            .getBinDirectory(conflict.getConfiguredTarget().getLabel().getRepository());
 
     Action oldAction =
         getGeneratingAction(
@@ -1196,6 +1193,11 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
 
     @Override
     public String prettyPrint() {
+      return describe();
+    }
+
+    @Override
+    public String describe() {
       return "DummyTemplate";
     }
 

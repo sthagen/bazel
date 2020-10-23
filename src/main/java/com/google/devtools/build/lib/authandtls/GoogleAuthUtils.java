@@ -195,14 +195,15 @@ public final class GoogleAuthUtils {
     return null;
   }
 
-  @VisibleForTesting
-  public static CallCredentials newCallCredentials(
-      @Nullable InputStream credentialsFile, List<String> authScope) throws IOException {
-    Credentials creds = newCredentials(credentialsFile, authScope);
+  /**
+   * Create a new {@link CallCredentialsProvider} object from {@link Credentials} or return {@link
+   * CallCredentialsProvider#NO_CREDENTIALS} if it is {@code null}.
+   */
+  public static CallCredentialsProvider newCallCredentialsProvider(@Nullable Credentials creds) {
     if (creds != null) {
-      return MoreCallCredentials.from(creds);
+      return new GoogleAuthCallCredentialsProvider(creds);
     }
-    return null;
+    return CallCredentialsProvider.NO_CREDENTIALS;
   }
 
   /**
@@ -232,7 +233,13 @@ public final class GoogleAuthUtils {
     return null;
   }
 
-  private static Credentials newCredentials(
+  /**
+   * Create a new {@link Credentials} object from credential file and given authentication scopes.
+   *
+   * @throws IOException in case the credentials can't be constructed.
+   */
+  @VisibleForTesting
+  public static Credentials newCredentials(
       @Nullable InputStream credentialsFile, List<String> authScopes) throws IOException {
     try {
       GoogleCredentials creds =

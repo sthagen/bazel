@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.query2.common;
 
+import static java.util.concurrent.TimeUnit.MINUTES;
+
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -119,20 +121,19 @@ public abstract class AbstractBlazeQueryEnvironment<T> extends AbstractQueryEnvi
 
   /**
    * Evaluate the specified query expression in this environment, streaming results to the given
-   * {@code callback}. {@code callback.start()} will be called before query evaluation and
-   * {@code callback.close()} will be unconditionally called at the end of query evaluation
-   * (i.e. regardless of whether it was successful).
+   * {@code callback}. {@code callback.start()} will be called before query evaluation and {@code
+   * callback.close()} will be unconditionally called at the end of query evaluation (i.e.
+   * regardless of whether it was successful).
    *
    * @return a {@link QueryEvalResult} object that contains the resulting set of targets and a bit
-   *   to indicate whether errors occurred during evaluation; note that the
-   *   success status can only be false if {@code --keep_going} was in effect
-   * @throws QueryException if the evaluation failed and {@code --nokeep_going} was in
-   *   effect
+   *     to indicate whether errors occurred during evaluation; note that the success status can
+   *     only be false if {@code --keep_going} was in effect
+   * @throws QueryException if the evaluation failed and {@code --nokeep_going} was in effect
+   * @throws IOException for output formatter failures from {@code callback}
    */
   public QueryEvalResult evaluateQuery(
-      QueryExpression expr,
-      ThreadSafeOutputFormatterCallback<T> callback)
-          throws QueryException, InterruptedException, IOException {
+      QueryExpression expr, ThreadSafeOutputFormatterCallback<T> callback)
+      throws QueryException, InterruptedException, IOException {
     EmptinessSensingCallback<T> emptySensingCallback = new EmptinessSensingCallback<>(callback);
     long startTime = System.currentTimeMillis();
     // In the --nokeep_going case, errors are reported in the order in which the patterns are
@@ -178,10 +179,13 @@ public abstract class AbstractBlazeQueryEnvironment<T> extends AbstractQueryEnvi
       if (!keepGoing) {
         if (detailedExitCode != null) {
           throw new QueryException(
-              "Evaluation of query \"" + expr + "\" failed", detailedExitCode.getFailureDetail());
+              "Evaluation of query \"" + expr.toTrunctatedString() + "\" failed",
+              detailedExitCode.getFailureDetail());
         }
         throw new QueryException(
-            "Evaluation of query \"" + expr + "\" failed due to BUILD file errors",
+            "Evaluation of query \""
+                + expr.toTrunctatedString()
+                + "\" failed due to BUILD file errors",
             Query.Code.BUILD_FILE_ERROR);
       }
       eventHandler.handle(
@@ -194,7 +198,9 @@ public abstract class AbstractBlazeQueryEnvironment<T> extends AbstractQueryEnvi
             DetailedExitCode.of(
                 FailureDetail.newBuilder()
                     .setMessage(
-                        "Evaluation of query \"" + expr + "\" failed due to BUILD file errors")
+                        "Evaluation of query \""
+                            + expr.toTrunctatedString()
+                            + "\" failed due to BUILD file errors")
                     .setQuery(Query.newBuilder().setCode(Code.BUILD_FILE_ERROR))
                     .build()));
       }
@@ -244,9 +250,11 @@ public abstract class AbstractBlazeQueryEnvironment<T> extends AbstractQueryEnvi
       if (detailedExitCode != null) {
         throw new QueryException(expression, message, detailedExitCode.getFailureDetail());
       }
+      logger.atWarning().atMostEvery(1, MINUTES).log(
+          "Null detailed exit code for %s %s", message, expression);
       throw new QueryException(expression, message, Query.Code.BUILD_FILE_ERROR);
     }
-    eventHandler.handle(createErrorEvent(expression.toString(), message, detailedExitCode));
+    eventHandler.handle(createErrorEvent(expression, message, detailedExitCode));
   }
 
   public abstract Target getTarget(Label label)
@@ -317,8 +325,9 @@ public abstract class AbstractBlazeQueryEnvironment<T> extends AbstractQueryEnvi
   }
 
   private static Event createErrorEvent(
-      String caller, String message, @Nullable DetailedExitCode detailedExitCode) {
-    String eventMessage = String.format("Evaluation of query \"%s\" failed: %s", caller, message);
+      QueryExpression expr, String message, @Nullable DetailedExitCode detailedExitCode) {
+    String eventMessage =
+        String.format("Evaluation of query \"%s\" failed: %s", expr.toTrunctatedString(), message);
     Event event = Event.error(eventMessage);
     if (detailedExitCode != null) {
       event =
@@ -329,6 +338,9 @@ public abstract class AbstractBlazeQueryEnvironment<T> extends AbstractQueryEnvi
                   detailedExitCode.getFailureDetail().toBuilder()
                       .setMessage(eventMessage)
                       .build()));
+    } else {
+      logger.atWarning().atMostEvery(1, MINUTES).log(
+          "Null detailed exit code for %s %s", message, expr);
     }
     return event;
   }

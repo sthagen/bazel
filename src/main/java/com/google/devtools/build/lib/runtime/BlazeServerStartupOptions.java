@@ -240,16 +240,6 @@ public class BlazeServerStartupOptions extends OptionsBase {
   public boolean batch;
 
   @Option(
-      name = "deep_execroot",
-      defaultValue = "true", // NOTE: only for documentation, value is always passed by the client.
-      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
-      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.EXECUTION},
-      help =
-          "If set, the execution root will be under $OUTPUT_BASE/execroot instead of "
-              + "$OUTPUT_BASE.")
-  public boolean deepExecRoot;
-
-  @Option(
       name = "block_for_lock",
       defaultValue = "true", // NOTE: only for documentation, value never passed to the server.
       documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
@@ -482,4 +472,17 @@ public class BlazeServerStartupOptions extends OptionsBase {
               + "Requires Windows developer mode to be enabled and Windows 10 version 1703 or "
               + "greater.")
   public boolean enableWindowsSymlinks;
+
+  @Option(
+      name = "unix_digest_hash_attribute_name",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.CHANGES_INPUTS, OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help =
+          "The name of an extended attribute that can be placed on files to store a precomputed "
+              + "copy of the file's hash, corresponding with --digest_function. This option "
+              + "can be used to reduce disk I/O and CPU load caused by hash computation. This "
+              + "extended attribute is checked on all source files and output files, meaning "
+              + "that it causes a significant number of invocations of the getxattr() system call.")
+  public String unixDigestHashAttributeName;
 }

@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
@@ -61,15 +62,6 @@ import com.google.devtools.build.lib.rules.cpp.CppActionConfigs.CppPlatform;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkingMode;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcModuleApi;
-import com.google.devtools.build.lib.syntax.ClassObject;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.NoneType;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkList;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
-import com.google.devtools.build.lib.syntax.Tuple;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.StringUtil;
@@ -81,6 +73,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.ClassObject;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.NoneType;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkList;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.eval.Tuple;
 
 /** A module that contains Starlark utilities for C++ support. */
 public abstract class CcModule
@@ -909,10 +911,7 @@ public abstract class CcModule
                   .getRuleContext()
                   .getLabel()
                   .getPackageIdentifier()
-                  .getExecPath(
-                      starlarkRuleContext
-                          .getStarlarkSemantics()
-                          .getBool(BuildLanguageOptions.EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT))
+                  .getExecPath(starlarkRuleContext.getConfiguration().isSiblingRepositoryLayout())
                   .getRelative(PathFragment.create(tool.second))
                   .getPathString();
         }
@@ -1844,7 +1843,8 @@ public abstract class CcModule
       helper.setStripIncludePrefix(stripIncludePrefix);
     }
     try {
-      CompilationInfo compilationInfo = helper.compile(actions.getRuleContext()::ruleError);
+      RuleContext ruleContext = actions.getRuleContext();
+      CompilationInfo compilationInfo = helper.compile(ruleContext);
       return Tuple.of(
           compilationInfo.getCcCompilationContext(), compilationInfo.getCcCompilationOutputs());
     } catch (RuleErrorException e) {
@@ -1863,7 +1863,7 @@ public abstract class CcModule
       String language,
       String outputType,
       boolean linkDepsStatically,
-      int stamp,
+      StarlarkInt stamp,
       Sequence<?> additionalInputs,
       Object grepIncludes,
       StarlarkThread thread)
@@ -1871,7 +1871,7 @@ public abstract class CcModule
     validateLanguage(language);
     validateOutputType(outputType);
     boolean isStampingEnabled =
-        isStampingEnabled(stamp, actions.getRuleContext().getConfiguration());
+        isStampingEnabled(stamp.toInt("stamp"), actions.getRuleContext().getConfiguration());
     CcToolchainProvider ccToolchainProvider =
         convertFromNoneable(starlarkCcToolchainProvider, null);
     FeatureConfigurationForStarlark featureConfiguration =

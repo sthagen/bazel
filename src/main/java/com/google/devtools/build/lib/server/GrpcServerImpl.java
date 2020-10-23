@@ -23,9 +23,9 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.runtime.BlazeCommandResult;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandDispatcher;
 import com.google.devtools.build.lib.runtime.CommandDispatcher.LockingMode;
+import com.google.devtools.build.lib.runtime.SafeRequestLogging;
 import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.server.CommandManager.RunningCommand;
 import com.google.devtools.build.lib.server.CommandProtos.CancelRequest;
@@ -102,43 +102,34 @@ import java.util.concurrent.Executors;
  */
 public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase implements RPCServer {
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
-  private final boolean shutdownOnLowSysMem;
 
-  /**
-   * Factory class. Instantiated by reflection.
-   *
-   * <p>Used so that method calls using reflection are as simple as possible.
-   */
-  public static class Factory implements RPCServer.Factory {
-    @Override
-    public RPCServer create(
-        CommandDispatcher dispatcher,
-        ShutdownHooks shutdownHooks,
-        PidFileWatcher pidFileWatcher,
-        Clock clock,
-        int port,
-        Path serverDirectory,
-        int serverPid,
-        int maxIdleSeconds,
-        boolean shutdownOnLowSysMem,
-        boolean idleServerTasks)
-        throws AbruptExitException {
-      SecureRandom random = new SecureRandom();
-      return new GrpcServerImpl(
-          dispatcher,
-          shutdownHooks,
-          pidFileWatcher,
-          clock,
-          port,
-          generateCookie(random, 16),
-          generateCookie(random, 16),
-          serverDirectory,
-          serverPid,
-          maxIdleSeconds,
-          shutdownOnLowSysMem,
-          idleServerTasks);
-    }
+  public static GrpcServerImpl create(
+      CommandDispatcher dispatcher,
+      ShutdownHooks shutdownHooks,
+      PidFileWatcher pidFileWatcher,
+      Clock clock,
+      int port,
+      Path serverDirectory,
+      int serverPid,
+      int maxIdleSeconds,
+      boolean shutdownOnLowSysMem,
+      boolean idleServerTasks) {
+    SecureRandom random = new SecureRandom();
+    return new GrpcServerImpl(
+        dispatcher,
+        shutdownHooks,
+        pidFileWatcher,
+        clock,
+        port,
+        generateCookie(random, 16),
+        generateCookie(random, 16),
+        serverDirectory,
+        serverPid,
+        maxIdleSeconds,
+        shutdownOnLowSysMem,
+        idleServerTasks);
   }
+
 
   @VisibleForTesting
   enum StreamType {
@@ -290,6 +281,7 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
   private final String requestCookie;
   private final String responseCookie;
   private final int maxIdleSeconds;
+  private final boolean shutdownOnLowSysMem;
   private final PidFileWatcher pidFileWatcher;
   private final int serverPid;
   private final int port;
@@ -409,7 +401,6 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
       } catch (IOException ipv4Exception) {
         throw new AbruptExitException(
             DetailedExitCode.of(
-                ExitCode.BUILD_FAILURE,
                 createFailureDetail(
                     String.format(
                         "gRPC server failed to bind to IPv4 and IPv6 localhosts on port %d: [IPv4] "
@@ -466,7 +457,7 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
       shutdownHooks.deleteAtExit(serverInfoFile);
     } catch (IOException e) {
       throw createFilesystemFailureException(
-          "Failed to write server info file: " + e.getMessage(), Code.SERVER_FILE_WRITE_FAILURE, e);
+          "Failed to write server info file: " + e.getMessage(), e);
     }
   }
 
@@ -477,7 +468,6 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
     } catch (IOException e) {
       throw createFilesystemFailureException(
           "Server file (" + file + ") write failed: " + e.getMessage(),
-          Code.SERVER_FILE_WRITE_FAILURE,
           e);
     }
     shutdownHooks.deleteAtExit(file);
@@ -549,7 +539,7 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
             .collect(ImmutableList.toImmutableList());
 
         InvocationPolicy policy = InvocationPolicyParser.parsePolicy(request.getInvocationPolicy());
-        logger.atInfo().log(BlazeRuntime.getRequestLogString(args));
+        logger.atInfo().log(SafeRequestLogging.getRequestLogString(args));
         result =
             dispatcher.exec(
                 policy,
@@ -564,7 +554,6 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
         result =
             BlazeCommandResult.detailedExitCode(
                 DetailedExitCode.of(
-                    ExitCode.COMMAND_LINE_ERROR,
                     FailureDetail.newBuilder()
                         .setMessage("Invocation policy parsing failed: " + e.getMessage())
                         .setCommand(
@@ -659,13 +648,12 @@ public class GrpcServerImpl extends CommandServerGrpc.CommandServerImplBase impl
   }
 
   private static AbruptExitException createFilesystemFailureException(
-      String message, Code detailedCode, IOException e) {
+      String message, IOException e) {
     return new AbruptExitException(
         DetailedExitCode.of(
-            ExitCode.BUILD_FAILURE,
             FailureDetail.newBuilder()
                 .setMessage(message)
-                .setFilesystem(Filesystem.newBuilder().setCode(detailedCode))
+                .setFilesystem(Filesystem.newBuilder().setCode(Code.SERVER_FILE_WRITE_FAILURE))
                 .build()),
         e);
   }

@@ -87,6 +87,7 @@ public class TestConstants {
       "com.google.devtools.build.lib.bazel.rules.BazelStrategyModule";
   public static final String TEST_REAL_UNIX_FILE_SYSTEM =
       "com.google.devtools.build.lib.unix.UnixFileSystem";
+  public static final String TEST_UNIX_HASH_ATTRIBUTE = "";
 
   public static final ImmutableList<String> IGNORED_MESSAGE_PREFIXES = ImmutableList.<String>of();
 
@@ -140,6 +141,10 @@ public class TestConstants {
 
   public static final String PLATFORM_LABEL =
       PLATFORM_PACKAGE_ROOT + ":default_host + " + PLATFORM_PACKAGE_ROOT + ":default_target";
+
+  /** What toolchain type do Android rules use for platform-based toolchain resolution? */
+  public static final String ANDROID_TOOLCHAIN_TYPE_LABEL =
+      TOOLS_REPOSITORY + "//tools/android:sdk_toolchain_type";
 
   /** A choice of test execution mode, only varies internally. */
   public enum InternalTestExecutionMode {

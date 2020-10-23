@@ -14,6 +14,7 @@
 package net.starlark.java.syntax;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.base.Joiner;
 import java.util.ArrayList;
@@ -192,7 +193,7 @@ public class LexerTest {
         .isEqualTo("INT IN LPAREN STRING AND LBRACKET RBRACKET RPAREN NEWLINE EOF");
 
     assertThat(values(tokens("0or()"))).isEqualTo("INT(0) IDENTIFIER(r) LPAREN RPAREN NEWLINE EOF");
-    assertThat(lastError).isEqualTo("/some/path.txt:1: invalid base-8 integer constant: 0o");
+    assertThat(lastError).isEqualTo("/some/path.txt:1: invalid base-8 integer literal: 0o");
   }
 
   @Test
@@ -223,17 +224,17 @@ public class LexerTest {
     assertThat(values(tokens("0O77"))).isEqualTo("INT(63) NEWLINE EOF");
 
     // octal (bad)
-    assertThat(values(tokens("012349-"))).isEqualTo("INT(0) MINUS NEWLINE EOF");
+    assertThat(values(tokens("0o12349-"))).isEqualTo("INT(0) MINUS NEWLINE EOF");
     assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: invalid base-8 integer constant: 012349");
+        .isEqualTo("/some/path.txt:1: invalid base-8 integer literal: 0o12349");
 
     assertThat(values(tokens("0o"))).isEqualTo("INT(0) NEWLINE EOF");
     assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: invalid base-8 integer constant: 0o");
+        .isEqualTo("/some/path.txt:1: invalid base-8 integer literal: 0o");
 
-    assertThat(values(tokens("012345"))).isEqualTo("INT(5349) NEWLINE EOF");
+    assertThat(values(tokens("012345"))).isEqualTo("INT(0) NEWLINE EOF");
     assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: invalid octal value `012345`, should be: `0o12345`");
+        .isEqualTo("/some/path.txt:1: invalid octal literal: 012345 (use '0o12345')");
 
     // hexadecimal (uppercase)
     assertThat(values(tokens("0X12345F-"))).isEqualTo("INT(1193055) MINUS NEWLINE EOF");
@@ -243,6 +244,15 @@ public class LexerTest {
 
     // hexadecimal (lowercase) [note: "g" cause termination of token]
     assertThat(values(tokens("0x12345g-"))).isEqualTo("INT(74565) IDENTIFIER(g) MINUS NEWLINE EOF");
+
+    // long
+    assertThat(values(tokens("1234567890 0x123456789ABCDEF")))
+        .isEqualTo("INT(1234567890) INT(81985529216486895) NEWLINE EOF");
+    // big
+    assertThat(values(tokens("123456789123456789123456789 0xABCDEFABCDEFABCDEFABCDEFABCDEF")))
+        .isEqualTo(
+            "INT(123456789123456789123456789) INT(892059645479943313385225296292859375) NEWLINE"
+                + " EOF");
   }
 
   @Test
@@ -251,13 +261,14 @@ public class LexerTest {
 
     assertThat(values(tokens("1.2.345"))).isEqualTo("INT(1) DOT INT(2) DOT INT(345) NEWLINE EOF");
 
+    // TODO(adonovan): parse floating point numbers.
     assertThat(values(tokens("1.0E10"))).isEqualTo("INT(1) DOT INT(0) NEWLINE EOF");
     assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: invalid base-8 integer constant: 0E10");
+        .isEqualTo("/some/path.txt:1: invalid octal literal: 0E10 (use '0oE10')");
 
     assertThat(values(tokens("1.03E-10"))).isEqualTo("INT(1) DOT INT(0) MINUS INT(10) NEWLINE EOF");
     assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: invalid base-8 integer constant: 03E");
+        .isEqualTo("/some/path.txt:1: invalid octal literal: 03E (use '0o3E')");
 
     assertThat(values(tokens(". 123"))).isEqualTo("DOT INT(123) NEWLINE EOF");
     assertThat(values(tokens(".123"))).isEqualTo("DOT INT(123) NEWLINE EOF");
@@ -318,10 +329,9 @@ public class LexerTest {
     assertThat(values(tokens("r'a\\\\b'"))).isEqualTo("STRING(a\\\\b) NEWLINE EOF"); // r'a\\b'
     assertThat(values(tokens("r'ab'r"))).isEqualTo("STRING(ab) IDENTIFIER(r) NEWLINE EOF");
 
-    // Unterminated raw string
+    // Unclosed raw string
     values(tokens("r'\\'")); // r'\'
-    assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: unterminated string literal at eof");
+    assertThat(lastError.toString()).isEqualTo("/some/path.txt:1: unclosed string literal");
   }
 
   @Test
@@ -332,10 +342,9 @@ public class LexerTest {
     // cd"""
     assertThat(values(tokens("\"\"\"ab\ncd\"\"\""))).isEqualTo("STRING(ab\ncd) NEWLINE EOF");
 
-    // Unterminated raw string
+    // Unclosed raw string
     values(tokens("r'''\\'''")); // r'''\'''
-    assertThat(lastError.toString())
-        .isEqualTo("/some/path.txt:1: unterminated string literal at eof");
+    assertThat(lastError.toString()).isEqualTo("/some/path.txt:1: unclosed string literal");
   }
 
   @Test
@@ -502,17 +511,17 @@ public class LexerTest {
     allTokens(lexerFail);
     assertThat(errors).isNotEmpty();
 
-    String s = "'unterminated";
+    String s = "'unclosed";
     lexerFail = createLexer(s);
     allTokens(lexerFail);
     assertThat(errors).isNotEmpty();
-    assertThat(values(tokens(s))).isEqualTo("STRING(unterminated) NEWLINE EOF");
+    assertThat(values(tokens(s))).isEqualTo("STRING(unclosed) NEWLINE EOF");
   }
 
   @Test
-  public void testUnterminatedRawStringWithEscapingError() throws Exception {
+  public void testUnclosedRawStringWithEscapingError() throws Exception {
     assertThat(names(tokens("r'\\"))).isEqualTo("STRING NEWLINE EOF");
-    assertThat(lastError).isEqualTo("/some/path.txt:1: unterminated string literal at eof");
+    assertThat(lastError).isEqualTo("/some/path.txt:1: unclosed string literal");
   }
 
   @Test
@@ -542,5 +551,39 @@ public class LexerTest {
       throw new AssertionError(
           "error '" + substr + "' not found, but got these:\n" + Joiner.on("\n").join(errors));
     }
+  }
+
+  @Test
+  public void testStringLiteralUnquote() {
+    // Coverage here needn't be exhaustive,
+    // as the underlying logic is that of the Lexer.
+    assertUnquoteEquals("'hello'", "hello");
+    assertUnquoteEquals("\"hello\"", "hello");
+    assertUnquoteEquals("r'a\\b\"c'", "a\\b\"c");
+
+    assertUnquoteError("", "invalid syntax"); // empty
+    assertUnquoteError(" 'hello'", "invalid syntax"); // leading space
+    assertUnquoteError("'hello' ", "invalid syntax"); // trailing space
+    assertUnquoteError("x", "invalid syntax"); // identifier
+    assertUnquoteError("r", "invalid syntax"); // identifier (same prefix as r'...')
+    assertUnquoteError("r2", "invalid syntax"); // identifier
+    assertUnquoteError("1", "invalid syntax"); // number
+    assertUnquoteError("'", "unclosed string literal");
+    assertUnquoteError("\"", "unclosed string literal");
+    assertUnquoteError("'abc", "unclosed string literal");
+    assertUnquoteError(
+        "'\\g'",
+        "invalid escape sequence: \\g. You can enable unknown escape sequences by passing the flag"
+            + " --incompatible_restrict_string_escapes=false"); // this temporary hint is a lie
+  }
+
+  private static void assertUnquoteEquals(String literal, String value) {
+    assertThat(StringLiteral.unquote(literal)).isEqualTo(value);
+  }
+
+  private static void assertUnquoteError(String badLiteral, String errorSubstring) {
+    IllegalArgumentException ex =
+        assertThrows(IllegalArgumentException.class, () -> StringLiteral.unquote(badLiteral));
+    assertThat(ex).hasMessageThat().contains(errorSubstring);
   }
 }

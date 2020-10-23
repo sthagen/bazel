@@ -69,7 +69,6 @@ StartupOptions::StartupOptions(const string &product_name,
                                const WorkspaceLayout *workspace_layout)
     : product_name(product_name),
       ignore_all_rc_files(false),
-      deep_execroot(true),
       block_for_lock(true),
       host_jvm_debug(false),
       batch(false),
@@ -130,7 +129,6 @@ StartupOptions::StartupOptions(const string &product_name,
   RegisterNullaryStartupFlag("batch_cpu_scheduling", &batch_cpu_scheduling);
   RegisterNullaryStartupFlag("block_for_lock", &block_for_lock);
   RegisterNullaryStartupFlag("client_debug", &client_debug);
-  RegisterNullaryStartupFlag("deep_execroot", &deep_execroot);
   RegisterNullaryStartupFlag("expand_configs_in_place",
                              &expand_configs_in_place);
   RegisterNullaryStartupFlag("fatal_event_bus_exceptions",
@@ -150,6 +148,7 @@ StartupOptions::StartupOptions(const string &product_name,
   RegisterUnaryStartupFlag("command_port");
   RegisterUnaryStartupFlag("connect_timeout_secs");
   RegisterUnaryStartupFlag("digest_function");
+  RegisterUnaryStartupFlag("unix_digest_hash_attribute_name");
   RegisterUnaryStartupFlag("server_javabase");
   RegisterUnaryStartupFlag("host_jvm_args");
   RegisterUnaryStartupFlag("host_jvm_profile");
@@ -359,6 +358,11 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
              NULL) {
     digest_function = value;
     option_sources["digest_function"] = rcfile;
+  } else if ((value = GetUnaryOption(arg, next_arg,
+                                     "--unix_digest_hash_attribute_name")) !=
+             NULL) {
+    unix_digest_hash_attribute_name = value;
+    option_sources["unix_digest_hash_attribute_name"] = rcfile;
   } else if ((value = GetUnaryOption(arg, next_arg, "--command_port")) !=
              NULL) {
     if (!blaze_util::safe_strto32(value, &command_port) ||

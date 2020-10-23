@@ -24,13 +24,13 @@ import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultT
 import com.google.devtools.build.lib.packages.Package.NameConflictException;
 import com.google.devtools.build.lib.packages.PackageFactory.PackageContext;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
-import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
-import com.google.devtools.build.lib.syntax.StarlarkThread.CallStackEntry;
 import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.eval.StarlarkThread.CallStackEntry;
+import net.starlark.java.syntax.Location;
 
 /**
  * Given a {@link RuleClass} and a set of attribute values, returns a {@link Rule} instance. Also
@@ -115,8 +115,7 @@ public class RuleFactory {
             pkgBuilder, attributeValues, callstack, label, recordRuleInstantiationCallstack);
 
     // The raw stack is of the form [<toplevel>@BUILD:1, macro@lib.bzl:1, cc_library@<builtin>].
-    // If we're recording it (--record_rule_instantiation_callstack),
-    // pop the innermost frame for the rule, since it's obvious.
+    // Pop the innermost frame for the rule, since it's obvious.
     callstack =
         recordRuleInstantiationCallstack
             ? callstack.subList(0, callstack.size() - 1) // pop

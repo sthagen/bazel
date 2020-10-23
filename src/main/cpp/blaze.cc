@@ -470,11 +470,6 @@ static vector<string> GetServerExeArgs(const blaze_util::Path &jvm_path,
         startup_options.failure_detail_out.AsCommandLineArgument());
   }
 
-  if (startup_options.deep_execroot) {
-    result.push_back("--deep_execroot");
-  } else {
-    result.push_back("--nodeep_execroot");
-  }
   if (startup_options.expand_configs_in_place) {
     result.push_back("--expand_configs_in_place");
   } else {
@@ -484,6 +479,10 @@ static vector<string> GetServerExeArgs(const blaze_util::Path &jvm_path,
     // Only include this if a value is requested - we rely on the empty case
     // being "null" to set the programmatic default in the server.
     result.push_back("--digest_function=" + startup_options.digest_function);
+  }
+  if (!startup_options.unix_digest_hash_attribute_name.empty()) {
+    result.push_back("--unix_digest_hash_attribute_name=" +
+                     startup_options.unix_digest_hash_attribute_name);
   }
   if (startup_options.idle_server_tasks) {
     result.push_back("--idle_server_tasks");

@@ -32,7 +32,6 @@ import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -55,6 +54,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import net.starlark.java.eval.StarlarkSemantics;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -108,7 +108,6 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
         new DirectoryListingStateFunction(
             externalFilesHelper, new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS)));
     RuleClassProvider ruleClassProvider = analysisMock.createRuleClassProvider();
-    skyFunctions.put(SkyFunctions.WORKSPACE_AST, new WorkspaceASTFunction(ruleClassProvider));
     skyFunctions.put(
         WorkspaceFileValue.WORKSPACE_FILE,
         new WorkspaceFileFunction(

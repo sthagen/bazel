@@ -14,12 +14,14 @@
 
 package com.google.devtools.build.lib.starlarkbuildapi;
 
+import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
-import com.google.devtools.build.lib.syntax.StarlarkValue;
 import net.starlark.java.annot.Param;
+import net.starlark.java.annot.ParamType;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkDocumentationCategory;
 import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.NoneType;
+import net.starlark.java.eval.StarlarkValue;
 
 /**
  * The "config" module of the Build API.
@@ -29,7 +31,7 @@ import net.starlark.java.annot.StarlarkMethod;
  */
 @StarlarkBuiltin(
     name = "config",
-    category = StarlarkDocumentationCategory.BUILTIN,
+    category = DocCategory.BUILTIN,
     doc =
         "This is a top-level module for creating configuration transitions and build "
             + "setting descriptors which describe what kind of build setting (if any) a rule is. "
@@ -55,7 +57,6 @@ public interface StarlarkConfigApi extends StarlarkValue {
       parameters = {
         @Param(
             name = FLAG_ARG,
-            type = Boolean.class,
             defaultValue = "False",
             doc = FLAG_ARG_DOC,
             named = true,
@@ -69,7 +70,6 @@ public interface StarlarkConfigApi extends StarlarkValue {
       parameters = {
         @Param(
             name = FLAG_ARG,
-            type = Boolean.class,
             defaultValue = "False",
             doc = FLAG_ARG_DOC,
             named = true,
@@ -83,7 +83,6 @@ public interface StarlarkConfigApi extends StarlarkValue {
       parameters = {
         @Param(
             name = FLAG_ARG,
-            type = Boolean.class,
             defaultValue = "False",
             doc = FLAG_ARG_DOC,
             named = true,
@@ -97,7 +96,6 @@ public interface StarlarkConfigApi extends StarlarkValue {
       parameters = {
         @Param(
             name = FLAG_ARG,
-            type = Boolean.class,
             defaultValue = "False",
             doc = FLAG_ARG_DOC,
             named = true,
@@ -108,7 +106,7 @@ public interface StarlarkConfigApi extends StarlarkValue {
   /** The API for build setting descriptors. */
   @StarlarkBuiltin(
       name = "BuildSetting",
-      category = StarlarkDocumentationCategory.BUILTIN,
+      category = DocCategory.BUILTIN,
       doc =
           "The descriptor for a single piece of configuration information. If configuration is a "
               + "key-value map of settings like {'cpu': 'ppc', 'copt': '-DFoo'}, this describes a "
@@ -122,9 +120,11 @@ public interface StarlarkConfigApi extends StarlarkValue {
       parameters = {
         @Param(
             name = "exec_group",
-            type = String.class,
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = NoneType.class),
+            },
             named = true,
-            noneable = true,
             defaultValue = "None",
             doc =
                 "The name of the exec group whose execution platform this transition will use. If"
@@ -136,7 +136,7 @@ public interface StarlarkConfigApi extends StarlarkValue {
   /** The api for exec transitions. */
   @StarlarkBuiltin(
       name = "ExecTransitionFactory",
-      category = StarlarkDocumentationCategory.BUILTIN,
+      category = DocCategory.BUILTIN,
       doc = "<i>experimental</i> an execution transition.")
   interface ExecTransitionFactoryApi extends StarlarkValue {}
 }

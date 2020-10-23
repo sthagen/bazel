@@ -1,14 +1,12 @@
 load("@rules_java//java:defs.bzl", "java_test")
 
-package(
-    default_testonly = 1,
-    default_visibility = ["//src:__subpackages__"],
-)
+package(default_testonly = 1)
 
 filegroup(
     name = "srcs",
     testonly = 0,
     srcs = glob(["**"]),
+    visibility = ["//src/main/java/net/starlark/java:bazel"],
 )
 
 # EvalTests test the Starlark interpreter.
@@ -24,9 +22,9 @@ java_test(
         "MethodLibraryTest.java",
         "MutabilityTest.java",
         "PrinterTest.java",
+        "StarlarkAnnotationsTest.java",
         "StarlarkEvaluationTest.java",
         "StarlarkFlagGuardingTest.java",
-        "StarlarkInterfaceUtilsTest.java",
         "StarlarkListTest.java",
         "StarlarkMutableTest.java",
         "StarlarkThreadDebuggingTest.java",
@@ -34,7 +32,7 @@ java_test(
         "StringModuleTest.java",
     ],
     deps = [
-        "//src/main/java/net/starlark/java/annot:annot_new",
+        "//src/main/java/net/starlark/java/annot",
         "//src/main/java/net/starlark/java/eval",
         "//src/main/java/net/starlark/java/syntax",
         "//third_party:guava",
@@ -48,37 +46,13 @@ java_test(
 java_test(
     name = "ScriptTest",
     srcs = ["ScriptTest.java"],
-    data = [
-        "testdata/all_any.sky",
-        "testdata/and_or_not.sky",
-        "testdata/comprehension.sky",
-        "testdata/cycles.sky",
-        "testdata/dict.sky",
-        "testdata/equality.sky",
-        "testdata/function.sky",
-        "testdata/int.sky",
-        "testdata/int_constructor.sky",
-        "testdata/int_function.sky",
-        "testdata/list_mutation.sky",
-        "testdata/list_slices.sky",
-        "testdata/min_max.sky",
-        "testdata/range.sky",
-        "testdata/reversed.sky",
-        "testdata/sorted.sky",
-        "testdata/string_elems.sky",
-        "testdata/string_find.sky",
-        "testdata/string_format.sky",
-        "testdata/string_misc.sky",
-        "testdata/string_partition.sky",
-        "testdata/string_slice_index.sky",
-        "testdata/string_split.sky",
-        "testdata/string_splitlines.sky",
-        "testdata/string_test_characters.sky",
-    ],
+    data = glob(["testdata/*.sky"]),
+    jvm_flags = ["-Dfile.encoding=UTF8"],
     use_testrunner = False,
     deps = [
-        "//src/main/java/net/starlark/java/annot:annot_new",
+        "//src/main/java/net/starlark/java/annot",
         "//src/main/java/net/starlark/java/eval",
+        "//src/main/java/net/starlark/java/lib/json",
         "//src/main/java/net/starlark/java/syntax",
         "//third_party:guava",
     ],

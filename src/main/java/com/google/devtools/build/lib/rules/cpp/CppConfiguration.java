@@ -64,6 +64,7 @@ public final class CppConfiguration extends Fragment
     GCOV("gcov"),
     GCOVTOOL("gcov-tool"),
     LD("ld"),
+    LLVM_COV("llvm-cov"),
     NM("nm"),
     OBJCOPY("objcopy"),
     OBJDUMP("objdump"),
@@ -618,6 +619,22 @@ public final class CppConfiguration extends Fragment
     return cppOptions.csFdoProfileLabel;
   }
 
+  public Label getPropellerOptimizeLabel() {
+    return cppOptions.propellerOptimizeLabel;
+  }
+
+  /**
+   * @deprecated Unsafe because it returns a value from target configuration even in the host
+   *     configuration.
+   */
+  @Deprecated
+  Label getPropellerOptimizeLabelUnsafeSinceItCanReturnValueFromWrongConfiguration() {
+    if (cppOptions.fdoInstrumentForBuild != null || cppOptions.csFdoInstrumentForBuild != null) {
+      return null;
+    }
+    return cppOptions.getPropellerOptimizeLabel();
+  }
+
   /**
    * @deprecated Unsafe because it returns a value from target configuration even in the host
    *     configuration.
@@ -744,5 +761,13 @@ public final class CppConfiguration extends Fragment
 
   public boolean strictHeaderCheckingFromStarlark() {
     return cppOptions.forceStrictHeaderCheckFromStarlark;
+  }
+
+  public boolean useCppCompileHeaderMnemonic() {
+    return cppOptions.useCppCompileHeaderMnemonic;
+  }
+
+  public boolean generateLlvmLCov() {
+    return cppOptions.generateLlvmLcov;
   }
 }

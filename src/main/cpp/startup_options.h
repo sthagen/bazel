@@ -158,10 +158,6 @@ class StartupOptions {
   // Override more finegrained rc file flags and ignore them all.
   bool ignore_all_rc_files;
 
-  // Whether to put the execroot at $OUTPUT_BASE/$WORKSPACE_NAME (if false) or
-  // $OUTPUT_BASE/execroot/$WORKSPACE_NAME (if true).
-  bool deep_execroot;
-
   // Block for the Blaze server lock. Otherwise,
   // quit with non-0 exit code if lock can't
   // be acquired immediately.
@@ -253,6 +249,8 @@ class StartupOptions {
 
   // The hash function to use when computing file digests.
   std::string digest_function;
+
+  std::string unix_digest_hash_attribute_name;
 
   bool idle_server_tasks;
 

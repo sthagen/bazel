@@ -28,22 +28,22 @@ import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.starlarkbuildapi.CommandLineArgsApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkCallable;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
-import com.google.devtools.build.lib.syntax.StarlarkValue;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Mutability;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.eval.StarlarkValue;
+import net.starlark.java.syntax.Location;
 
 /**
  * Implementation of the {@code Args} Starlark type, which, in a builder-like pattern, encapsulates
@@ -56,8 +56,9 @@ public abstract class Args implements CommandLineArgsApi {
   }
 
   @Override
-  public boolean isHashable() {
-    return false; // even a frozen Args is not hashable
+  public void checkHashable() throws EvalException {
+    // Even a frozen Args is not hashable.
+    throw Starlark.errorf("unhashable type: '%s'", Starlark.type(this));
   }
 
   @Override
@@ -435,8 +436,7 @@ public abstract class Args implements CommandLineArgsApi {
     private void validateArgName(Object argName) throws EvalException {
       if (!(argName instanceof String)) {
         throw Starlark.errorf(
-            "expected value of type 'string' for arg name, got '%s'",
-            argName.getClass().getSimpleName());
+            "expected value of type 'string' for arg name, got '%s'", Starlark.type(argName));
       }
     }
 
@@ -444,7 +444,7 @@ public abstract class Args implements CommandLineArgsApi {
       if (!(values instanceof Sequence || values instanceof Depset)) {
         throw Starlark.errorf(
             "expected value of type 'sequence or depset' for values, got '%s'",
-            values.getClass().getSimpleName());
+            Starlark.type(values));
       }
     }
 

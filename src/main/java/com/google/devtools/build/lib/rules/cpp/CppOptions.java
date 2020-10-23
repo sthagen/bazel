@@ -508,6 +508,20 @@ public class CppOptions extends FragmentOptions {
   public boolean enableFdoProfileAbsolutePath;
 
   @Option(
+      name = "propeller_optimize",
+      defaultValue = "null",
+      converter = LabelConverter.class,
+      category = "flags",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.ACTION_COMMAND_LINES, OptionEffectTag.AFFECTS_OUTPUTS},
+      help = "The layout file for propeller code layout optimizations.")
+  public Label propellerOptimizeLabel;
+
+  public Label getPropellerOptimizeLabel() {
+    return propellerOptimizeLabel;
+  }
+
+  @Option(
     name = "save_temps",
     defaultValue = "false",
     documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
@@ -560,21 +574,31 @@ public class CppOptions extends FragmentOptions {
               + "except bar.o.")
   public List<PerLabelOptions> perFileLtoBackendOpts;
 
+  /**
+   * The value of "--crosstool_top" to use for building tools.
+   *
+   * <p>We want to make sure this stays bound to the top-level configuration when not explicitly set
+   * (as opposed to a configuration that comes out of a transition). Otherwise we risk using the
+   * wrong crosstool (i.e., trying to build tools with an Android-specific crosstool).
+   *
+   * <p>To accomplish this, we initialize this to null and, if it isn't explicitly set, use {@link
+   * #getNormalized} to rewrite it to {@link #crosstoolTop}. Blaze always evaluates top-level
+   * configurations first, so they'll trigger this. But no followup transitions can.
+   */
   @Option(
-    name = "host_crosstool_top",
-    defaultValue = "null",
-    converter = LabelConverter.class,
-    documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-    effectTags = {
-      OptionEffectTag.LOADING_AND_ANALYSIS,
-      OptionEffectTag.CHANGES_INPUTS,
-      OptionEffectTag.AFFECTS_OUTPUTS
-    },
-    help =
-        "By default, the --crosstool_top and --compiler options are also used "
-            + "for the host configuration. If this flag is provided, Bazel uses the default libc "
-            + "and compiler for the given crosstool_top."
-  )
+      name = "host_crosstool_top",
+      defaultValue = "null",
+      converter = LabelConverter.class,
+      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+      effectTags = {
+        OptionEffectTag.LOADING_AND_ANALYSIS,
+        OptionEffectTag.CHANGES_INPUTS,
+        OptionEffectTag.AFFECTS_OUTPUTS
+      },
+      help =
+          "By default, the --crosstool_top and --compiler options are also used "
+              + "for the host configuration. If this flag is provided, Bazel uses the default libc "
+              + "and compiler for the given crosstool_top.")
   public Label hostCrosstoolTop;
 
   @Option(
@@ -1001,13 +1025,45 @@ public class CppOptions extends FragmentOptions {
       help = "If enabled, set strict header checking in the Starlark API")
   public boolean forceStrictHeaderCheckFromStarlark;
 
+  @Option(
+      name = "experimental_generate_llvm_lcov",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help = "If true, coverage for clang will generate an LCOV report.")
+  public boolean generateLlvmLcov;
+
+  @Option(
+      name = "incompatible_use_cpp_compile_header_mnemonic",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.EXECUTION},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If enabled, give distinguishing mnemonic to header processing actions")
+  public boolean useCppCompileHeaderMnemonic;
+
   /** See {@link #targetLibcTopLabel} documentation. * */
   @Override
   public FragmentOptions getNormalized() {
+    CppOptions newOptions = (CppOptions) this.clone();
+    boolean changed = false;
     if (targetLibcTopLabel != null
         && targetLibcTopLabel.getName().equals(TARGET_LIBC_TOP_NOT_YET_SET)) {
-      CppOptions newOptions = (CppOptions) this.clone();
       newOptions.targetLibcTopLabel = libcTopLabel;
+      changed = true;
+    }
+    if (hostCrosstoolTop == null) {
+      // Default to the initial target crosstoolTop.
+      newOptions.hostCrosstoolTop = crosstoolTop;
+      // Reset this, also, to maintain the invariant that host_compiler is ignored if
+      // host_crosstool_top is unset.
+      newOptions.hostCppCompiler = cppCompiler;
+      changed = true;
+    }
+    if (changed) {
       return newOptions;
     }
     return this;
@@ -1017,14 +1073,8 @@ public class CppOptions extends FragmentOptions {
   public FragmentOptions getHost() {
     CppOptions host = (CppOptions) getDefault();
 
-    // The crosstool options are partially copied from the target configuration.
-    if (hostCrosstoolTop == null) {
-      host.cppCompiler = cppCompiler;
-      host.crosstoolTop = crosstoolTop;
-    } else {
-      host.crosstoolTop = hostCrosstoolTop;
-      host.cppCompiler = hostCppCompiler;
-    }
+    host.crosstoolTop = hostCrosstoolTop;
+    host.cppCompiler = hostCppCompiler;
 
     // hostLibcTop doesn't default to the target's libcTop.
     // Only an explicit command-line option will change it.
@@ -1081,6 +1131,8 @@ public class CppOptions extends FragmentOptions {
     host.hostCxxoptList = hostCxxoptList;
     host.hostLibcTopLabel = hostLibcTopLabel;
     host.hostLinkoptList = hostLinkoptList;
+
+    host.experimentalStarlarkCcImport = experimentalStarlarkCcImport;
 
     return host;
   }

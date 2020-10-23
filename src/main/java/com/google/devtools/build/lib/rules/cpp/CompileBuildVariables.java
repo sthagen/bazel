@@ -26,10 +26,10 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainVariables.VariablesExtension;
-import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.List;
 import java.util.Map;
+import net.starlark.java.eval.EvalException;
 
 /** Enum covering all build variables we create for all various {@link CppCompileAction}. */
 public enum CompileBuildVariables {
@@ -113,6 +113,10 @@ public enum CompileBuildVariables {
   CS_FDO_INSTRUMENT_PATH("cs_fdo_instrument_path"),
   /** Path to the cache prefetch profile artifact */
   FDO_PREFETCH_HINTS_PATH("fdo_prefetch_hints_path"),
+  /** Path to the Propeller Optimize compiler profile artifact */
+  PROPELLER_OPTIMIZE_CC_PATH("propeller_optimize_cc_path"),
+  /** Path to the Propeller Optimize linker profile artifact */
+  PROPELLER_OPTIMIZE_LD_PATH("propeller_optimize_ld_path"),
   /** Variable for includes that compiler needs to include into sources. */
   INCLUDES("includes");
 

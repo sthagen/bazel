@@ -34,10 +34,6 @@ import com.google.devtools.build.lib.server.FailureDetails.Execution.Code;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.starlarkbuildapi.ActionApi;
 import com.google.devtools.build.lib.starlarkbuildapi.CommandLineArgsApi;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
 import com.google.devtools.build.lib.vfs.BulkDeleter;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.Root;
@@ -47,6 +43,10 @@ import java.util.Collection;
 import java.util.Map;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
 
 /**
  * Abstract implementation of Action which implements basic functionality: the inputs, outputs, and
@@ -371,7 +371,7 @@ public abstract class AbstractAction extends ActionKeyCacher implements Action, 
    * <p>If the path refers to a directory, recursively removes the contents of the directory.
    *
    * @param path the output to remove
-   * @param root the root containing the output. This is used to sanity-check that we don't delete
+   * @param root the root containing the output. This is used to check that we don't delete
    *     arbitrary files in the file system.
    */
   public static void deleteOutput(Path path, @Nullable ArtifactRoot root) throws IOException {
@@ -463,7 +463,7 @@ public abstract class AbstractAction extends ActionKeyCacher implements Action, 
   }
 
   @Override
-  public String describe() {
+  public final String describe() {
     String progressMessage = getProgressMessage();
     return progressMessage != null ? progressMessage : defaultProgressMessage();
   }

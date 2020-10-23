@@ -25,22 +25,17 @@ fi
 
 # Parse third_party/googleapis/BUILD.bazel to find the proto files we need to compile from googleapis
 GOOGLE_API_PROTOS="$(grep -o '".*\.proto"' third_party/googleapis/BUILD.bazel | sed 's/"//g' | sed 's|^|third_party/googleapis/|g')"
-PROTO_FILES=$(find third_party/remoteapis ${GOOGLE_API_PROTOS} third_party/pprof src/main/protobuf src/main/java/com/google/devtools/build/lib/buildeventstream/proto src/main/java/com/google/devtools/build/skyframe src/main/java/com/google/devtools/build/lib/skyframe/proto src/main/java/com/google/devtools/build/lib/bazel/debug src/main/java/com/google/devtools/build/lib/starlarkdebug/proto -name "*.proto")
-LIBRARY_JARS=$(find $ADDITIONAL_JARS third_party -name '*.jar' | grep -Fv JavaBuilder | grep -Fv third_party/guava | grep -ve 'third_party/grpc/grpc.*jar' | tr "\n" " ")
-GRPC_JAVA_VERSION=1.20.0
+PROTO_FILES=$(find third_party/remoteapis ${GOOGLE_API_PROTOS} third_party/pprof src/main/protobuf src/main/java/com/google/devtools/build/lib/buildeventstream/proto src/main/java/com/google/devtools/build/skyframe src/main/java/com/google/devtools/build/lib/skyframe/proto src/main/java/com/google/devtools/build/lib/bazel/debug src/main/java/com/google/devtools/build/lib/starlarkdebug/proto src/main/java/com/google/devtools/build/lib/packages/metrics/package_metrics.proto -name "*.proto")
+LIBRARY_JARS=$(find $ADDITIONAL_JARS third_party -name '*.jar' | grep -Fv JavaBuilder | grep -Fv third_party/guava/guava | grep -ve 'third_party/grpc/grpc.*jar' | tr "\n" " ")
+GRPC_JAVA_VERSION=1.32.2
 GRPC_LIBRARY_JARS=$(find third_party/grpc -name '*.jar' | grep -e ".*${GRPC_JAVA_VERSION}.*jar" | tr "\n" " ")
-# TODO(pcloudy): Remove this after upgrading gRPC to 1.26.0
-if [ -z "${GRPC_LIBRARY_JARS}" ]; then
-  GRPC_JAVA_VERSION=1.26.0
-  GRPC_LIBRARY_JARS=$(find third_party/grpc -name '*.jar' | grep -e ".*${GRPC_JAVA_VERSION}.*jar" | tr "\n" " ")
-fi
-GUAVA_VERSION=25.1
+GUAVA_VERSION=29.0
 GUAVA_JARS=$(find third_party/guava -name '*.jar' | grep -e ".*${GUAVA_VERSION}.*jar" | tr "\n" " ")
 LIBRARY_JARS="${LIBRARY_JARS} ${GRPC_LIBRARY_JARS} ${GUAVA_JARS}"
 
 DIRS=$(echo src/{java_tools/singlejar/java/com/google/devtools/build/zip,main/java} tools/java/runfiles ${OUTPUT_DIR}/src)
 # Exclude source files that are not needed for Bazel itself, which avoids dependencies like truth.
-EXCLUDE_FILES="src/main/java/com/google/devtools/build/lib/server/GrpcServerImpl.java src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/testing/* src/main/java/com/google/devtools/build/lib/collect/nestedset/NestedSetCodecTestUtils.java"
+EXCLUDE_FILES="src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/testing/* src/main/java/com/google/devtools/build/lib/collect/nestedset/NestedSetCodecTestUtils.java"
 # Exclude whole directories under the bazel src tree that bazel itself
 # doesn't depend on.
 EXCLUDE_DIRS="src/main/java/com/google/devtools/build/skydoc src/main/java/com/google/devtools/build/docgen tools/java/runfiles/testing src/main/java/com/google/devtools/build/lib/skyframe/serialization/testutils src/main/java/com/google/devtools/common/options/testing"
@@ -397,16 +392,16 @@ function build_jni() {
     cp "$tmp_output" "$output"
     chmod 0555 "$output"
 
-    JNI_FLAGS="-Dio.bazel.EnableJni=1 -Djava.library.path=${output_dir}"
+    JNI_FLAGS="-Djava.library.path=${output_dir}"
   else
-    # We don't need JNI on other platforms.
-    JNI_FLAGS="-Dio.bazel.EnableJni=0"
+    # We don't need JNI on other platforms. The Java NIO file system fallback is
+    # sufficient.
+    true
   fi
 }
 
 build_jni "${ARCHIVE_DIR}"
 
-cp src/main/tools/jdk.BUILD ${ARCHIVE_DIR}/jdk.BUILD
 cp $OUTPUT_DIR/libblaze.jar ${ARCHIVE_DIR}
 
 # TODO(b/28965185): Remove when xcode-locator is no longer required in embedded_binaries.

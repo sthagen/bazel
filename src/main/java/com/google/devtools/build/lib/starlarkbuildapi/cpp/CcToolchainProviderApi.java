@@ -15,19 +15,19 @@
 package com.google.devtools.build.lib.starlarkbuildapi.cpp;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.starlarkbuildapi.platform.ToolchainInfoApi;
-import com.google.devtools.build.lib.syntax.EvalException;
 import javax.annotation.Nullable;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkDocumentationCategory;
 import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.EvalException;
 
 /** Information about the C++ toolchain. */
 @StarlarkBuiltin(
     name = "CcToolchainInfo",
-    category = StarlarkDocumentationCategory.PROVIDER,
+    category = DocCategory.PROVIDER,
     doc = "Information about the C++ compiler being used.")
 public interface CcToolchainProviderApi<FeatureConfigurationT extends FeatureConfigurationApi>
     extends ToolchainInfoApi {
@@ -43,8 +43,7 @@ public interface CcToolchainProviderApi<FeatureConfigurationT extends FeatureCon
             name = "feature_configuration",
             doc = "Feature configuration to be queried.",
             positional = false,
-            named = true,
-            type = FeatureConfigurationApi.class)
+            named = true)
       })
   boolean usePicForDynamicLibrariesFromStarlark(FeatureConfigurationT featureConfigurationApi);
 
@@ -75,8 +74,7 @@ public interface CcToolchainProviderApi<FeatureConfigurationT extends FeatureCon
             name = "feature_configuration",
             doc = "Feature configuration to be queried.",
             positional = false,
-            named = true,
-            type = FeatureConfigurationApi.class)
+            named = true)
       })
   public Depset getStaticRuntimeLibForStarlark(FeatureConfigurationT featureConfiguration)
       throws EvalException;
@@ -94,8 +92,7 @@ public interface CcToolchainProviderApi<FeatureConfigurationT extends FeatureCon
             name = "feature_configuration",
             doc = "Feature configuration to be queried.",
             positional = false,
-            named = true,
-            type = FeatureConfigurationApi.class)
+            named = true)
       })
   public Depset getDynamicRuntimeLibForStarlark(FeatureConfigurationT featureConfiguration)
       throws EvalException;

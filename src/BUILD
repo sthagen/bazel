@@ -12,7 +12,7 @@ md5_cmd = "set -e -o pipefail && %s $(SRCS) | %s | %s > $@"
     name = "install_base_key-file" + suffix,
     srcs = [
         "//src/main/java/com/google/devtools/build/lib/bazel:BazelServer_deploy.jar",
-        "//src/main/java/com/google/devtools/build/lib/syntax:cpu_profiler",
+        "//src/main/java/net/starlark/java/eval:cpu_profiler",
         # TODO(brandjon): ensure we haven't forgotten any package-zip items,
         # otherwise bazel won't correctly reextract modified files.
         "//src/main/cpp:client",
@@ -336,12 +336,9 @@ filegroup(
         "install_base_key" + suffix,
         ":platforms_archive",
         # Ordinary items follow:
-        "//src/main/java/com/google/devtools/build/lib/syntax:cpu_profiler",
-        "//src/main/native:target-os-unix-native-lib",
-        "//src/main/native/windows:target-os-native-lib",
+        "//src/main/java/net/starlark/java/eval:cpu_profiler",
         "//src/main/tools:build-runfiles",
         "//src/main/tools:process-wrapper",
-        "//src/main/tools:jdk-support",
         "//src/main/tools:linux-sandbox",
         "//tools/osx:xcode-locator",
     ] + select({
@@ -452,6 +449,7 @@ filegroup(
         "//src/main/java/com/google/devtools/common/options:srcs",
         "//src/main/java/net/starlark/java/cmd:srcs",
         "//src/main/java/net/starlark/java/spelling:srcs",
+        "//src/main/java/net/starlark/java/lib/json:srcs",
         "//src/main/native:srcs",
         "//src/main/protobuf:srcs",
         "//src/main/tools:srcs",
@@ -571,9 +569,7 @@ JAVA_TOOLS_DEPLOY_JARS = [
     "//conditions:default": [],
 })
 
-JAVA_VERSIONS = ("11", "14")
-
-# TODO(davido): Hard code the javac 11 for now; it is required for default toolchain.
+JAVA_VERSIONS = ("11",)
 
 [
     genrule(
@@ -641,18 +637,26 @@ JAVA_VERSIONS = ("11", "14")
     for java_version in JAVA_VERSIONS
 ]
 
+_PLATFORM = select({
+    "//src/conditions:darwin": "macos",
+    "//src/conditions:darwin_x86_64": "macos",
+    "//src/conditions:windows": "win",
+    "//src/conditions:linux_x86_64": "linux",
+    "//conditions:default": "linux",
+})
+
 [
-    # The java_tools releases can have BUILD files that vary depending on the
-    # javac version they embed. Currently the only difference is in the
-    # java_toolchain source version which has to be 14 for javac 14 to be able
-    # to build new Java 14 features. This is not used atm, as the toolchain for
-    # javac 14 was duplicated, but it might be used in future Bazel releases to
-    # support new javac release, so that we preserve this step for now.
+    # Currently a single release of java_tools contains java_toolchains for
+    # Java 8 to 11 (using remote_jdk11 with patched javac), and Java 14 and 15
+    # (using corresponding remote_jdk). All toolchains use JavaBuilder.
+    # The java_tools are released for three platforms: linux, macos and
+    # windows. Each release is bound to the remote_jdks for the corresponding
+    # platform.
     genrule(
         name = "create_java_tools_build_java" + java_version,
         srcs = ["//tools/jdk:BUILD.java_tools"],
         outs = ["remote_java_tools_java" + java_version + "/BUILD"],
-        cmd = "sed 's/JAVA_LANGUAGE_LEVEL/" + java_version + "/g' $< > $@",
+        cmd = "sed 's/JAVA_LANGUAGE_LEVEL/" + java_version + "/g; s/PLATFORM/" + _PLATFORM + "/g' $< > $@",
     )
     for java_version in JAVA_VERSIONS
 ]
@@ -660,9 +664,12 @@ JAVA_VERSIONS = ("11", "14")
 [
     genrule(
         name = "java_tools_java" + java_version + "_build_zip",
-        srcs = ["remote_java_tools_java" + java_version + "/BUILD"],
+        srcs = [
+            "remote_java_tools_java" + java_version + "/BUILD",
+            "//tools/jdk:java_toolchain_default.bzl",
+        ],
         outs = ["java_tools_java_" + java_version + "_build.zip"],
-        cmd = "zip -jX $@ $<",
+        cmd = "zip -qjX $@ $(SRCS)",
     )
     for java_version in JAVA_VERSIONS
 ]
@@ -755,6 +762,9 @@ filegroup(
         "@openjdk14_darwin_archive//:WORKSPACE",
         "@openjdk14_linux_archive//:WORKSPACE",
         "@openjdk14_windows_archive//:WORKSPACE",
+        "@openjdk15_darwin_archive//:WORKSPACE",
+        "@openjdk15_linux_archive//:WORKSPACE",
+        "@openjdk15_windows_archive//:WORKSPACE",
         "@openjdk_linux_aarch64_minimal//file",
         "@openjdk_linux_minimal//file",
         "@openjdk_macos_minimal//file",
@@ -764,9 +774,6 @@ filegroup(
         "@remote_java_tools_javac11_test_darwin//:WORKSPACE",
         "@remote_java_tools_javac11_test_linux//:WORKSPACE",
         "@remote_java_tools_javac11_test_windows//:WORKSPACE",
-        "@remote_java_tools_javac14_test_darwin//:WORKSPACE",
-        "@remote_java_tools_javac14_test_linux//:WORKSPACE",
-        "@remote_java_tools_javac14_test_windows//:WORKSPACE",
         "@remote_java_tools_linux_for_testing//:WORKSPACE",
         "@remote_java_tools_windows_for_testing//:WORKSPACE",
         "@remotejdk11_linux_aarch64_for_testing//:WORKSPACE",
@@ -778,6 +785,9 @@ filegroup(
         "@remotejdk14_linux_for_testing//:WORKSPACE",
         "@remotejdk14_macos_for_testing//:WORKSPACE",
         "@remotejdk14_win_for_testing//:WORKSPACE",
+        "@remotejdk15_linux_for_testing//:WORKSPACE",
+        "@remotejdk15_macos_for_testing//:WORKSPACE",
+        "@remotejdk15_win_for_testing//:WORKSPACE",
         "@rules_cc//:WORKSPACE",
         "@rules_java//:WORKSPACE",
         "@rules_pkg//:WORKSPACE",

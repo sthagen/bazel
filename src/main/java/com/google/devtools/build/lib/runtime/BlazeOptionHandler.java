@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.In
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.Command.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -194,7 +195,7 @@ public final class BlazeOptionHandler {
   }
 
   private void parseArgsAndConfigs(List<String> args, ExtendedEventHandler eventHandler)
-      throws OptionsParsingException, InterruptedException {
+      throws OptionsParsingException, InterruptedException, AbruptExitException {
     Path workspaceDirectory = workspace.getWorkspace();
     // TODO(ulfjack): The working directory is passed by the client as part of CommonCommandOptions,
     // and we can't know it until after we've parsed the options, so use the workspace for now.
@@ -216,7 +217,6 @@ public final class BlazeOptionHandler {
     // proper rcfiles. The --default_override options should be parsed with the --rc_source since
     // {@link #parseRcOptions} depends on the list populated by the {@link
     // ClientOptions#OptionOverrideConverter}.
-
     ImmutableList.Builder<String> defaultOverridesAndRcSources = new ImmutableList.Builder<>();
     ImmutableList.Builder<String> remainingCmdLine = new ImmutableList.Builder<>();
     partitionCommandLineArgs(cmdLineAfterCommand, defaultOverridesAndRcSources, remainingCmdLine);
@@ -347,6 +347,8 @@ public final class BlazeOptionHandler {
                   FailureDetails.Interrupted.newBuilder()
                       .setCode(FailureDetails.Interrupted.Code.OPTIONS_PARSING))
               .build());
+    } catch (AbruptExitException e) {
+      return e.getDetailedExitCode();
     }
     return DetailedExitCode.success();
   }

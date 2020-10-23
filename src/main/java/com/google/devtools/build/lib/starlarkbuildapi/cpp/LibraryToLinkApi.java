@@ -14,12 +14,12 @@
 
 package com.google.devtools.build.lib.starlarkbuildapi.cpp;
 
+import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.StarlarkValue;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkDocumentationCategory;
 import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.StarlarkValue;
 
 /**
  * A library the user can link to. This is different from a simple linker input in that it also has
@@ -27,7 +27,7 @@ import net.starlark.java.annot.StarlarkMethod;
  */
 @StarlarkBuiltin(
     name = "LibraryToLink",
-    category = StarlarkDocumentationCategory.BUILTIN,
+    category = DocCategory.BUILTIN,
     doc = "A library the user can link against.")
 public interface LibraryToLinkApi<FileT extends FileApi> extends StarlarkValue {
   @StarlarkMethod(

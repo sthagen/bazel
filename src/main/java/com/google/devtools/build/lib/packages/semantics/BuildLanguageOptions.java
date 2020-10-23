@@ -18,7 +18,6 @@ package com.google.devtools.build.lib.packages.semantics;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Interner;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
@@ -27,6 +26,7 @@ import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import java.io.Serializable;
 import java.util.List;
+import net.starlark.java.eval.StarlarkSemantics;
 
 /**
  * Options that affect the semantics of Bazel's build language.
@@ -256,6 +256,21 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
               + " requirements; otherwise tags are not propagated. See"
               + " https://github.com/bazelbuild/bazel/issues/8830 for details.")
   public boolean experimentalAllowTagsPropagation;
+
+  @Option(
+      name = "incompatible_struct_has_no_methods",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help =
+          "Disables the to_json and to_proto methods of struct, which pollute the struct field"
+              + " namespace. Instead, use json.encode or json.encode_indent for JSON, or"
+              + " proto.encode_text for textproto.")
+  public boolean incompatibleStructHasNoMethods;
 
   @Option(
       name = "incompatible_always_check_depset_elements",
@@ -550,7 +565,7 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
 
   @Option(
       name = "incompatible_objc_provider_remove_compile_info",
-      defaultValue = "false",
+      defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
       effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
       metadataTags = {
@@ -569,7 +584,9 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
         OptionMetadataTag.INCOMPATIBLE_CHANGE,
         OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
       },
-      help = "If set to true, the jar_file parameter in pack_sources will be removed.")
+      help =
+          "If set to true, the jar_file, and host_javabase parameters in pack_sources and "
+              + "host_javabase in compile will all be removed.")
   public boolean incompatibleJavaCommonParameters;
 
   @Option(
@@ -581,16 +598,6 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
           "The maximum number of Starlark computation steps that may be executed by a BUILD file"
               + " (zero means no limit).")
   public long maxComputationSteps;
-
-  @Option(
-      name = "record_rule_instantiation_callstack",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
-      help =
-          "Causes each rule to record the callstack at the moment of its instantiation, at a"
-              + " modest cost in memory. The stack is visible in some forms of query output.")
-  public boolean recordRuleInstantiationCallstack;
 
   /**
    * An interner to reduce the number of StarlarkSemantics instances. A single Blaze instance should
@@ -645,6 +652,7 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
             .setBool(INCOMPATIBLE_RUN_SHELL_COMMAND_STRING, incompatibleRunShellCommandString)
             .setBool(
                 StarlarkSemantics.INCOMPATIBLE_STRING_REPLACE_COUNT, incompatibleStringReplaceCount)
+            .setBool(INCOMPATIBLE_STRUCT_HAS_NO_METHODS, incompatibleStructHasNoMethods)
             .setBool(
                 INCOMPATIBLE_VISIBILITY_PRIVATE_ATTRIBUTES_AT_DEFINITION,
                 incompatibleVisibilityPrivateAttributesAtDefinition)
@@ -663,7 +671,6 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
                 INCOMPATIBLE_OBJC_PROVIDER_REMOVE_COMPILE_INFO,
                 incompatibleObjcProviderRemoveCompileInfo)
             .set(MAX_COMPUTATION_STEPS, maxComputationSteps)
-            .setBool(RECORD_RULE_INSTANTIATION_CALLSTACK, recordRuleInstantiationCallstack)
             .build();
     return INTERNER.intern(semantics);
   }
@@ -722,19 +729,21 @@ public class BuildLanguageOptions extends OptionsBase implements Serializable {
   public static final String INCOMPATIBLE_NO_RULE_OUTPUTS_PARAM =
       "-incompatible_no_rule_outputs_param";
   public static final String INCOMPATIBLE_OBJC_PROVIDER_REMOVE_COMPILE_INFO =
-      "-incompatible_objc_provider_remove_compile_info";
+      "+incompatible_objc_provider_remove_compile_info";
   public static final String INCOMPATIBLE_REQUIRE_LINKER_INPUT_CC_API =
       "-incompatible_require_linker_input_cc_api";
   public static final String INCOMPATIBLE_RESTRICT_STRING_ESCAPES =
       "-incompatible_restrict_string_escapes";
   public static final String INCOMPATIBLE_RUN_SHELL_COMMAND_STRING =
       "-incompatible_run_shell_command_string";
+  public static final String INCOMPATIBLE_STRUCT_HAS_NO_METHODS =
+      "-incompatible_struct_has_no_methods";
   public static final String INCOMPATIBLE_USE_CC_CONFIGURE_FROM_RULES_CC =
       "-incompatible_use_cc_configure_from_rules";
   public static final String INCOMPATIBLE_VISIBILITY_PRIVATE_ATTRIBUTES_AT_DEFINITION =
       "-incompatible_visibility_private_attributes_at_definition";
   public static final String RECORD_RULE_INSTANTIATION_CALLSTACK =
-      "-record_rule_instantiation_callstack";
+      "+record_rule_instantiation_callstack";
 
   // non-booleans
   public static final StarlarkSemantics.Key<String> EXPERIMENTAL_BUILTINS_BZL_PATH =
