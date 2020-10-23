@@ -89,11 +89,12 @@ import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.server.FailureDetails.Analysis;
+import com.google.devtools.build.lib.server.FailureDetails.Analysis.Code;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.SaneAnalysisException;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
@@ -110,6 +111,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.syntax.Location;
 
 /**
  * The totality of data available during the analysis of a rule.
@@ -312,12 +316,36 @@ public final class RuleContext extends TargetContext
 
   @Override
   public ArtifactRoot getBinDirectory() {
-    return getConfiguration().getBinDirectory(rule.getRepository());
+    return getConfiguration().getBinDirectory(getLabel().getRepository());
+  }
+
+  public ArtifactRoot getIncludeDirectory() {
+    return getConfiguration().getIncludeDirectory(getLabel().getRepository());
+  }
+
+  public ArtifactRoot getGenfilesDirectory() {
+    return getConfiguration().getGenfilesDirectory(getLabel().getRepository());
+  }
+
+  public ArtifactRoot getCoverageMetadataDirectory() {
+    return getConfiguration().getCoverageMetadataDirectory(getLabel().getRepository());
+  }
+
+  public ArtifactRoot getTestLogsDirectory() {
+    return getConfiguration().getTestLogsDirectory(getLabel().getRepository());
+  }
+
+  public PathFragment getBinFragment() {
+    return getConfiguration().getBinFragment(getLabel().getRepository());
+  }
+
+  public PathFragment getGenfilesFragment() {
+    return getConfiguration().getGenfilesFragment(getLabel().getRepository());
   }
 
   @Override
   public ArtifactRoot getMiddlemanDirectory() {
-    return getConfiguration().getMiddlemanDirectory(rule.getRepository());
+    return getConfiguration().getMiddlemanDirectory(getLabel().getRepository());
   }
 
   public Rule getRule() {
@@ -720,8 +748,8 @@ public final class RuleContext extends TargetContext
   @Override
   public ArtifactRoot getBinOrGenfilesDirectory() {
     return rule.hasBinaryOutput()
-        ? getConfiguration().getBinDirectory(rule.getRepository())
-        : getConfiguration().getGenfilesDirectory(rule.getRepository());
+        ? getConfiguration().getBinDirectory(getLabel().getRepository())
+        : getConfiguration().getGenfilesDirectory(getLabel().getRepository());
   }
 
   /**
@@ -734,7 +762,7 @@ public final class RuleContext extends TargetContext
 
   public Artifact getBinArtifact(PathFragment relative) {
     return getPackageRelativeArtifact(
-        relative, getConfiguration().getBinDirectory(rule.getRepository()));
+        relative, getConfiguration().getBinDirectory(getLabel().getRepository()));
   }
 
   /**
@@ -747,7 +775,7 @@ public final class RuleContext extends TargetContext
 
   public Artifact getGenfilesArtifact(PathFragment relative) {
     return getPackageRelativeArtifact(
-        relative, getConfiguration().getGenfilesDirectory(rule.getRepository()));
+        relative, getConfiguration().getGenfilesDirectory(getLabel().getRepository()));
   }
 
   @Override
@@ -791,7 +819,7 @@ public final class RuleContext extends TargetContext
 
   @Override
   public PathFragment getPackageDirectory() {
-    return getLabel().getPackageIdentifier().getSourceRoot();
+    return getLabel().getPackageIdentifier().getPackagePath();
   }
 
   /**
@@ -916,7 +944,7 @@ public final class RuleContext extends TargetContext
       ImmutableList<String> transitionKeys = t.getTransitionKeys();
       if (transitionKeys.isEmpty()) {
         // The split transition is not active, i.e. does not change build configurations.
-        // TODO(jungjw): Investigate if we need to do a sanity check here.
+        // TODO(jungjw): Investigate if we need to do a check here.
         return ImmutableMap.of(Optional.absent(), deps);
       }
       for (String key : transitionKeys) {
@@ -1021,9 +1049,29 @@ public final class RuleContext extends TargetContext
    * specified attribute.
    */
   public List<? extends TransitiveInfoCollection> getPrerequisites(String attributeName) {
+    if (!attributes().has(attributeName)) {
+      return ImmutableList.of();
+    }
+
+    List<ConfiguredTargetAndData> prerequisiteConfiguredTargets;
+    // android_binary and android_test override deps to use a split transition.
+    if ((getRule().getRuleClass().equals("android_binary")
+            || getRule().getRuleClass().equals("android_test"))
+        && attributeName.equals("deps")
+        && attributes().getAttributeDefinition(attributeName).getTransitionFactory().isSplit()) {
+      // TODO(b/168038145): Restore legacy behavior of returning the prerequisites from the first
+      // portion of the split transition.
+      // Callers should be identified, cleaned up, and this check removed.
+      Map<Optional<String>, List<ConfiguredTargetAndData>> map =
+          getSplitPrerequisiteConfiguredTargetAndTargets(attributeName);
+      prerequisiteConfiguredTargets =
+          map.isEmpty() ? ImmutableList.of() : map.entrySet().iterator().next().getValue();
+    } else {
+      prerequisiteConfiguredTargets = getPrerequisiteConfiguredTargets(attributeName);
+    }
+
     return Lists.transform(
-        getPrerequisiteConfiguredTargets(attributeName),
-        ConfiguredTargetAndData::getConfiguredTarget);
+        prerequisiteConfiguredTargets, ConfiguredTargetAndData::getConfiguredTarget);
   }
 
   /**
@@ -1199,16 +1247,11 @@ public final class RuleContext extends TargetContext
   }
 
   public boolean targetPlatformHasConstraint(ConstraintValueInfo constraintValue) {
-    if (toolchainContexts == null
-        || toolchainContexts.getDefaultToolchainContext().targetPlatform() == null) {
+    if (toolchainContexts == null || toolchainContexts.getTargetPlatform() == null) {
       return false;
     }
     // All toolchain contexts should have the same target platform so we access via the default.
-    return toolchainContexts
-        .getDefaultToolchainContext()
-        .targetPlatform()
-        .constraints()
-        .hasConstraintValue(constraintValue);
+    return toolchainContexts.getTargetPlatform().constraints().hasConstraintValue(constraintValue);
   }
 
   public ConstraintSemantics<RuleContext> getConstraintSemantics() {
@@ -1317,6 +1360,15 @@ public final class RuleContext extends TargetContext
       implements SaneAnalysisException {
     InvalidExecGroupException(String message) {
       super(message);
+    }
+
+    @Override
+    public DetailedExitCode getDetailedExitCode() {
+      return DetailedExitCode.of(
+          FailureDetail.newBuilder()
+              .setMessage(getMessage())
+              .setAnalysis(Analysis.newBuilder().setCode(Code.EXEC_GROUP_MISSING))
+              .build());
     }
   }
 
@@ -1443,7 +1495,8 @@ public final class RuleContext extends TargetContext
    */
   @Override
   public final PathFragment getUniqueDirectory(PathFragment fragment) {
-    return AnalysisUtils.getUniqueDirectory(getLabel(), fragment);
+    return AnalysisUtils.getUniqueDirectory(
+        getLabel(), fragment, getConfiguration().isSiblingRepositoryLayout());
   }
 
   /**
@@ -1588,7 +1641,7 @@ public final class RuleContext extends TargetContext
   public final Artifact.DerivedArtifact getRelatedArtifact(
       PathFragment pathFragment, String extension) {
     PathFragment file = FileSystemUtils.replaceExtension(pathFragment, extension);
-    return getDerivedArtifact(file, getConfiguration().getBinDirectory(rule.getRepository()));
+    return getDerivedArtifact(file, getConfiguration().getBinDirectory(getLabel().getRepository()));
   }
 
   /**

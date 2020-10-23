@@ -362,13 +362,13 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
     packageOptions.showLoadingProgress = true;
     packageOptions.globbingThreads = 7;
 
-    BuildLanguageOptions starlarkSemanticsOptions =
+    BuildLanguageOptions buildLanguageOptions =
         optionsParser.getOptions(BuildLanguageOptions.class);
 
     skyframeExecutor.preparePackageLoading(
         pathPackageLocator,
         packageOptions,
-        starlarkSemanticsOptions,
+        buildLanguageOptions,
         UUID.randomUUID(),
         ImmutableMap.<String, String>of(),
         new TimestampGranularityMonitor(BlazeClock.instance()));
@@ -550,7 +550,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         .getArtifactFactory()
         .getDerivedArtifact(
             label.getPackageFragment().getRelative(packageRelativePath),
-            getTargetConfiguration().getBinDirectory(label.getPackageIdentifier().getRepository()),
+            getTargetConfiguration().getBinDirectory(label.getRepository()),
             ConfiguredTargetKey.builder()
                 .setConfiguredTarget(owner)
                 .setConfiguration(

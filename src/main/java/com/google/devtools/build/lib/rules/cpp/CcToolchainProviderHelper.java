@@ -35,11 +35,8 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
-import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.rules.cpp.CcToolchain.AdditionalBuildVariablesComputer;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Starlark;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.EnumSet;
@@ -47,6 +44,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
 
 /** Helper responsible for creating CcToolchainProvider */
 public class CcToolchainProviderHelper {
@@ -76,11 +75,7 @@ public class CcToolchainProviderHelper {
     CcToolchainFeatures toolchainFeatures;
     PathFragment toolsDirectory =
         getToolsDirectory(
-            attributes.getCcToolchainLabel(),
-            ruleContext
-                .getAnalysisEnvironment()
-                .getStarlarkSemantics()
-                .getBool(BuildLanguageOptions.EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT));
+            attributes.getCcToolchainLabel(), configuration.isSiblingRepositoryLayout());
     try {
       toolPaths = computeToolPaths(toolchainConfigInfo, toolsDirectory);
       toolchainFeatures = new CcToolchainFeatures(toolchainConfigInfo, toolsDirectory);
@@ -98,7 +93,7 @@ public class CcToolchainProviderHelper {
     String purposePrefix = attributes.getPurposePrefix();
     String runtimeSolibDirBase = attributes.getRuntimeSolibDirBase();
     final PathFragment runtimeSolibDir =
-        configuration.getBinFragment().getRelative(runtimeSolibDirBase);
+        ruleContext.getBinFragment().getRelative(runtimeSolibDirBase);
     String solibDirectory = "_solib_" + toolchainConfigInfo.getTargetCpu();
     PathFragment defaultSysroot =
         CppConfiguration.computeDefaultSysroot(toolchainConfigInfo.getBuiltinSysroot());
@@ -336,7 +331,8 @@ public class CcToolchainProviderHelper {
     if (packageEndIndex != -1 && s.startsWith(PACKAGE_START)) {
       String packageString = s.substring(PACKAGE_START.length(), packageEndIndex);
       try {
-        pathPrefix = PackageIdentifier.parse(packageString).getSourceRoot();
+        // TODO(jungjw): This should probably be getExecPath.
+        pathPrefix = PackageIdentifier.parse(packageString).getPackagePath();
       } catch (LabelSyntaxException e) {
         throw new InvalidConfigurationException("The package '" + packageString + "' is not valid");
       }
@@ -487,7 +483,7 @@ public class CcToolchainProviderHelper {
                 if (tool == CppConfiguration.Tool.DWP) {
                   // TODO(hlopko): check dwp tool in analysis when per_object_debug_info is enabled.
                   return false;
-                } else if (tool == CppConfiguration.Tool.LLVM_PROFDATA) {
+                } else if (tool == CppConfiguration.Tool.LLVM_PROFDATA || tool == Tool.LLVM_COV) {
                   // TODO(tmsriram): Fix this to check if this is a llvm crosstool
                   // and return true.  This needs changes to crosstool_config.proto.
                   return false;

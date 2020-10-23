@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.starlark;
 
+import static com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions.EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -51,13 +52,6 @@ import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkActionFactoryApi;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.GeneratedMessage;
 import java.nio.charset.StandardCharsets;
@@ -66,6 +60,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
 
 /** Provides a Starlark interface for all action creation needs. */
 public class StarlarkActionFactory implements StarlarkActionFactoryApi {
@@ -82,9 +83,9 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     this.ruleContext = ruleContext;
   }
 
-  ArtifactRoot newFileRoot() throws EvalException {
+  ArtifactRoot newFileRoot() {
     return context.isForAspect()
-        ? ruleContext.getConfiguration().getBinDirectory(ruleContext.getRule().getRepository())
+        ? ruleContext.getBinDirectory()
         : ruleContext.getBinOrGenfilesDirectory();
   }
 
@@ -121,7 +122,10 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     if (Starlark.NONE.equals(sibling)) {
       fragment = ruleContext.getPackageDirectory().getRelative(PathFragment.create(filename));
     } else {
-      PathFragment original = ((Artifact) sibling).getRootRelativePath();
+      PathFragment original =
+          ((Artifact) sibling)
+              .getOutputDirRelativePath(
+                  starlarkSemantics.getBool(EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT));
       fragment = original.replaceName(filename);
     }
 
@@ -141,7 +145,10 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     if (Starlark.NONE.equals(sibling)) {
       fragment = ruleContext.getPackageDirectory().getRelative(PathFragment.create(filename));
     } else {
-      PathFragment original = ((Artifact) sibling).getRootRelativePath();
+      PathFragment original =
+          ((Artifact) sibling)
+              .getOutputDirRelativePath(
+                  starlarkSemantics.getBool(EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT));
       fragment = original.replaceName(filename);
     }
 
@@ -174,7 +181,10 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     if (Starlark.NONE.equals(sibling)) {
       rootRelativePath = ruleContext.getPackageDirectory().getRelative(filename);
     } else {
-      PathFragment original = ((Artifact) sibling).getRootRelativePath();
+      PathFragment original =
+          ((Artifact) sibling)
+              .getOutputDirRelativePath(
+                  starlarkSemantics.getBool(EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT));
       rootRelativePath = original.replaceName(filename);
     }
 
@@ -234,7 +244,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     String progressMessage =
         (progressMessageUnchecked != Starlark.NONE)
             ? (String) progressMessageUnchecked
-            : "Creating symlink " + outputArtifact.getRootRelativePathString();
+            : "Creating symlink " + outputArtifact.getExecPathString();
 
     SymlinkAction action;
     if (targetFile != Starlark.NONE) {

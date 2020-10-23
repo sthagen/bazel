@@ -45,7 +45,6 @@ import com.google.devtools.build.lib.pkgcache.LoadingPhaseCompleteEvent;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.skyframe.ConfigurationPhaseStartedEvent;
 import com.google.devtools.build.lib.skyframe.LoadingPhaseStartedEvent;
-import com.google.devtools.build.lib.syntax.Location;
 import com.google.devtools.build.lib.util.io.AnsiTerminal;
 import com.google.devtools.build.lib.util.io.AnsiTerminal.Color;
 import com.google.devtools.build.lib.util.io.AnsiTerminalWriter;
@@ -63,12 +62,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
+import net.starlark.java.syntax.Location;
 
 /** An experimental new output stream. */
 public class UiEventHandler implements EventHandler {
@@ -115,8 +114,8 @@ public class UiEventHandler implements EventHandler {
   private volatile boolean shutdown;
   private final AtomicReference<Thread> updateThread;
   private final Lock updateLock;
-  private byte[] stdoutBuffer;
-  private byte[] stderrBuffer;
+  private ByteArrayOutputStream stdoutLineBuffer;
+  private ByteArrayOutputStream stderrLineBuffer;
 
   private final int maxStdoutErrBytes;
   public final int terminalWidth;
@@ -192,8 +191,8 @@ public class UiEventHandler implements EventHandler {
               NO_CURSES_MINIMAL_PROGRESS_RATE_LIMIT);
     }
     this.minimalUpdateInterval = Math.max(this.minimalDelayMillis, MAXIMAL_UPDATE_DELAY_MILLIS);
-    this.stdoutBuffer = new byte[] {};
-    this.stderrBuffer = new byte[] {};
+    this.stdoutLineBuffer = new ByteArrayOutputStream();
+    this.stderrLineBuffer = new ByteArrayOutputStream();
     this.dateShown = false;
     this.updateThread = new AtomicReference<>();
     this.updateLock = new ReentrantLock();
@@ -209,16 +208,18 @@ public class UiEventHandler implements EventHandler {
   private synchronized boolean flushStdOutStdErrBuffers() {
     boolean didFlush = false;
     try {
-      if (stdoutBuffer.length > 0) {
-        outErr.getOutputStream().write(stdoutBuffer);
+      if (stdoutLineBuffer.size() > 0) {
+        stdoutLineBuffer.writeTo(outErr.getOutputStream());
         outErr.getOutputStream().flush();
-        stdoutBuffer = new byte[] {};
+        // Re-initialize the stream not to retain allocated memory.
+        stdoutLineBuffer = new ByteArrayOutputStream();
         didFlush = true;
       }
-      if (stderrBuffer.length > 0) {
-        outErr.getErrorStream().write(stderrBuffer);
+      if (stderrLineBuffer.size() > 0) {
+        stderrLineBuffer.writeTo(outErr.getErrorStream());
         outErr.getErrorStream().flush();
-        stderrBuffer = new byte[] {};
+        // Re-initialize the stream not to retain allocated memory.
+        stderrLineBuffer = new ByteArrayOutputStream();
         didFlush = true;
       }
     } catch (IOException e) {
@@ -382,7 +383,8 @@ public class UiEventHandler implements EventHandler {
   }
 
   @Nullable
-  private byte[] getContentIfSmallEnough(String name, long size, Supplier<byte[]> getContent) {
+  private byte[] getContentIfSmallEnough(
+      String name, long size, Supplier<byte[]> getContent, Supplier<PathFragment> getPath) {
     if (size == 0) {
       // Avoid any possible I/O when we know it'll be empty anyway.
       return null;
@@ -391,7 +393,10 @@ public class UiEventHandler implements EventHandler {
     if (size < maxStdoutErrBytes) {
       return getContent.get();
     } else {
-      return (name + " exceeds maximum size of " + maxStdoutErrBytes + " bytes; skipping")
+      return String.format(
+              "%s (%s) exceeds maximum size of --experimental_ui_max_stdouterr_bytes=%d bytes;"
+                  + " skipping\n",
+              name, getPath.get(), maxStdoutErrBytes)
           .getBytes(StandardCharsets.ISO_8859_1);
     }
   }
@@ -407,8 +412,12 @@ public class UiEventHandler implements EventHandler {
       byte[] stdout = null;
       byte[] stderr = null;
       if (event.hasStdoutStderr()) {
-        stdout = getContentIfSmallEnough("stdout", event.getStdOutSize(), event::getStdOut);
-        stderr = getContentIfSmallEnough("stderr", event.getStdErrSize(), event::getStdErr);
+        stdout =
+            getContentIfSmallEnough(
+                "stdout", event.getStdOutSize(), event::getStdOut, event::getStdOutPathFragment);
+        stderr =
+            getContentIfSmallEnough(
+                "stderr", event.getStdErrSize(), event::getStdErr, event::getStdErrPathFragment);
       }
 
       if (debugAllEvents) {
@@ -440,28 +449,27 @@ public class UiEventHandler implements EventHandler {
       OutputStream stream, EventKind eventKind, byte[] message, boolean readdProgressBar)
       throws IOException {
     int eolIndex = Bytes.lastIndexOf(message, (byte) '\n');
-    if (eolIndex >= 0) {
-      clearProgressBar();
+    ByteArrayOutputStream outLineBuffer =
+        eventKind == EventKind.STDOUT ? stdoutLineBuffer : stderrLineBuffer;
+    if (eolIndex < 0) {
+      outLineBuffer.write(message);
+      return;
+    }
+
+    clearProgressBar();
+    terminal.flush();
+
+    // Write the buffer so far + the rest of the line (including newline).
+    outLineBuffer.writeTo(stream);
+    outLineBuffer.reset();
+
+    stream.write(message, 0, eolIndex + 1);
+    stream.flush();
+
+    outLineBuffer.write(message, eolIndex + 1, message.length - eolIndex - 1);
+    if (readdProgressBar) {
+      addProgressBar();
       terminal.flush();
-      stream.write(eventKind == EventKind.STDOUT ? stdoutBuffer : stderrBuffer);
-      stream.write(message, 0, eolIndex + 1);
-      byte[] restMessage = Arrays.copyOfRange(message, eolIndex + 1, message.length);
-      if (eventKind == EventKind.STDOUT) {
-        stdoutBuffer = restMessage;
-      } else {
-        stderrBuffer = restMessage;
-      }
-      stream.flush();
-      if (readdProgressBar) {
-        addProgressBar();
-        terminal.flush();
-      }
-    } else {
-      if (eventKind == EventKind.STDOUT) {
-        stdoutBuffer = Bytes.concat(stdoutBuffer, message);
-      } else {
-        stderrBuffer = Bytes.concat(stderrBuffer, message);
-      }
     }
   }
 
@@ -496,7 +504,7 @@ public class UiEventHandler implements EventHandler {
       buildRunning = true;
     }
     maybeAddDate();
-    stateTracker.buildStarted(event);
+    stateTracker.buildStarted();
     // As a new phase started, inform immediately.
     ignoreRefreshLimitOnce();
     refresh();

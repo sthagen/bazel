@@ -42,7 +42,6 @@ import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.TargetUtils;
-import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.rules.cpp.AspectLegalCppSemantics;
 import com.google.devtools.build.lib.rules.cpp.CcCommon;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper;
@@ -125,6 +124,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
             .requiresConfigurationFragments(CppConfiguration.class, ProtoConfiguration.class)
             .requireStarlarkProviders(ProtoInfo.PROVIDER.id())
             .addRequiredToolchains(ccToolchainType)
+            .useToolchainTransition(true)
             .add(
                 attr(PROTO_TOOLCHAIN_ATTR, LABEL)
                     .mandatoryNativeProviders(ImmutableList.of(ProtoLangToolchainProvider.class))
@@ -213,7 +213,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       filesBuilder.addAll(outputs);
       createProtoCompileAction(outputs);
 
-      CompilationInfo compilationInfo = compilationHelper.compile(ruleContext::ruleError);
+      CompilationInfo compilationInfo = compilationHelper.compile(ruleContext);
       CcCompilationOutputs ccCompilationOutputs = compilationInfo.getCcCompilationOutputs();
       CcLinkingHelper ccLinkingHelper = initializeLinkingHelper(featureConfiguration, deps);
       if (ccToolchain(ruleContext).supportsInterfaceSharedLibraries(featureConfiguration)) {
@@ -342,13 +342,8 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       PathFragment repositoryRoot =
           ruleContext
               .getLabel()
-              .getPackageIdentifier()
               .getRepository()
-              .getExecPath(
-                  ruleContext
-                      .getAnalysisEnvironment()
-                      .getStarlarkSemantics()
-                      .getBool(BuildLanguageOptions.EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT));
+              .getExecPath(ruleContext.getConfiguration().isSiblingRepositoryLayout());
       if (protoRoot.equals(".") || protoRoot.equals(repositoryRoot.getPathString())) {
         return helper;
       }
@@ -361,13 +356,8 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       PathFragment repositoryPath =
           ruleContext
               .getLabel()
-              .getPackageIdentifier()
               .getRepository()
-              .getExecPath(
-                  ruleContext
-                      .getAnalysisEnvironment()
-                      .getStarlarkSemantics()
-                      .getBool(BuildLanguageOptions.EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT));
+              .getExecPath(ruleContext.getConfiguration().isSiblingRepositoryLayout());
       if (protoRootFragment.startsWith(repositoryPath)) {
         protoRootFragment = protoRootFragment.relativeTo(repositoryPath);
       }
@@ -452,11 +442,10 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       helper.addAdditionalExportedHeaders(headers.build());
     }
 
-    private void createProtoCompileAction(Collection<Artifact> outputs)
-        throws InterruptedException {
+    private void createProtoCompileAction(Collection<Artifact> outputs) {
       PathFragment protoRootFragment = PathFragment.create(protoInfo.getDirectProtoSourceRoot());
       String genfilesPath;
-      PathFragment genfilesFragment = ruleContext.getConfiguration().getGenfilesFragment();
+      PathFragment genfilesFragment = ruleContext.getGenfilesFragment();
       if (protoRootFragment.startsWith(genfilesFragment)) {
         genfilesPath = protoRootFragment.getPathString();
       } else {

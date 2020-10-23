@@ -25,7 +25,6 @@ load(
     "@bazel_tools//tools/cpp:unix_cc_configure.bzl",
     "configure_unix_toolchain",
     "get_env",
-    "get_escaped_cxx_inc_directories",
 )
 
 def _get_escaped_xcode_cxx_inc_directories(repository_ctx, cc, xcode_toolchains):
@@ -39,9 +38,7 @@ def _get_escaped_xcode_cxx_inc_directories(repository_ctx, cc, xcode_toolchains)
       include_paths: A list of builtin include paths.
     """
 
-    # TODO(cparsons): Falling back to the default C++ compiler builtin include
-    # paths shouldn't be unnecessary once all actions are using xcrun.
-    include_dirs = get_escaped_cxx_inc_directories(repository_ctx, cc, "-xc++")
+    include_dirs = []
     for toolchain in xcode_toolchains:
         include_dirs.append(escape_string(toolchain.developer_dir))
 
@@ -50,9 +47,11 @@ def _get_escaped_xcode_cxx_inc_directories(repository_ctx, cc, xcode_toolchains)
     return include_dirs
 
 def compile_cc_file(repository_ctx, src_name, out_name):
+    env = repository_ctx.os.environ
     xcrun_result = repository_ctx.execute([
         "env",
         "-i",
+        "DEVELOPER_DIR={}".format(env.get("DEVELOPER_DIR", default = "")),
         "xcrun",
         "--sdk",
         "macosx",
@@ -77,7 +76,12 @@ def compile_cc_file(repository_ctx, src_name, out_name):
              error_msg)
 
 def configure_osx_toolchain(repository_ctx, overriden_tools):
-    """Configure C++ toolchain on macOS."""
+    """Configure C++ toolchain on macOS.
+
+    Args:
+      repository_ctx: The repository context.
+      overriden_tools: dictionary of overriden tools.
+    """
     paths = resolve_labels(repository_ctx, [
         "@bazel_tools//tools/cpp:osx_cc_wrapper.sh.tpl",
         "@bazel_tools//tools/objc:libtool.sh",
@@ -157,15 +161,15 @@ def configure_osx_toolchain(repository_ctx, overriden_tools):
         write_builtin_include_directory_paths(repository_ctx, cc, escaped_include_paths)
         escaped_cxx_include_directories = []
         for path in escaped_include_paths:
-            escaped_cxx_include_directories.append(("        \"%s\"," % path))
+            escaped_cxx_include_directories.append(("            \"%s\"," % path))
         if xcodeloc_err:
-            escaped_cxx_include_directories.append("# Error: " + xcodeloc_err + "\n")
+            escaped_cxx_include_directories.append("            # Error: " + xcodeloc_err)
         repository_ctx.template(
             "BUILD",
             paths["@bazel_tools//tools/osx/crosstool:BUILD.tpl"],
             {
                 "%{cxx_builtin_include_directories}": "\n".join(escaped_cxx_include_directories),
-                "%{tool_paths_overrides}": ",\n        ".join(
+                "%{tool_paths_overrides}": ",\n            ".join(
                     ['"%s": "%s"' % (k, v) for k, v in tool_paths.items()],
                 ),
             },

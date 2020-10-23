@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.runtime;
 
 import static com.google.devtools.build.lib.runtime.BlazeOptionHandler.BAD_OPTION_TAG;
 import static com.google.devtools.build.lib.runtime.BlazeOptionHandler.ERROR_SEPARATOR;
+import static com.google.devtools.common.options.Converters.BLAZE_ALIASING_FLAG;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -48,12 +49,10 @@ import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.In
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.Interrupted.Code;
-import com.google.devtools.build.lib.syntax.Starlark;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.AnsiStrippingOutputStream;
 import com.google.devtools.build.lib.util.DebugLoggerConfigurator;
 import com.google.devtools.build.lib.util.DetailedExitCode;
-import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.InterruptedFailureDetails;
 import com.google.devtools.build.lib.util.LoggingUtil;
 import com.google.devtools.build.lib.util.Pair;
@@ -73,6 +72,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.logging.Level;
+import net.starlark.java.eval.Starlark;
 
 /**
  * Dispatches to the Blaze commands; that is, given a command line, this abstraction looks up the
@@ -164,7 +164,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
               "Command '%s' not found. Try '%s help'.", commandName, runtime.getProductName()));
       return createDetailedCommandResult(
           String.format("Command '%s' not found.", commandName),
-          ExitCode.COMMAND_LINE_ERROR,
           FailureDetails.Command.Code.COMMAND_NOT_FOUND);
     }
 
@@ -204,7 +203,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
             outErr.printErrLn(message);
             return createDetailedCommandResult(
                 message,
-                ExitCode.LOCK_HELD_NOBLOCK_FOR_LOCK,
                 FailureDetails.Command.Code.ANOTHER_COMMAND_RUNNING);
 
           default:
@@ -228,7 +226,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
         outErr.printErrLn(message);
         return createDetailedCommandResult(
             message,
-            ExitCode.LOCAL_ENVIRONMENTAL_ERROR,
             FailureDetails.Command.Code.PREVIOUSLY_SHUTDOWN);
       }
       BlazeCommandResult result =
@@ -326,8 +323,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
     boolean profileExplicitlyDisabled =
         options.containsExplicitOption("experimental_generate_json_trace_profile")
             && !commonOptions.enableTracer;
-    if (commandSupportsProfile
-        && !profileExplicitlyDisabled) {
+    if (commandSupportsProfile && !profileExplicitlyDisabled) {
       commonOptions.enableTracer = true;
       if (!options.containsExplicitOption("experimental_profile_cpu_usage")) {
         commonOptions.enableCpuUsageProfiling = true;
@@ -357,7 +353,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
         outErr.printErrLn(message);
         return createDetailedCommandResult(
             message,
-            ExitCode.LOCAL_ENVIRONMENTAL_ERROR,
             FailureDetails.Command.Code.STARLARK_CPU_PROFILE_FILE_INITIALIZATION_FAILURE);
       }
       try {
@@ -367,7 +362,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
         outErr.printErrLn(message);
         return createDetailedCommandResult(
             message,
-            ExitCode.LOCAL_ENVIRONMENTAL_ERROR,
             FailureDetails.Command.Code.STARLARK_CPU_PROFILING_INITIALIZATION_FAILURE);
       }
     }
@@ -375,7 +369,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
     BlazeCommandResult result =
         createDetailedCommandResult(
             "Unknown command failure",
-            ExitCode.BLAZE_INTERNAL_ERROR,
             FailureDetails.Command.Code.COMMAND_FAILURE_UNKNOWN);
     boolean afterCommandCalled = false;
     Reporter reporter = env.getReporter();
@@ -445,8 +438,9 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
         reporter.addHandler(handler);
         env.getEventBus().register(handler);
 
-        int oomMoreEagerlyThreshold = commonOptions.oomMoreEagerlyThreshold;
-        runtime.getRetainedHeapLimiter().updateThreshold(oomMoreEagerlyThreshold);
+        runtime
+            .getRetainedHeapLimiter()
+            .update(commonOptions.oomMoreEagerlyThreshold, commonOptions.oomMessage, reporter);
 
         // We register an ANSI-allowing handler associated with {@code handler} so that ANSI control
         // codes can be re-introduced later even if blaze is invoked with --color=no. This is useful
@@ -605,7 +599,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
             result =
                 createDetailedCommandResult(
                     message,
-                    ExitCode.LOCAL_ENVIRONMENTAL_ERROR,
                     FailureDetails.Command.Code.STARLARK_CPU_PROFILE_FILE_WRITE_FAILURE);
           }
         }
@@ -738,6 +731,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
             .optionsData(optionsData)
             .skipStarlarkOptionPrefixes()
             .allowResidue(annotation.allowResidue())
+            .withAliasFlag(BLAZE_ALIASING_FLAG)
             .build();
     return parser;
   }
@@ -765,10 +759,9 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
   }
 
   private static BlazeCommandResult createDetailedCommandResult(
-      String message, ExitCode exitCode, FailureDetails.Command.Code detailedCode) {
+      String message, FailureDetails.Command.Code detailedCode) {
     return BlazeCommandResult.detailedExitCode(
         DetailedExitCode.of(
-            exitCode,
             FailureDetail.newBuilder()
                 .setMessage(message)
                 .setCommand(FailureDetails.Command.newBuilder().setCode(detailedCode))

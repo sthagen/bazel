@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.common.collect.Multimaps.toMultimap;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ArrayListMultimap;
@@ -38,11 +39,14 @@ import com.google.devtools.build.lib.packages.StarlarkProvider;
 import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.util.BazelMockAndroidSupport;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
-import com.google.devtools.build.lib.syntax.Starlark;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkInt;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -101,8 +105,8 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
         "  outputs = ['//command_line_option:cpu'])",
         "def impl(ctx): ",
         "  return MyInfo(",
-        "    attr_deps = ctx.attr.deps,",
-        "    attr_dep = ctx.attr.dep)",
+        "    attr_deps = ctx.split_attr.deps,",
+        "    attr_dep = ctx.split_attr.dep)",
         "my_rule = rule(",
         "  implementation = impl,",
         "  attrs = {",
@@ -386,16 +390,15 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
   }
 
   private void testSplitTransitionCheckAttrDeps(ConfiguredTarget target) throws Exception {
-    // The regular ctx.attr.deps should be a single list with all the branches of the split merged
-    // together (i.e. for aspects).
     @SuppressWarnings("unchecked")
-    List<ConfiguredTarget> attrDeps =
-        (List<ConfiguredTarget>) getMyInfoFromTarget(target).getValue("attr_deps");
-    assertThat(attrDeps).hasSize(4);
-    ListMultimap<String, Object> attrDepsMap = ArrayListMultimap.create();
-    for (ConfiguredTarget ct : attrDeps) {
-      attrDepsMap.put(getConfiguration(ct).getCpu(), target);
-    }
+    Dict<String, List<ConfiguredTarget>> attrDeps =
+        (Dict<String, List<ConfiguredTarget>>) getMyInfoFromTarget(target).getValue("attr_deps");
+    assertThat(attrDeps.size()).isEqualTo(2);
+    ListMultimap<String, Object> attrDepsMap =
+        attrDeps.values().stream()
+            .flatMap(Collection::stream)
+            .map(ct -> getConfiguration(ct).getCpu())
+            .collect(toMultimap(cpu -> cpu, (ignored) -> target, ArrayListMultimap::create));
     assertThat(attrDepsMap).valuesForKey("k8").hasSize(2);
     assertThat(attrDepsMap).valuesForKey("armeabi-v7a").hasSize(2);
   }
@@ -404,13 +407,13 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
     // Check that even though my_rule.dep is defined as a single label, ctx.attr.dep is still a list
     // with multiple ConfiguredTarget objects because of the two different CPUs.
     @SuppressWarnings("unchecked")
-    List<ConfiguredTarget> attrDep =
-        (List<ConfiguredTarget>) getMyInfoFromTarget(target).getValue("attr_dep");
-    assertThat(attrDep).hasSize(2);
-    ListMultimap<String, Object> attrDepMap = ArrayListMultimap.create();
-    for (ConfiguredTarget ct : attrDep) {
-      attrDepMap.put(getConfiguration(ct).getCpu(), target);
-    }
+    Dict<String, ConfiguredTarget> attrDep =
+        (Dict<String, ConfiguredTarget>) getMyInfoFromTarget(target).getValue("attr_dep");
+    assertThat(attrDep.size()).isEqualTo(2);
+    ListMultimap<String, Object> attrDepMap =
+        attrDep.values().stream()
+            .map(ct -> getConfiguration(ct).getCpu())
+            .collect(toMultimap(cpu -> cpu, (ignored) -> target, ArrayListMultimap::create));
     assertThat(attrDepMap).valuesForKey("k8").hasSize(1);
     assertThat(attrDepMap).valuesForKey("armeabi-v7a").hasSize(1);
   }
@@ -431,7 +434,7 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
         "  inputs = ['//command_line_option:fat_apk_cpu'],",
         "  outputs = ['//command_line_option:cpu'])",
         "def impl(ctx): ",
-        "  return MyInfo(attr_dep = ctx.attr.dep)",
+        "  return MyInfo(attr_dep = ctx.split_attr.dep)",
         "my_rule = rule(",
         "  implementation = impl,",
         "  attrs = {",
@@ -457,12 +460,14 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
     ConfiguredTarget target = getConfiguredTarget("//test/starlark:test");
 
     @SuppressWarnings("unchecked")
-    List<ConfiguredTarget> splitDep =
-        (List<ConfiguredTarget>) getMyInfoFromTarget(target).getValue("attr_dep");
-    assertThat(splitDep).hasSize(2);
-    assertThat(
-            splitDep.stream().map(ct -> getConfiguration(ct).getCpu()).collect(Collectors.toList()))
-        .containsExactly("k8", "armeabi-v7a");
+    Dict<String, ConfiguredTarget> splitDep =
+        (Dict<String, ConfiguredTarget>) getMyInfoFromTarget(target).getValue("attr_dep");
+    assertThat(splitDep.size()).isEqualTo(2);
+    List<String> cpus =
+        splitDep.values().stream()
+            .map(ct -> getConfiguration(ct).getCpu())
+            .collect(Collectors.toList());
+    assertThat(cpus).containsExactly("k8", "armeabi-v7a");
   }
 
   private void writeOptionConversionTestFiles() throws Exception {
@@ -503,7 +508,7 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
   @Test
   public void testOptionConversionCpu() throws Exception {
     writeOptionConversionTestFiles();
-    BazelMockAndroidSupport.setupNdk(mockToolsConfig);
+    BazelMockAndroidSupport.setupNdk(mockToolsConfig); // cc_binary needs this
 
     ConfiguredTarget target = getConfiguredTarget("//test/starlark:test");
 
@@ -512,6 +517,90 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
         (List<ConfiguredTarget>) getMyInfoFromTarget(target).getValue("attr_dep");
     assertThat(dep).hasSize(1);
     assertThat(getConfiguration(Iterables.getOnlyElement(dep)).getCpu()).isEqualTo("armeabi-v7a");
+  }
+
+  private void writeReadAndPassthroughOptionsTestFiles() throws Exception {
+    setBuildLanguageOptions("--experimental_starlark_config_transitions=true");
+    writeAllowlistFile();
+
+    scratch.file(
+        "test/skylark/my_rule.bzl",
+        "load('//myinfo:myinfo.bzl', 'MyInfo')",
+        "settings_under_test = {",
+        "  '//command_line_option:cpu': 'armeabi-v7a',",
+        "  '//command_line_option:compilation_mode': 'dbg',",
+        "  '//command_line_option:crosstool_top': '//android/crosstool:everything',",
+        "  '//command_line_option:platform_suffix': 'my-platform-suffix',",
+        "}",
+        "def set_options_transition_func(settings, attr):",
+        "  return settings_under_test",
+        "def passthrough_transition_func(settings, attr):",
+        // All values in this test should be possible to copy within Starlark.
+        "  ret = dict(settings)",
+        // All values in this test should be possible to read within Starlark.
+        // This does not mean that it is possible to set a string value for all settings,
+        // e.g. //command_line_option:test_arg should be set to a list of strings.
+        "  for key, expected_value in settings_under_test.items():",
+        "    if str(ret[key]) != expected_value:",
+        "      fail('%s did not pass through, got %r expected %r' %",
+        "        (key, str(ret[key]), expected_value))",
+        "  ret['//command_line_option:test_arg'] = ['ok']",
+        "  return ret",
+        "my_set_options_transition = transition(",
+        "  implementation = set_options_transition_func,",
+        "  inputs = [],",
+        "  outputs = settings_under_test.keys())",
+        "my_passthrough_transition = transition(",
+        "  implementation = passthrough_transition_func,",
+        "  inputs = settings_under_test.keys(),",
+        "  outputs = ['//command_line_option:test_arg'] + settings_under_test.keys())",
+        "def impl(ctx): ",
+        "  return MyInfo(attr_dep = ctx.attr.dep)",
+        "my_set_options_rule = rule(",
+        "  implementation = impl,",
+        "  attrs = {",
+        "    'dep':  attr.label(cfg = my_set_options_transition),",
+        "    '_allowlist_function_transition': attr.label(",
+        "        default = '//tools/allowlists/function_transition_allowlist',",
+        "    ),",
+        "  })",
+        "my_passthrough_rule = rule(",
+        "  implementation = impl,",
+        "  attrs = {",
+        "    'dep':  attr.label(cfg = my_passthrough_transition),",
+        "    '_allowlist_function_transition': attr.label(",
+        "        default = '//tools/allowlists/function_transition_allowlist',",
+        "    ),",
+        "  })");
+
+    scratch.file(
+        "test/skylark/BUILD",
+        "load('//test/skylark:my_rule.bzl', 'my_passthrough_rule', 'my_set_options_rule')",
+        "my_set_options_rule(name = 'top', dep = ':test')",
+        "my_passthrough_rule(name = 'test', dep = ':main')",
+        "cc_binary(name = 'main', srcs = ['main.c'])");
+  }
+
+  @Test
+  public void testCompilationModeReadableInStarlarkTransitions() throws Exception {
+    writeReadAndPassthroughOptionsTestFiles();
+    BazelMockAndroidSupport.setupNdk(mockToolsConfig); // cc_binary needs this
+
+    ConfiguredTarget topTarget = getConfiguredTarget("//test/skylark:top");
+
+    @SuppressWarnings("unchecked")
+    List<ConfiguredTarget> topDep =
+        (List<ConfiguredTarget>) getMyInfoFromTarget(topTarget).getValue("attr_dep");
+    assertThat(topDep).hasSize(1);
+    ConfiguredTarget testTarget = Iterables.getOnlyElement(topDep);
+    @SuppressWarnings("unchecked")
+    List<ConfiguredTarget> testDep =
+        (List<ConfiguredTarget>) getMyInfoFromTarget(testTarget).getValue("attr_dep");
+    assertThat(testDep).hasSize(1);
+    ConfiguredTarget mainTarget = Iterables.getOnlyElement(testDep);
+    List<String> testArguments =
+        getConfiguration(mainTarget).getOptions().get(TestOptions.class).testArguments;
+    assertThat(testArguments).containsExactly("ok");
   }
 
   @Test
@@ -962,7 +1051,7 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
                 .getOptions()
                 .getStarlarkOptions()
                 .get(Label.parseAbsoluteUnchecked("//test/starlark:the-answer")))
-        .isEqualTo(42);
+        .isEqualTo(StarlarkInt.of(42));
   }
 
   @Test
@@ -996,7 +1085,7 @@ public class StarlarkAttrTransitionProviderTest extends BuildViewTestCase {
                 .getOptions()
                 .getStarlarkOptions()
                 .get(Label.parseAbsoluteUnchecked("//test/starlark:the-answer")))
-        .isEqualTo(42);
+        .isEqualTo(StarlarkInt.of(42));
   }
 
   private CoreOptions getCoreOptions(ConfiguredTarget target) {

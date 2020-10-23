@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.rules.objc;
 import static com.google.common.collect.ImmutableListMultimap.toImmutableListMultimap;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.MULTI_ARCH_LINKED_ARCHIVES;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
@@ -34,6 +33,7 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.ApplePlatform;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform.PlatformType;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
@@ -57,10 +57,6 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
   private static final ImmutableSet<Key<?>> PROPAGATE_KEYS =
       ImmutableSet.<Key<?>>of(
           ObjcProvider.SDK_DYLIB, ObjcProvider.SDK_FRAMEWORK, ObjcProvider.WEAK_SDK_FRAMEWORK);
-
-  @VisibleForTesting
-  static final String UNSUPPORTED_PLATFORM_TYPE_ERROR_FORMAT =
-      "Unsupported platform type \"%s\"";
 
   @Override
   public final ConfiguredTarget create(RuleContext ruleContext)
@@ -198,12 +194,17 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
     outputGroupCollector.put(OutputGroupInfo.VALIDATION, headerTokens.build());
 
     AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
-
+    ApplePlatform platform = null;
+    try {
+      platform = appleConfiguration.getMultiArchPlatform(platformType);
+    } catch (IllegalArgumentException e) {
+      ruleContext.throwWithRuleError(e);
+    }
     new LipoSupport(ruleContext)
         .registerCombineArchitecturesAction(
             librariesToLipo.build(),
             ruleIntermediateArtifacts.combinedArchitectureArchive(),
-            appleConfiguration.getMultiArchPlatform(platformType));
+            platform);
 
     RuleConfiguredTargetBuilder targetBuilder =
         ObjcRuleClasses.ruleConfiguredTarget(ruleContext, filesToBuild.build());

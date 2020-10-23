@@ -37,7 +37,7 @@ final class Lexer {
   int start; // start offset
   int end; // end offset
   String raw; // source text of token
-  Object value; // String or Integer value of token
+  Object value; // String or Integer/Long/BigInteger value of token
 
   // --- end of parser-visible fields ---
 
@@ -257,14 +257,14 @@ final class Lexer {
             literal.append(c);
             break;
           } else {
-            error("unterminated string literal at eol", literalStartPos);
+            error("unclosed string literal", literalStartPos);
             setToken(TokenKind.STRING, literalStartPos, pos);
             setValue(literal.toString());
             return;
           }
         case '\\':
           if (pos == buffer.length) {
-            error("unterminated string literal at eof", literalStartPos);
+            error("unclosed string literal", literalStartPos);
             setToken(TokenKind.STRING, literalStartPos, pos);
             setValue(literal.toString());
             return;
@@ -389,7 +389,7 @@ final class Lexer {
           break;
       }
     }
-    error("unterminated string literal at eof", literalStartPos);
+    error("unclosed string literal", literalStartPos);
     setToken(TokenKind.STRING, literalStartPos, pos);
     setValue(literal.toString());
   }
@@ -420,7 +420,7 @@ final class Lexer {
       char c = buffer[pos++];
       switch (c) {
         case '\n':
-          error("unterminated string literal at eol", literalStartPos);
+          error("unclosed string literal", literalStartPos);
           setToken(TokenKind.STRING, literalStartPos, pos);
           setValue(bufferSlice(contentStartPos, pos - 1));
           return;
@@ -455,12 +455,12 @@ final class Lexer {
     }
 
     // If the current position is beyond the end of the file, need to move it backwards
-    // Possible if the file ends with `r"\` (unterminated raw string literal with a backslash)
+    // Possible if the file ends with `r"\` (unclosed raw string literal with a backslash)
     if (pos > buffer.length) {
       pos = buffer.length;
     }
 
-    error("unterminated string literal at eof", literalStartPos);
+    error("unclosed string literal", literalStartPos);
     setToken(TokenKind.STRING, literalStartPos, pos);
     setValue(bufferSlice(contentStartPos, pos));
   }
@@ -591,28 +591,12 @@ final class Lexer {
     int oldPos = pos - 1;
     String literal = scanInteger();
 
-    final String substring;
-    final int radix;
-    if (literal.startsWith("0x") || literal.startsWith("0X")) {
-      radix = 16;
-      substring = literal.substring(2);
-    } else if (literal.startsWith("0o") || literal.startsWith("0O")) {
-      radix = 8;
-      substring = literal.substring(2);
-    } else if (literal.startsWith("0") && literal.length() > 1) {
-      radix = 8;
-      substring = literal.substring(1);
-      error("invalid octal value `" + literal + "`, should be: `0o" + substring + "`", oldPos);
-    } else {
-      radix = 10;
-      substring = literal;
-    }
-
-    int value = 0;
+    Number value;
     try {
-      value = Integer.parseInt(substring, radix);
-    } catch (NumberFormatException e) {
-      error("invalid base-" + radix + " integer constant: " + literal, oldPos);
+      value = IntLiteral.scan(literal);
+    } catch (NumberFormatException ex) {
+      error(ex.getMessage(), oldPos);
+      value = 0;
     }
 
     setToken(TokenKind.INT, oldPos, pos);

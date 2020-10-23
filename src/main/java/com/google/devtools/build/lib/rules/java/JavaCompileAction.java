@@ -69,9 +69,6 @@ import com.google.devtools.build.lib.server.FailureDetails.JavaCompile;
 import com.google.devtools.build.lib.server.FailureDetails.JavaCompile.Code;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.starlarkbuildapi.CommandLineArgsApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.StarlarkList;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.LazyString;
@@ -85,6 +82,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.StarlarkList;
 
 /** Action that represents a Java compilation. */
 @ThreadCompatible
@@ -543,16 +543,6 @@ public class JavaCompileAction extends AbstractAction implements CommandAction {
     return null;
   }
 
-  public Artifact getOutputDepsProto() {
-    return outputDepsProto;
-  }
-
-  private ActionExecutionException toActionExecutionException(
-      ExecException e, boolean verboseFailures) {
-    String failMessage = getRawProgressMessage();
-    return e.toActionExecutionException(failMessage, verboseFailures, this);
-  }
-
   /** Reads the {@code .jdeps} output from the given spawn results. */
   private Deps.Dependencies readOutputDepsProto(
       List<SpawnResult> results, ActionExecutionContext actionExecutionContext)
@@ -565,10 +555,9 @@ public class JavaCompileAction extends AbstractAction implements CommandAction {
             : inMemoryOutput) {
       return Deps.Dependencies.parseFrom(input);
     } catch (IOException e) {
-      throw toActionExecutionException(
-          new EnvironmentalExecException(
-              e, createFailureDetail(".jdeps read IOException", Code.JDEPS_READ_IO_EXCEPTION)),
-          actionExecutionContext.getVerboseFailures());
+      throw new EnvironmentalExecException(
+              e, createFailureDetail(".jdeps read IOException", Code.JDEPS_READ_IO_EXCEPTION))
+          .toActionExecutionException(this);
     }
   }
 
@@ -634,13 +623,12 @@ public class JavaCompileAction extends AbstractAction implements CommandAction {
         try {
           deleteOutputs(actionExecutionContext.getExecRoot(), /* bulkDeleter= */ null);
         } catch (IOException e) {
-          throw toActionExecutionException(
-              new EnvironmentalExecException(
+          throw new EnvironmentalExecException(
                   e,
                   createFailureDetail(
                       "Failed to delete reduced action outputs",
-                      Code.REDUCED_CLASSPATH_FALLBACK_CLEANUP_FAILURE)),
-              actionExecutionContext.getVerboseFailures());
+                      Code.REDUCED_CLASSPATH_FALLBACK_CLEANUP_FAILURE))
+              .toActionExecutionException(JavaCompileAction.this);
         }
         actionExecutionContext.getMetadataHandler().resetOutputs(getOutputs());
         Spawn spawn;
@@ -648,9 +636,7 @@ public class JavaCompileAction extends AbstractAction implements CommandAction {
           spawn = getReducedSpawn(actionExecutionContext, reducedClasspath, /* fallback=*/ true);
         } catch (CommandLineExpansionException e) {
           Code detailedCode = Code.COMMAND_LINE_EXPANSION_FAILURE;
-          ActionExecutionException actionExecutionException =
-              createActionExecutionException(e, detailedCode);
-          throw actionExecutionException;
+          throw createActionExecutionException(e, detailedCode);
         }
         SpawnContinuation fallbackContinuation =
             actionExecutionContext
@@ -659,7 +645,7 @@ public class JavaCompileAction extends AbstractAction implements CommandAction {
         return new JavaFallbackActionContinuation(
             actionExecutionContext, results, fallbackContinuation);
       } catch (ExecException e) {
-        throw toActionExecutionException(e, actionExecutionContext.getVerboseFailures());
+        throw e.toActionExecutionException(JavaCompileAction.this);
       }
     }
   }
@@ -703,7 +689,7 @@ public class JavaCompileAction extends AbstractAction implements CommandAction {
             ActionResult.create(
                 ImmutableList.copyOf(Iterables.concat(primaryResults, fallbackResults))));
       } catch (ExecException e) {
-        throw toActionExecutionException(e, actionExecutionContext.getVerboseFailures());
+        throw e.toActionExecutionException(JavaCompileAction.this);
       }
     }
   }

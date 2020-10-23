@@ -19,18 +19,20 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Comparator.comparing;
 
 import com.google.common.collect.ImmutableClassToInstanceMap;
-import com.google.devtools.build.lib.syntax.Location;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
-import com.google.devtools.build.lib.syntax.SyntaxError;
 import com.google.devtools.build.lib.util.io.FileOutErr;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Location;
+import net.starlark.java.syntax.SyntaxError;
 
 /**
  * A situation encountered by the build system that's worth reporting.
@@ -189,6 +191,16 @@ public final class Event implements Serializable {
     return getProperty(FileOutErr.class) != null;
   }
 
+  /**
+   * Gets the path to the stdout associated with this event (which the caller must not access), or
+   * null if there is no such path.
+   */
+  @Nullable
+  public PathFragment getStdOutPathFragment() {
+    FileOutErr outErr = getProperty(FileOutErr.class);
+    return outErr == null ? null : outErr.getOutputPathFragment();
+  }
+
   /** Gets the size of the stdout associated with this event without reading it. */
   public long getStdOutSize() throws IOException {
     FileOutErr outErr = getProperty(FileOutErr.class);
@@ -203,6 +215,16 @@ public final class Event implements Serializable {
       return null;
     }
     return outErr.outAsBytes();
+  }
+
+  /**
+   * Gets the path to the stderr associated with this event (which the caller must not access), or
+   * null if there is no such path.
+   */
+  @Nullable
+  public PathFragment getStdErrPathFragment() {
+    FileOutErr outErr = getProperty(FileOutErr.class);
+    return outErr == null ? null : outErr.getErrorPathFragment();
   }
 
   /** Gets the size of the stderr associated with this event without reading it. */
@@ -407,6 +429,22 @@ public final class Event implements Serializable {
   public static void replayEventsOn(EventHandler handler, List<SyntaxError> errors) {
     for (SyntaxError error : errors) {
       handler.handle(Event.error(error.location(), error.message()));
+    }
+  }
+
+  /**
+   * Converts a list of {@link SyntaxError}s to events, each with a specified property, and replays
+   * them on {@code handler}.
+   */
+  public static <T> void replayEventsOn(
+      EventHandler handler,
+      List<SyntaxError> errors,
+      Class<T> propertyType,
+      Function<SyntaxError, T> toProperty) {
+    for (SyntaxError error : errors) {
+      handler.handle(
+          Event.error(error.location(), error.message())
+              .withProperty(propertyType, toProperty.apply(error)));
     }
   }
 

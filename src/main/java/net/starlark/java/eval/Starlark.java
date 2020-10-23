@@ -17,11 +17,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Ordering;
 import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.errorprone.annotations.FormatMethod;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
+import java.math.BigInteger;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -29,8 +31,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
+import net.starlark.java.annot.StarlarkAnnotations;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkInterfaceUtils;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.spelling.SpellChecker;
 import net.starlark.java.syntax.Expression;
@@ -93,14 +95,10 @@ public final class Starlark {
   }
 
   /**
-   * Reports whether the argument is a legal Starlark value: a string, boolean, integer, or
-   * StarlarkValue.
+   * Reports whether the argument is a legal Starlark value: a string, boolean, or StarlarkValue.
    */
   public static boolean valid(Object x) {
-    return x instanceof StarlarkValue
-        || x instanceof String
-        || x instanceof Boolean
-        || x instanceof Integer;
+    return x instanceof StarlarkValue || x instanceof String || x instanceof Boolean;
   }
 
   /**
@@ -134,7 +132,7 @@ public final class Starlark {
     // NB: This is used as the basis for accepting objects in Depsets,
     // as well as for accepting objects as keys for Starlark dicts.
 
-    if (x instanceof String || x instanceof Integer || x instanceof Boolean) {
+    if (x instanceof String || x instanceof Boolean) {
       return true;
     } else if (x instanceof StarlarkValue) {
       return ((StarlarkValue) x).isImmutable();
@@ -144,10 +142,24 @@ public final class Starlark {
   }
 
   /**
+   * Returns normally if the Starlark value is hashable and thus suitable as a dict key.
+   *
+   * @throws EvalException otherwise.
+   */
+  public static void checkHashable(Object x) throws EvalException {
+    if (x instanceof StarlarkValue) {
+      ((StarlarkValue) x).checkHashable();
+    } else {
+      Starlark.checkValid(x);
+      // String and Boolean are hashable.
+    }
+  }
+
+  /**
    * Converts a Java value {@code x} to a Starlark one, if x is not already a valid Starlark value.
-   * A Java List or Map is converted to a Starlark list or dict, respectively, and null becomes
-   * {@link #NONE}. Any other non-Starlark value causes the function to throw
-   * IllegalArgumentException.
+   * An Integer, Long, or BigInteger is converted to a Starlark int, a Java List or Map is converted
+   * to a Starlark list or dict, respectively, and null becomes {@link #NONE}. Any other
+   * non-Starlark value causes the function to throw IllegalArgumentException.
    *
    * <p>This function is applied to the results of StarlarkMethod-annotated Java methods.
    */
@@ -156,14 +168,20 @@ public final class Starlark {
       return NONE;
     } else if (valid(x)) {
       return x;
+    } else if (x instanceof Number) {
+      if (x instanceof Integer) {
+        return StarlarkInt.of((Integer) x);
+      } else if (x instanceof Long) {
+        return StarlarkInt.of((Long) x);
+      } else if (x instanceof BigInteger) {
+        return StarlarkInt.of((BigInteger) x);
+      }
     } else if (x instanceof List) {
       return StarlarkList.copyOf(mutability, (List<?>) x);
     } else if (x instanceof Map) {
       return Dict.copyOf(mutability, (Map<?, ?>) x);
-    } else {
-      throw new IllegalArgumentException(
-          "cannot expose internal type to Starlark: " + x.getClass());
     }
+    throw new IllegalArgumentException("cannot expose internal type to Starlark: " + x.getClass());
   }
 
   /**
@@ -177,8 +195,6 @@ public final class Starlark {
       return ((StarlarkValue) x).truth();
     } else if (x instanceof String) {
       return !((String) x).isEmpty();
-    } else if (x instanceof Integer) {
-      return (Integer) x != 0;
     } else {
       throw new IllegalArgumentException("invalid Starlark value: " + x.getClass());
     }
@@ -263,14 +279,11 @@ public final class Starlark {
    * for reporting error messages involving arbitrary Java classes, for example at the interface
    * between Starlark and Java.
    */
-  // TODO(adonovan): reconsider allowing any classes other than String, Integer, Boolean, and
-  // subclasses of StarlarkValue, with a special exception for Object.class meaning "any Starlark
-  // value" (not: any Java object). Ditto for Depset.ElementType.
   public static String classType(Class<?> c) {
     // Check for "direct hits" first to avoid needing to scan for annotations.
     if (c.equals(String.class)) {
       return "string";
-    } else if (c.equals(Integer.class)) {
+    } else if (StarlarkInt.class.isAssignableFrom(c)) {
       return "int";
     } else if (c.equals(Boolean.class)) {
       return "bool";
@@ -291,15 +304,30 @@ public final class Starlark {
       return "function";
     } else if (c.equals(RangeList.class)) {
       return "range";
+    } else if (c.equals(UnboundMarker.class)) {
+      return "unbound";
     }
 
-    StarlarkBuiltin module = StarlarkInterfaceUtils.getStarlarkBuiltin(c);
+    // Abstract types, often used as parameter types.
+    // Note == not isAssignableFrom: we don't want any
+    // concrete types to inherit these names.
+    if (c == StarlarkIterable.class) {
+      return "iterable";
+    } else if (c == Sequence.class) {
+      return "sequence";
+    } else if (c == StarlarkCallable.class) {
+      return "callable";
+    }
+
+    StarlarkBuiltin module = StarlarkAnnotations.getStarlarkBuiltin(c);
     if (module != null) {
       return module.name();
+    }
 
-    } else if (StarlarkCallable.class.isAssignableFrom(c)) {
+    if (StarlarkCallable.class.isAssignableFrom(c)) {
       // All callable values have historically been lumped together as "function".
-      // TODO(adonovan): built-in types that don't use StarlarkModule should report
+      // TODO(adonovan): eliminate this case.
+      // Built-in types that don't use StarlarkModule should report
       // their own type string, but this is a breaking change as users often
       // use type(x)=="function" for Starlark and built-in functions.
       return "function";
@@ -319,10 +347,63 @@ public final class Starlark {
       // Any class of java.util.Map that isn't a Dict.
       return "Map";
 
+    } else if (c.equals(Integer.class)) {
+      // Integer is not a legal Starlark value, but it does appear as
+      // the return type for many built-in functions.
+      return "int";
+
     } else {
       String simpleName = c.getSimpleName();
       return simpleName.isEmpty() ? c.getName() : simpleName;
     }
+  }
+
+  /**
+   * The ordering relation over (some) Starlark values.
+   *
+   * <p>Starlark values are ordered as follows.
+   *
+   * <ul>
+   *   <li>{@code False < True}.
+   *   <li>int values are ordered according to mathematical tradition.
+   *   <li>Strings are ordered lexicographically by their elements (chars). So too are lists and
+   *       tuples, though lists are not comparable with tuples.
+   *   <li>If x implements Comparable, its {@code compareTo(y)} method may be called to determine
+   *       the comparison if x and y have the same Starlark type, though not necessary the same Java
+   *       class.
+   *   <li>Ordered comparison of any other values is an error (ClassCastException).
+   * </ul>
+   *
+   * <p>This method defines a strict weak ordering that is consistent with {@link Object#equals}.
+   */
+  public static final Ordering<Object> ORDERING =
+      new Ordering<Object>() {
+        @Override
+        public int compare(Object x, Object y) {
+          return compareUnchecked(x, y);
+        }
+      };
+
+  /**
+   * Defines the strict weak ordering of Starlark values used for sorting and the comparison
+   * operators. Throws ClassCastException on failure.
+   */
+  static int compareUnchecked(Object x, Object y) {
+    if (sameType(x, y)) {
+      // Ordered? e.g. string, int, bool.
+      if (x instanceof Comparable) {
+        @SuppressWarnings("unchecked")
+        Comparable<Object> xcomp = (Comparable<Object>) x;
+        return xcomp.compareTo(y);
+      }
+    }
+
+    throw new ClassCastException(
+        String.format("unsupported comparison: %s <=> %s", Starlark.type(x), Starlark.type(y)));
+  }
+
+  private static boolean sameType(Object x, Object y) {
+    return x.getClass() == y.getClass() || Starlark.type(x).equals(Starlark.type(y));
   }
 
   /** Returns the string form of a value as if by the Starlark expression {@code str(x)}. */
@@ -436,11 +517,20 @@ public final class Starlark {
     }
   }
 
-  static int toInt(Object x, String name) throws EvalException {
-    if (x instanceof Integer) {
-      return (Integer) x;
+  /**
+   * Returns the signed 32-bit value of a Starlark int. Throws an exception including {@code what}
+   * if x is not a Starlark int or its value is not exactly representable as a Java int.
+   *
+   * @throws IllegalArgumentException if x is an Integer, which is not a Starlark value.
+   */
+  public static int toInt(Object x, String what) throws EvalException {
+    if (x instanceof StarlarkInt) {
+      return ((StarlarkInt) x).toInt(what);
     }
-    throw errorf("got %s for %s, want int", type(x), name);
+    if (x instanceof Integer) {
+      throw new IllegalArgumentException("Integer is not a legal Starlark value");
+    }
+    throw errorf("got %s for %s, want int", type(x), what);
   }
 
   /**
@@ -549,7 +639,7 @@ public final class Starlark {
   public static boolean hasattr(StarlarkSemantics semantics, Object x, String name)
       throws EvalException {
     return (x instanceof ClassObject && ((ClassObject) x).getValue(name) != null)
-        || CallUtils.getAnnotatedMethodNames(semantics, x.getClass()).contains(name);
+        || CallUtils.getAnnotatedMethods(semantics, x.getClass()).containsKey(name);
   }
 
   /**
@@ -565,7 +655,7 @@ public final class Starlark {
       @Nullable Object defaultValue)
       throws EvalException, InterruptedException {
     // StarlarkMethod-annotated field or method?
-    MethodDescriptor method = CallUtils.getAnnotatedMethod(semantics, x.getClass(), name);
+    MethodDescriptor method = CallUtils.getAnnotatedMethods(semantics, x.getClass()).get(name);
     if (method != null) {
       if (method.isStructField()) {
         return method.callField(x, semantics, mu);
@@ -610,7 +700,7 @@ public final class Starlark {
     if (x instanceof ClassObject) {
       fields.addAll(((ClassObject) x).getFieldNames());
     }
-    fields.addAll(CallUtils.getAnnotatedMethodNames(semantics, x.getClass()));
+    fields.addAll(CallUtils.getAnnotatedMethods(semantics, x.getClass()).keySet());
     return StarlarkList.copyOf(mu, fields);
   }
 
@@ -638,14 +728,21 @@ public final class Starlark {
   }
 
   /**
-   * Returns a map from annotated methods of the specified class to their corresponding {@link
-   * StarlarkMethod} annotations. Elements are ordered by Java method name, which is not necessarily
-   * the same as the Starlark attribute name.
+   * Returns a map of Java methods and corresponding StarlarkMethod annotations for each annotated
+   * Java method of the specified class. Elements are ordered by Java method name, which is not
+   * necessarily the same as the Starlark attribute name. The set of enabled methods is determined
+   * by {@link StarlarkSemantics#DEFAULT}. Excludes the {@code selfCall} method, if any.
    *
    * <p>Most callers should use {@link #dir} and {@link #getattr} instead.
    */
-  public static ImmutableMap<Method, StarlarkMethod> getAnnotatedMethods(Class<?> clazz) {
-    return CallUtils.getAnnotatedMethods(clazz);
+  // TODO(adonovan): move to StarlarkAnnotations; it's a static property of the annotations.
+  public static ImmutableMap<Method, StarlarkMethod> getMethodAnnotations(Class<?> clazz) {
+    ImmutableMap.Builder<Method, StarlarkMethod> result = ImmutableMap.builder();
+    for (MethodDescriptor desc :
+        CallUtils.getAnnotatedMethods(StarlarkSemantics.DEFAULT, clazz).values()) {
+      result.put(desc.getMethod(), desc.getAnnotation());
+    }
+    return result.build();
   }
 
   /**
@@ -664,40 +761,39 @@ public final class Starlark {
   }
 
   /**
-   * Adds to the environment {@code env} all {@code StarlarkCallable}-annotated fields and methods
-   * of value {@code v}, filtered by the given semantics. The class of {@code v} must have or
-   * inherit a {@link StarlarkBuiltin} or {@code StarlarkGlobalLibrary} annotation.
+   * Adds to the environment {@code env} all Starlark methods of value {@code v}, filtered by the
+   * given semantics. Starlark methods are Java methods of {@code v} with a {@link StarlarkMethod}
+   * annotation whose {@code structField} and {@code selfCall} flags are both false.
+   *
+   * @throws IllegalArgumentException if any method annotation's {@link StarlarkMethod#structField}
+   *     flag is true.
    */
   public static void addMethods(
       ImmutableMap.Builder<String, Object> env, Object v, StarlarkSemantics semantics) {
     Class<?> cls = v.getClass();
-    if (!StarlarkInterfaceUtils.hasStarlarkGlobalLibrary(cls)
-        && StarlarkInterfaceUtils.getStarlarkBuiltin(cls) == null) {
-      throw new IllegalArgumentException(
-          cls.getName() + " is annotated with neither @StarlarkGlobalLibrary nor @StarlarkBuiltin");
-    }
-    for (String name : CallUtils.getAnnotatedMethodNames(semantics, v.getClass())) {
+    // TODO(adonovan): rather than silently skip the selfCall method, reject it.
+    for (Map.Entry<String, MethodDescriptor> e :
+        CallUtils.getAnnotatedMethods(semantics, cls).entrySet()) {
+      String name = e.getKey();
+
+      // We cannot accept fields, as they are inherently problematic:
+      // what if the Java method call fails, or gets interrupted?
+      if (e.getValue().isStructField()) {
+        throw new IllegalArgumentException(
+            String.format("addMethods(%s): method %s has structField=true", cls.getName(), name));
+      }
+
       // We use the 2-arg (desc=null) BuiltinCallable constructor instead of passing
       // the descriptor that CallUtils.getAnnotatedMethod would return,
-      // because most calls to addMethods pass StarlarkSemantics.DEFAULT,
-      // which is probably incorrect for the call.
-      // The effect is that the default semantics determine which methods appear in
-      // env, but the thread's semantics determine which method calls succeed.
+      // because most calls to addMethods implicitly pass StarlarkSemantics.DEFAULT,
+      // which is probably the wrong semantics for the later call.
+      //
+      // The effect is that the default semantics determine which method names are
+      // statically available in the environment, but the thread's semantics determine
+      // the dynamic behavior of the method call; this includes a run-time check for
+      // whether the method was disabled by the semantics.
       env.put(name, new BuiltinCallable(v, name));
     }
-  }
-
-  /**
-   * Adds to the environment {@code env} the value {@code v}, under its annotated name. The class of
-   * {@code v} must have or inherit a {@link StarlarkBuiltin} annotation.
-   */
-  public static void addModule(ImmutableMap.Builder<String, Object> env, Object v) {
-    Class<?> cls = v.getClass();
-    StarlarkBuiltin annot = StarlarkInterfaceUtils.getStarlarkBuiltin(cls);
-    if (annot == null) {
-      throw new IllegalArgumentException(cls.getName() + " is not annotated with @StarlarkBuiltin");
-    }
-    env.put(annot.name(), v);
   }
 
   /**

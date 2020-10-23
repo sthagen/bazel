@@ -53,13 +53,14 @@ import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.objc.ObjcProvider;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
-import com.google.devtools.build.lib.syntax.NoneType;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkList;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import java.io.IOException;
 import java.util.List;
+import net.starlark.java.eval.NoneType;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkList;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -250,31 +251,6 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     assertThat(ccTarget.getAttr("generator_name")).isEqualTo("");
     assertThat(ccTarget.getAttr("generator_function")).isEqualTo("");
     assertThat(ccTarget.getAttr("generator_location")).isEqualTo("");
-  }
-
-  @Test
-  public void testGeneratorAttributesWhenCallstackEnabled_macro() throws Exception {
-    // generator_* attributes are derived using alternative logic from the call stack when
-    // --record_rule_instantiation_callstack is enabled. This test exercises that.
-    scratch.file(
-        "mypkg/inc.bzl",
-        "def _impl(ctx):",
-        "  pass",
-        "",
-        "myrule = rule(implementation = _impl)",
-        "",
-        "def f(name):",
-        "  g()",
-        "",
-        "def g():",
-        "  myrule(name='a')",
-        "");
-    scratch.file("mypkg/BUILD", "load(':inc.bzl', 'f')", "f(name='foo')");
-    setBuildLanguageOptions("--record_rule_instantiation_callstack");
-    Rule rule = (Rule) getTarget("//mypkg:a");
-    assertThat(rule.getAttr("generator_function")).isEqualTo("f");
-    assertThat(rule.getAttr("generator_location")).isEqualTo("mypkg/BUILD:2:2");
-    assertThat(rule.getAttr("generator_name")).isEqualTo("foo");
   }
 
   @Test
@@ -1437,7 +1413,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     StructImpl declaredProvider = (StructImpl) configuredTarget.get(key);
     assertThat(declaredProvider).isNotNull();
     assertThat(declaredProvider.getProvider().getKey()).isEqualTo(key);
-    assertThat(declaredProvider.getValue("x")).isEqualTo(1);
+    assertThat(declaredProvider.getValue("x")).isEqualTo(StarlarkInt.of(1));
   }
 
   @Test
@@ -1462,7 +1438,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     StructImpl declaredProvider = (StructImpl) configuredTarget.get(key);
     assertThat(declaredProvider).isNotNull();
     assertThat(declaredProvider.getProvider().getKey()).isEqualTo(key);
-    assertThat(declaredProvider.getValue("x")).isEqualTo(1);
+    assertThat(declaredProvider.getValue("x")).isEqualTo(StarlarkInt.of(1));
   }
 
   @Test
@@ -1488,7 +1464,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     StructImpl declaredProvider = (StructImpl) configuredTarget.get(key);
     assertThat(declaredProvider).isNotNull();
     assertThat(declaredProvider.getProvider().getKey()).isEqualTo(key);
-    assertThat(declaredProvider.getValue("x")).isEqualTo(1);
+    assertThat(declaredProvider.getValue("x")).isEqualTo(StarlarkInt.of(1));
   }
 
   @Test
@@ -2300,6 +2276,57 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
     assertThat((Sequence) outerInfo.getValue("copts")).containsExactly("yeehaw");
     assertThat((Sequence) innerInfo.getValue("copts")).containsExactly("cowabunga");
+  }
+
+  // Regression test for b/168715549 which exposed a bug when an analysistest transition
+  // set an option to the same value it already had in the configuration, depended on a c++ rule,
+  // and was built at the same time as the same cc rule not under transition. Basically it's
+  // ensuring that analysistests are never treated as no-op transitions (which don't update the
+  // output directory).
+  @Test
+  public void testAnalysisTestTransitionOnAndWithCcRuleHasNoActionConflicts() throws Exception {
+    scratch.file(
+        "test/extension.bzl",
+        "test_transition = analysis_test_transition(",
+        "  settings = {'//command_line_option:compilation_mode': 'fastbuild'}",
+        ")",
+        "def _test_impl(ctx):",
+        "  return [AnalysisTestResultInfo(success = True, message = 'message contents')]",
+        "my_analysis_test = rule(",
+        "  implementation = _test_impl,",
+        "  attrs = {",
+        "    'target_under_test': attr.label(cfg = test_transition),",
+        "  },",
+        "  test = True,",
+        "  analysis_test = True",
+        ")",
+        "def _impl(ctx):",
+        "  pass",
+        "",
+        "parent = rule(",
+        "  implementation = _impl,",
+        "  attrs = {",
+        "    'one': attr.label(),",
+        "    'two': attr.label(),",
+        "  },",
+        ")");
+    scratch.file(
+        "test/BUILD",
+        "load('//test:extension.bzl', 'my_analysis_test', 'parent')",
+        "cc_library(name = 'dep')",
+        "my_analysis_test(",
+        "  name = 'test',",
+        "  target_under_test = ':dep',",
+        ")",
+        "parent(",
+        "  name = 'parent',",
+        // Needs to be testonly to depend on a test rule.
+        "  testonly = True,",
+        "  one = ':dep',",
+        "  two = ':test',",
+        ")");
+    useConfiguration("--compilation_mode=fastbuild");
+    getConfiguredTarget("//test:parent");
   }
 
   @Test
@@ -3214,7 +3241,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
     reporter.removeHandler(failFastHandler);
     getConfiguredTarget("//test:r");
-    assertContainsEvent("unhashable type: 'tuple'");
+    assertContainsEvent("unhashable type: 'dict'");
   }
 
   @Test

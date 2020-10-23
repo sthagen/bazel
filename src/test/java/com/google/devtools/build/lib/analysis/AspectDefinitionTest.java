@@ -34,9 +34,9 @@ import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
-import com.google.devtools.build.lib.syntax.StarlarkValue;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import net.starlark.java.annot.StarlarkBuiltin;
+import net.starlark.java.eval.StarlarkValue;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -228,16 +228,6 @@ public class AspectDefinitionTest {
   }
 
   @Test
-  public void testMissingFragmentPolicy_propagatedToConfigurationFragmentPolicy() throws Exception {
-    AspectDefinition missingFragments = new AspectDefinition.Builder(TEST_ASPECT_CLASS)
-        .setMissingFragmentPolicy(MissingFragmentPolicy.IGNORE)
-        .build();
-    assertThat(missingFragments.getConfigurationFragmentPolicy()).isNotNull();
-    assertThat(missingFragments.getConfigurationFragmentPolicy().getMissingFragmentPolicy())
-        .isEqualTo(MissingFragmentPolicy.IGNORE);
-  }
-
-  @Test
   public void testRequiresConfigurationFragments_propagatedToConfigurationFragmentPolicy()
       throws Exception {
     AspectDefinition requiresFragments = new AspectDefinition.Builder(TEST_ASPECT_CLASS)
@@ -252,6 +242,20 @@ public class AspectDefinitionTest {
   private static class FooFragment extends Fragment {}
 
   private static class BarFragment extends Fragment {}
+
+  @Test
+  public void testMissingFragmentPolicy_propagatedToConfigurationFragmentPolicy() throws Exception {
+    AspectDefinition missingFragments =
+        new AspectDefinition.Builder(TEST_ASPECT_CLASS)
+            .setMissingFragmentPolicy(FooFragment.class, MissingFragmentPolicy.IGNORE)
+            .build();
+    assertThat(missingFragments.getConfigurationFragmentPolicy()).isNotNull();
+    assertThat(
+            missingFragments
+                .getConfigurationFragmentPolicy()
+                .getMissingFragmentPolicy(FooFragment.class))
+        .isEqualTo(MissingFragmentPolicy.IGNORE);
+  }
 
   @Test
   public void testRequiresHostConfigurationFragments_propagatedToConfigurationFragmentPolicy()

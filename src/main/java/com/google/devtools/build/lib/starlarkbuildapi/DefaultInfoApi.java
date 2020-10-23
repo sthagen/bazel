@@ -14,21 +14,23 @@
 
 package com.google.devtools.build.lib.starlarkbuildapi;
 
+import com.google.devtools.build.docgen.annot.DocCategory;
+import com.google.devtools.build.docgen.annot.StarlarkConstructor;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.starlarkbuildapi.core.ProviderApi;
 import com.google.devtools.build.lib.starlarkbuildapi.core.StructApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
 import net.starlark.java.annot.Param;
+import net.starlark.java.annot.ParamType;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkConstructor;
-import net.starlark.java.annot.StarlarkDocumentationCategory;
 import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.NoneType;
+import net.starlark.java.eval.StarlarkThread;
 
 /** A provider that gives general information about a target's direct and transitive files. */
 @StarlarkBuiltin(
     name = "DefaultInfo",
-    category = StarlarkDocumentationCategory.PROVIDER,
+    category = DocCategory.PROVIDER,
     doc =
         "A provider that gives general information about a target's direct and transitive files. "
             + "Every rule type has this provider, even if it is not returned explicitly by the "
@@ -101,11 +103,13 @@ public interface DefaultInfoApi extends StructApi {
         parameters = {
           @Param(
               name = "files",
-              type = Depset.class,
+              allowedTypes = {
+                @ParamType(type = Depset.class),
+                @ParamType(type = NoneType.class),
+              },
               named = true,
               positional = false,
               defaultValue = "None",
-              noneable = true,
               doc =
                   "A <a href='depset.html'><code>depset</code></a> of <a"
                       + " href='File.html'><code>File</code></a> objects representing the default"
@@ -113,32 +117,38 @@ public interface DefaultInfoApi extends StructApi {
                       + " line. By default it is all predeclared outputs."),
           @Param(
               name = "runfiles",
-              type = RunfilesApi.class,
+              allowedTypes = {
+                @ParamType(type = RunfilesApi.class),
+                @ParamType(type = NoneType.class),
+              },
               named = true,
               positional = false,
               defaultValue = "None",
-              noneable = true,
               doc =
                   "runfiles descriptor describing the files that this target needs when run "
                       + "(via the <code>run</code> command or as a tool dependency)."),
           @Param(
               name = "data_runfiles",
-              type = RunfilesApi.class,
+              allowedTypes = {
+                @ParamType(type = RunfilesApi.class),
+                @ParamType(type = NoneType.class),
+              },
               named = true,
               positional = false,
               defaultValue = "None",
-              noneable = true,
               doc =
                   DEPRECATED_RUNFILES_PARAMETER_WARNING
                       + "runfiles descriptor describing the runfiles this target needs to run "
                       + "when it is a dependency via the <code>data</code> attribute."),
           @Param(
               name = "default_runfiles",
-              type = RunfilesApi.class,
+              allowedTypes = {
+                @ParamType(type = RunfilesApi.class),
+                @ParamType(type = NoneType.class),
+              },
               named = true,
               positional = false,
               defaultValue = "None",
-              noneable = true,
               doc =
                   DEPRECATED_RUNFILES_PARAMETER_WARNING
                       + "runfiles descriptor describing the runfiles this target needs to run "
@@ -146,11 +156,13 @@ public interface DefaultInfoApi extends StructApi {
                       + "<code>data</code> attribute."),
           @Param(
               name = "executable",
-              type = FileApi.class,
+              allowedTypes = {
+                @ParamType(type = FileApi.class),
+                @ParamType(type = NoneType.class),
+              },
               named = true,
               positional = false,
               defaultValue = "None",
-              noneable = true,
               doc =
                   "If this rule is marked <a"
                       + " href='globals.html#rule.executable'><code>executable</code></a> or <a"
@@ -161,9 +173,8 @@ public interface DefaultInfoApi extends StructApi {
         },
         selfCall = true,
         useStarlarkThread = true)
-    @StarlarkConstructor(objectType = DefaultInfoApi.class, receiverNameForDoc = "DefaultInfo")
+    @StarlarkConstructor
     DefaultInfoApi constructor(
-        // TODO(cparsons): Use stricter types when Runfiles.NONE is passed as null.
         Object files,
         Object runfiles,
         Object dataRunfiles,

@@ -22,7 +22,6 @@ import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Iterator;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkDocumentationCategory;
 
 /**
  * A Starlark tuple, i.e. the value represented by {@code (1, 2, 3)}. Tuples are always immutable
@@ -30,7 +29,7 @@ import net.starlark.java.annot.StarlarkDocumentationCategory;
  */
 @StarlarkBuiltin(
     name = "tuple",
-    category = StarlarkDocumentationCategory.BUILTIN,
+    category = "core",
     doc =
         "The built-in tuple type. Example tuple expressions:<br>"
             + "<pre class=language-python>x = (1, 2, 3)</pre>"
@@ -45,7 +44,7 @@ import net.starlark.java.annot.StarlarkDocumentationCategory;
             + "('a', 'b', 'c', 'd')[::2]  # ('a', 'c')\n"
             + "('a', 'b', 'c', 'd')[3:0:-1]  # ('d', 'c', 'b')</pre>"
             + "Tuples are immutable, therefore <code>x[1] = \"a\"</code> is not supported.")
-public final class Tuple<E> extends AbstractList<E> implements Sequence<E> {
+public final class Tuple<E> extends AbstractList<E> implements Sequence<E>, Comparable<Tuple<?>> {
 
   private final Object[] elems;
 
@@ -116,13 +115,10 @@ public final class Tuple<E> extends AbstractList<E> implements Sequence<E> {
   }
 
   @Override
-  public boolean isHashable() {
+  public void checkHashable() throws EvalException {
     for (Object x : elems) {
-      if (!EvalUtils.isHashable(x)) {
-        return false;
-      }
+      Starlark.checkHashable(x);
     }
-    return true;
   }
 
   @Override
@@ -136,6 +132,11 @@ public final class Tuple<E> extends AbstractList<E> implements Sequence<E> {
     // because it considers the class, not just the elements.
     return this == that
         || (that instanceof Tuple && Arrays.equals(this.elems, ((Tuple) that).elems));
+  }
+
+  @Override
+  public int compareTo(Tuple<?> that) {
+    return Sequence.compare(this, that);
   }
 
   @Override
@@ -229,13 +230,15 @@ public final class Tuple<E> extends AbstractList<E> implements Sequence<E> {
   }
 
   /** Returns a Tuple containing n consecutive repeats of this tuple. */
-  Tuple<E> repeat(int n) {
-    if (n <= 0 || isEmpty()) {
+  Tuple<E> repeat(StarlarkInt n) throws EvalException {
+    if (n.signum() <= 0 || isEmpty()) {
       return empty();
     }
+
     // TODO(adonovan): reject unreasonably large n.
-    Object[] res = new Object[n * elems.length];
-    for (int i = 0; i < n; i++) {
+    int ni = n.toInt("repeat");
+    Object[] res = new Object[ni * elems.length];
+    for (int i = 0; i < ni; i++) {
       System.arraycopy(elems, 0, res, i * elems.length, elems.length);
     }
     return wrap(res);

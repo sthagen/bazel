@@ -14,9 +14,10 @@
 
 package net.starlark.java.annot.processor.testsources;
 
-import com.google.devtools.build.lib.syntax.StarlarkValue;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkValue;
 
 /**
  * Test case for a StarlarkMethod method which has a parameter with both enableOnlyWithFlag and
@@ -30,15 +31,10 @@ public class EnablingAndDisablingFlagParam implements StarlarkValue {
       name = "someMethod",
       documented = false,
       parameters = {
-        @Param(name = "one", type = String.class, named = true),
-        @Param(
-            name = "two",
-            type = Integer.class,
-            named = true,
-            enableOnlyWithFlag = FOO,
-            disableWithFlag = FOO),
+        @Param(name = "one", named = true),
+        @Param(name = "two", named = true, enableOnlyWithFlag = FOO, disableWithFlag = FOO),
       })
-  public String someMethod(String one, Integer two) {
+  public String someMethod(String one, StarlarkInt two) {
     return "foo";
   }
 }

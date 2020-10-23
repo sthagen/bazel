@@ -238,28 +238,55 @@ kotlin_binary = rule(
 
 ```
 
-#### Settings Build Settings on the command line
+#### Using build settings on the command line
 
-Build settings are set on the command line like any other flag. Boolean build
-settings understand no-prefixes and both equals and space syntaxes are supported.
-The name of build settings is their full target path:
+Similar to most native flags, you can use the command line to set build settings
+[that are marked as flags](#the-build-setting-rule-parameter). The build
+setting's name is its full target path using `name=value` syntax:
 
 ```shell
-$ bazel build //my/target --//example:favorite_flavor="PAMPLEMOUSSE"
+$ bazel build //my/target --//example:string_flag=some-value # allowed
+$ bazel build //my/target --//example:string_flag some-value # not allowed
 ```
 
-There are plans to implement shorthand mapping of flag labels so users don't
-need to use their entire target path each time i.e.:
+Special boolean syntax is supported:
 
 ```shell
-$ bazel build //my/target --cpu=k8 --noboolean_flag
+$ bazel build //my/target --//example:boolean_flag
+$ bazel build //my/target --no//example:boolean_flag
+```
+
+#### Using build setting aliases
+
+You can set an alias for your build setting target path to make it easier to read
+on the command line. Aliases function similarly to native flags and also make use
+of the double-dash option syntax.
+
+Set an alias by adding `--flag_alias=ALIAS_NAME=TARGET_PATH`
+to your `.bazelrc` . For example, to set an alias to `coffee`:
+
+```shell
+# .bazelrc
+build --flag_alias=coffee=//experimental/user/starlark_configurations/basic_build_setting:coffee-temp
+```
+
+Best Practice: Setting an alias multiple times results in the most recent
+one taking precedence. Use unique alias names to avoid unintended parsing results.
+
+To make use of the alias, type it in place of the build setting target path.
+With the above example of `coffee` set in the user's `.bazelrc`:
+
+```shell
+$ bazel build //my/target --coffee=ICED
 ```
 
 instead of
 
 ```shell
-$ bazel build //my/target --//third_party/bazel/src/main:cpu=k8 --no//my/project:boolean_flag
+$ bazel build //my/target --//experimental/user/starlark_configurations/basic_build_setting:coffee-temp=ICED
 ```
+Best Practice: While it possible to set aliases on the command line, leaving them
+in a `.bazelrc` reduces command line clutter.
 
 ### Label-typed build settings
 

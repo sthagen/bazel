@@ -27,14 +27,14 @@ import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.starlarkbuildapi.LateBoundDefaultApi;
-import com.google.devtools.build.lib.syntax.Printer;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import javax.annotation.concurrent.Immutable;
+import net.starlark.java.annot.StarlarkAnnotations;
 import net.starlark.java.annot.StarlarkBuiltin;
-import net.starlark.java.annot.StarlarkInterfaceUtils;
+import net.starlark.java.eval.Printer;
 
 /**
  * An implementation of {@link LateBoundDefault} which obtains a late-bound attribute value (of type
@@ -195,7 +195,7 @@ public class StarlarkLateBoundDefault<FragmentT> extends AbstractLabelLateBoundD
                       new ImmutableMap.Builder<>();
                   Class<?> fragmentClass = key.fragmentClass;
                   StarlarkBuiltin fragmentModule =
-                      StarlarkInterfaceUtils.getStarlarkBuiltin(fragmentClass);
+                      StarlarkAnnotations.getStarlarkBuiltin(fragmentClass);
 
                   if (fragmentModule != null) {
                     for (Method method : fragmentClass.getMethods()) {
@@ -245,7 +245,7 @@ public class StarlarkLateBoundDefault<FragmentT> extends AbstractLabelLateBoundD
       CacheKey cacheKey = new CacheKey(fragmentClass, toolsRepository);
       StarlarkLateBoundDefault<?> resolver = fieldCache.get(cacheKey).get(fragmentFieldName);
       if (resolver == null) {
-        StarlarkBuiltin moduleAnnotation = StarlarkInterfaceUtils.getStarlarkBuiltin(fragmentClass);
+        StarlarkBuiltin moduleAnnotation = StarlarkAnnotations.getStarlarkBuiltin(fragmentClass);
         if (moduleAnnotation == null) {
           throw new AssertionError("fragment class must have a valid Starlark name");
         }

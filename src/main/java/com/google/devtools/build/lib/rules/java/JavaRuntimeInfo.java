@@ -14,13 +14,11 @@
 
 package com.google.devtools.build.lib.rules.java;
 
-import static com.google.devtools.build.lib.rules.java.JavaRuleClasses.HOST_JAVA_RUNTIME_ATTRIBUTE_NAME;
 import static com.google.devtools.build.lib.rules.java.JavaRuleClasses.JAVA_RUNTIME_ATTRIBUTE_NAME;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.analysis.RuleErrorConsumer;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
@@ -30,9 +28,9 @@ import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.starlarkbuildapi.java.JavaRuntimeInfoApi;
-import com.google.devtools.build.lib.syntax.Location;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import javax.annotation.Nullable;
+import net.starlark.java.syntax.Location;
 
 /** Information about the Java runtime used by the <code>java_*</code> rules. */
 @Immutable
@@ -63,7 +61,7 @@ public final class JavaRuntimeInfo extends ToolchainInfo implements JavaRuntimeI
   // Helper methods to access an instance of JavaRuntimeInfo.
 
   public static JavaRuntimeInfo forHost(RuleContext ruleContext) {
-    return from(ruleContext, HOST_JAVA_RUNTIME_ATTRIBUTE_NAME);
+    return JavaToolchainProvider.from(ruleContext).getJavaRuntime();
   }
 
   public static JavaRuntimeInfo from(RuleContext ruleContext) {
@@ -80,15 +78,7 @@ public final class JavaRuntimeInfo extends ToolchainInfo implements JavaRuntimeI
       return null;
     }
 
-    return from(prerequisite, ruleContext);
-  }
-
-  // TODO(katre): When all external callers are converted to use toolchain resolution, make this
-  // method private.
-  @Nullable
-  static JavaRuntimeInfo from(
-      TransitiveInfoCollection collection, RuleErrorConsumer errorConsumer) {
-    return (JavaRuntimeInfo) collection.get(ToolchainInfo.PROVIDER);
+    return (JavaRuntimeInfo) prerequisite.get(ToolchainInfo.PROVIDER);
   }
 
   private final NestedSet<Artifact> javaBaseInputs;

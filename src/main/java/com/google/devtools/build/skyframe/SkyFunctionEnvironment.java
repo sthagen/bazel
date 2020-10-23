@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.skyframe;
 
-import static java.util.stream.Collectors.joining;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
@@ -23,6 +22,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.devtools.build.lib.collect.compacthashmap.CompactHashMap;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
@@ -250,42 +250,7 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
         maybeUpdateMaxChildVersion(entry.getValue());
       }
     }
-    try {
-      return depValuesBuilder.build();
-    } catch (IllegalArgumentException e) {
-      // TODO(b/162809183): We're getting an impossible crash. Manually check every key against
-      //  every other key for equality (and hash code collisions, just to be safe), and then print
-      //  out all the data we have for better debugging. Remove this as soon as bug is fixed.
-      List<SkyKey> keys = ImmutableList.copyOf(batchMap.keySet());
-      List<Pair<List<Object>, List<Object>>> duplicateOrNearDuplicateKeys = new ArrayList<>();
-      for (int i = 0; i < keys.size(); i++) {
-        for (int j = 0; j < keys.size(); j++) {
-          if (i == j) {
-            continue;
-          }
-          // If equals() is somehow non-symmetric, we'll catch the other direction later in loop.
-          SkyKey iKey = keys.get(i);
-          SkyKey jKey = keys.get(j);
-          if (iKey.equals(jKey) || (iKey.hashCode() == jKey.hashCode())) {
-            duplicateOrNearDuplicateKeys.add(
-                Pair.of(
-                    ImmutableList.of(iKey, i, iKey.hashCode(), System.identityHashCode(iKey)),
-                    ImmutableList.of(jKey, j, jKey.hashCode(), System.identityHashCode(jKey))));
-          }
-        }
-      }
-      throw new IllegalArgumentException(
-          String.format(
-              "Impossible error with duplicate keys for %s (%s %s %s)",
-              skyKey,
-              duplicateOrNearDuplicateKeys,
-              keys.size(),
-              keys.stream()
-                  .map(
-                      k -> ImmutableList.of(k, k.hashCode(), System.identityHashCode(k)).toString())
-                  .collect(joining("\n"))),
-          e);
-    }
+    return depValuesBuilder.build();
   }
 
   private void checkActive() {
@@ -392,9 +357,12 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
    */
   private Map<SkyKey, SkyValue> getValuesFromErrorOrDepsOrGraph(Iterable<? extends SkyKey> keys)
       throws InterruptedException {
-    // Uses a HashMap, not an ImmutableMap.Builder, because we have not yet deduplicated these keys
+    // Do not use an ImmutableMap.Builder, because we have not yet deduplicated these keys
     // and ImmutableMap.Builder does not tolerate duplicates.
-    Map<SkyKey, SkyValue> result = new HashMap<>();
+    Map<SkyKey, SkyValue> result =
+        keys instanceof Collection
+            ? CompactHashMap.createWithExpectedSize(((Collection<?>) keys).size())
+            : new HashMap<>();
     Set<SkyKey> missingKeys = new HashSet<>();
     newlyRequestedDeps.startGroup();
     for (SkyKey key : keys) {
