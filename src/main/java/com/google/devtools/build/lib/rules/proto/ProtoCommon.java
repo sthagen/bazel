@@ -29,13 +29,10 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.BuildType;
-import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
-import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import javax.annotation.Nullable;
-import net.starlark.java.syntax.Location;
 
 /**
  * Utility functions for proto_library and proto aspect implementations.
@@ -393,28 +390,6 @@ public class ProtoCommon {
     return ruleContext.getLabel().getPackageIdentifier().equals(source.getPackageIdentifier());
   }
 
-  public static void checkRuleHasValidMigrationTag(RuleContext ruleContext)
-      throws RuleErrorException {
-    if (!ruleContext.getFragment(ProtoConfiguration.class).loadProtoRulesFromBzl()) {
-      return;
-    }
-
-    if (!hasValidMigrationTag(ruleContext)) {
-      ruleContext.ruleError(
-          "The native Protobuf rules are deprecated. Please load "
-              + ruleContext.getRule().getRuleClass()
-              + " from the rules_proto repository."
-              + " See http://github.com/bazelbuild/rules_proto.");
-    }
-  }
-
-  private static boolean hasValidMigrationTag(RuleContext ruleContext) {
-    return ruleContext
-        .attributes()
-        .get("tags", Type.STRING_LIST)
-        .contains(PROTO_RULES_MIGRATION_LABEL);
-  }
-
   /**
    * Creates the {@link ProtoInfo} for the {@code proto_library} rule associated with {@code
    * ruleContext}.
@@ -493,8 +468,7 @@ public class ProtoCommon {
             exportedProtos,
             exportedProtoSourceRoots,
             directDescriptorSet,
-            transitiveDescriptorSets,
-            Location.BUILTIN);
+            transitiveDescriptorSets);
 
     return protoInfo;
   }
