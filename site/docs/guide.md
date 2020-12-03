@@ -999,8 +999,8 @@ Bazel execution can result in following exit codes:
     Bad Environment Variables. Your command line must be modified.
 -   `8` - Build Interrupted but we terminated with an orderly shutdown.
 -   `32` - External Environment Failure not on this machine.
--   `33` - OOM failure. You need to modify your command line.
 
+-   `33` - Bazel ran out of memory and crashed. You need to modify your command line.
 -   `34` - Reserved for Google-internal use.
 -   `35` - Reserved for Google-internal use.
 -   `36` - Local Environmental Issue, suspected permanent.
@@ -1008,6 +1008,7 @@ Bazel execution can result in following exit codes:
 -   `38` - Reserved for Google-internal use.
 -   `41-44` - Reserved for Google-internal use.
 -   `45` - Error publishing results to the Build Event Service.
+-   `47` - Reserved for Google-internal use.
 
 **Return codes for commands `bazel build`, `bazel test`:**
 

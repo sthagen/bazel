@@ -82,6 +82,7 @@ java_library(
         "//src/test/java/com/google/devtools/build/lib/testutil",
         "//src/test/java/com/google/devtools/build/lib/testutil:TestSuite",
         "//third_party:junit4",
+        "//third_party:mockito",
     ],
 )
 
@@ -111,7 +112,7 @@ java_test(
 
 java_test(
     name = "concurrent_test",
-    size = "small",
+    size = "medium",
     srcs = glob(["concurrent/*.java"]),
     flaky = True,
     tags = [
@@ -270,6 +271,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
+        "//src/main/java/com/google/devtools/build/lib/pkgcache:QueryTransitivePackagePreloader",
         "//src/main/java/com/google/devtools/build/lib/rules:repository/repository_function",
         "//src/main/java/com/google/devtools/build/lib/skyframe:diff_awareness",
         "//src/main/java/com/google/devtools/build/lib/skyframe:pattern_expanding_error",
@@ -299,6 +301,7 @@ java_test(
         "//src/test/java/com/google/devtools/build/lib/testutil:JunitUtils",
         "//src/test/java/com/google/devtools/build/lib/testutil:SkyframeExecutorTestHelper",
         "//src/test/java/com/google/devtools/build/lib/testutil:TestConstants",
+        "//src/test/java/com/google/devtools/build/skyframe:testutil",
         "//third_party:guava",
         "//third_party:guava-testlib",
         "//third_party:jsr305",

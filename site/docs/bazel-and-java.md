@@ -9,15 +9,6 @@ This page contains resources that help you use Bazel with Java projects. It
 links to a tutorial, build rules, and other information specific to building
 Java projects with Bazel.
 
-## Contents
-
-- [Working with Bazel](#working-with-bazel)
-- [Migrating to Bazel](#migrating-to-bazel)
-- [Best practices](#best-practices)
-   - [Directory structure](#directory-structure)
-   - [BUILD files](#build-files)
-- [Java and new rules](#java-and-new-rules)
-
 ## Working with Bazel
 
 The following resources will help you work with Bazel on Java projects:
@@ -66,7 +57,7 @@ Follow these guidelines when creating your BUILD files:
 *  Tests should be in a matching directory under `src/test` and depend on this
    library.
 
-## Java and new rules
+## Creating new rules for advanced Java builds
 
 **Note**: Creating new rules is for advanced build and test scenarios.
 You do not need it when getting started with Bazel.

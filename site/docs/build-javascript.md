@@ -14,21 +14,6 @@ It can also support build steps needed for frameworks like Angular.
 but the Bazel team has not fully verified and does not officially support
 these features and workflows.
 
-## Contents
-
-*  [Overview](#overview)
-*  [Setting up your environment](#setting-up-your-environment)
-   *  [Step 1: Installing Bazel](#step-1-installing-bazel)
-   *  [Step 2: Installing iBazel](#step-2-installing-ibazel)
-   *  [Step 3: Configuring the `bazel.rc` file](#step-3-configuring-the-bazel-rc-file)
-   *  [Step 4: Setup linting (optional)](#step-4-linting)
-*  [Building JavaScript inputs](#building-javascript)
-*  [Building TypeScript inputs](#building-typescript)
-   *  [Compiling TypeScript inputs (`ts_library`)](#compiling-typescript-inputs-ts_library)
-   *  [Running a development server (`ts_devserver`)](#running-a-development-server-ts_devserver)
-   *  [Testing TypeScript code (`ts_web_test`)](#testing-typescript-code-ts_web_test)
-*  [Building Angular inputs](#building-angular-inputs)
-
 ## Overview
 
 Bazel rules for building JavaScript outputs are split into three layers, since
@@ -46,13 +31,13 @@ Started"](getting-started.html) material before proceeding.
 To set up your environment for building JavaScript outputs with Bazel, do the
 following:
 
-### Step 1: Installing Bazel
+### Installing Bazel
 
 You can either [Install Bazel](install.html) following the same steps that you
 would for backend development, or you can install NodeJS with npm and run
 `npm install -g @bazel/bazel`.
 
-### Step 2: Installing iBazel
+### Installing iBazel
 
 iBazel, or iterative Bazel, is a "watchdog" version of Bazel that automatically
 runs whenever your source files change. Use it to auto-run your tests and
@@ -76,7 +61,7 @@ yarn global add @bazel/ibazel
 
 To use `ibazel`, simply replace `bazel` with `ibazel` in your Bazel commands.
 
-### Step 3: Configuring the `bazel.rc` file
+### Configuring the `bazel.rc` file
 
 Any Bazel build flag or option that can be placed on the command line can also
 be set in the project's [`bazel.rc` file](guide.html#bazelrc)

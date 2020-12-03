@@ -15,16 +15,15 @@ package com.google.devtools.build.lib.rules.android;
 
 import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.Allowlist;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
-import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.EmptyToNullLabelConverter;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
+import com.google.devtools.build.lib.analysis.config.RequiresOptions;
 import com.google.devtools.build.lib.analysis.starlark.annotations.StarlarkConfigurationField;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -43,6 +42,7 @@ import javax.annotation.Nullable;
 
 /** Configuration fragment for Android rules. */
 @Immutable
+@RequiresOptions(options = {AndroidConfiguration.Options.class})
 public class AndroidConfiguration extends Fragment implements AndroidConfigurationApi {
 
   /**
@@ -950,24 +950,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
     }
   }
 
-  /** Configuration loader for the Android fragment. */
-  public static class Loader implements ConfigurationFragmentFactory {
-    @Override
-    public Fragment create(BuildOptions buildOptions) throws InvalidConfigurationException {
-      return new AndroidConfiguration(buildOptions.get(Options.class));
-    }
-
-    @Override
-    public Class<? extends Fragment> creates() {
-      return AndroidConfiguration.class;
-    }
-
-    @Override
-    public ImmutableSet<Class<? extends FragmentOptions>> requiredOptions() {
-      return ImmutableSet.of(Options.class);
-    }
-  }
-
   private final Label sdk;
   private final String cpu;
   private final ConfigurationDistinguisher configurationDistinguisher;
@@ -1015,7 +997,8 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
   private final boolean disableInstrumentationManifestMerging;
   private final boolean incompatibleUseToolchainResolution;
 
-  private AndroidConfiguration(Options options) throws InvalidConfigurationException {
+  public AndroidConfiguration(BuildOptions buildOptions) throws InvalidConfigurationException {
+    Options options = buildOptions.get(Options.class);
     this.sdk = options.sdk;
     this.cpu = options.cpu;
     this.configurationDistinguisher = options.configurationDistinguisher;

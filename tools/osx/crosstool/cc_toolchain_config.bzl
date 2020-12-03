@@ -5198,16 +5198,13 @@ def _impl(ctx):
         name = "linker_param_file",
         flag_sets = [
             flag_set(
-                actions = all_link_actions,
-                flag_groups = [
-                    flag_group(
-                        flags = ["-Wl,@%{linker_param_file}"],
-                        expand_if_available = "linker_param_file",
-                    ),
+                actions = all_link_actions + [
+                    ACTION_NAMES.cpp_link_static_library,
+                    ACTION_NAMES.objc_archive,
+                    ACTION_NAMES.objc_fully_link,
+                    ACTION_NAMES.objc_executable,
+                    ACTION_NAMES.objcpp_executable,
                 ],
-            ),
-            flag_set(
-                actions = [ACTION_NAMES.cpp_link_static_library],
                 flag_groups = [
                     flag_group(
                         flags = ["@%{linker_param_file}"],
@@ -5371,7 +5368,7 @@ def _impl(ctx):
                     ACTION_NAMES.objc_compile,
                     ACTION_NAMES.objcpp_compile,
                 ],
-                flag_groups = [flag_group(flags = ["DEBUG_PREFIX_MAP_PWD=."])],
+                flag_groups = [flag_group(flags = ["-fdebug-compilation-dir", "."])],
             ),
         ],
     )
@@ -5710,7 +5707,7 @@ def _impl(ctx):
                           ["objc-executable", "objc++-executable"],
                 flag_groups = [
                     flag_group(
-                        flags = ["-dead_strip", "-no_dead_strip_inits_and_terms"],
+                        flags = ["-dead_strip"],
                     ),
                 ],
             ),
@@ -6009,7 +6006,7 @@ def _impl(ctx):
                                 "-Xlinker",
                                 "-bitcode_symbol_map",
                                 "-Xlinker",
-                                "BITCODE_TOUCH_SYMBOL_MAP=%{bitcode_symbol_map_path}",
+                                "%{bitcode_symbol_map_path}",
                             ],
                             expand_if_available = "bitcode_symbol_map_path",
                         ),
@@ -6058,6 +6055,27 @@ def _impl(ctx):
                             "-Xlinker",
                             "%{linkmap_exec_path}",
                         ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    set_install_name = feature(
+        name = "set_install_name",
+        enabled = ctx.fragments.cpp.do_not_use_macos_set_install_name,
+        flag_sets = [
+            flag_set(
+                actions = [
+                    ACTION_NAMES.cpp_link_dynamic_library,
+                    ACTION_NAMES.cpp_link_nodeps_dynamic_library,
+                ],
+                flag_groups = [
+                    flag_group(
+                        flags = [
+                            "-Wl,-install_name,@rpath/%{runtime_solib_name}",
+                        ],
+                        expand_if_available = "runtime_solib_name",
                     ),
                 ],
             ),
@@ -6148,6 +6166,7 @@ def _impl(ctx):
             compiler_input_flags_feature,
             compiler_output_flags_feature,
             objcopy_embed_flags_feature,
+            set_install_name,
         ]
     elif (ctx.attr.cpu == "darwin_x86_64" or
           ctx.attr.cpu == "darwin_arm64" or
@@ -6227,6 +6246,7 @@ def _impl(ctx):
             supports_dynamic_linker_feature,
             objcopy_embed_flags_feature,
             dynamic_linking_mode_feature,
+            set_install_name,
         ]
     elif (ctx.attr.cpu == "armeabi-v7a"):
         features = [
@@ -6303,6 +6323,7 @@ def _impl(ctx):
             compiler_output_flags_feature,
             supports_pic_feature,
             objcopy_embed_flags_feature,
+            set_install_name,
         ]
     else:
         fail("Unreachable")
@@ -6405,4 +6426,5 @@ cc_toolchain_config = rule(
     },
     provides = [CcToolchainConfigInfo],
     executable = True,
+    fragments = ["cpp"],
 )

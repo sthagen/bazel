@@ -42,7 +42,6 @@ filegroup(
         "//third_party/py/concurrent:srcs",
         "//third_party/py/dataclasses:srcs",
         "//third_party/py/frozendict:srcs",
-        "//third_party/py/gflags:srcs",
         "//third_party/py/mock:srcs",
         "//third_party/py/six:srcs",
         "//third_party/rules_python:srcs",
@@ -361,6 +360,21 @@ java_import(
 )
 
 java_import(
+    name = "jline-terminal",
+    jars = ["jline/jline-terminal-3.17.1.jar"],
+    srcjar = "jline/jline-terminal-3.17.1-sources.jar",
+)
+
+java_import(
+    name = "jline-reader",
+    jars = ["jline/jline-reader-3.17.1.jar"],
+    srcjar = "jline/jline-reader-3.17.1-sources.jar",
+    exports = [
+        ":jline-terminal",
+    ],
+)
+
+java_import(
     name = "threeten",
     jars = [
         "error_prone/threeten-extra-1.5.0.jar",
@@ -513,7 +527,7 @@ distrib_jar_filegroup(
 java_import(
     name = "javax_activation",
     jars = ["javax_activation/javax.activation-api-1.2.0.jar"],
-    srcjar = "javax_annotations/javax.activation-api-1.2.0-sources.jar",
+    srcjar = "javax_activation/javax.activation-api-1.2.0-sources.jar",
 )
 
 # javax.annotation.Generated is not included in the default root modules in 9,
@@ -552,7 +566,6 @@ java_import(
 UNNECESSARY_DYNAMIC_LIBRARIES = select({
     "//src/conditions:windows": "*.so *.jnilib",
     "//src/conditions:darwin": "*.so *.dll",
-    "//src/conditions:darwin_x86_64": "*.so *.dll",
     "//src/conditions:linux_x86_64": "*.jnilib *.dll",
     # The .so file is an x86 one, so we can just remove it if the CPU is not x86
     "//src/conditions:arm": "*.so *.jnilib *.dll",

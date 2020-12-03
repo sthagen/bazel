@@ -448,7 +448,7 @@ public final class MethodLibraryTest {
   public void testDictionaryPopItem() throws Exception {
     ev.new Scenario()
         .testIfErrorContains(
-            "popitem(): dictionary is empty",
+            "popitem: empty dictionary",
             "d = {2: 'bar', 3: 'baz', 1: 'foo'}\n"
                 + "len(d) == 3 or fail('popitem 0')\n"
                 + "d.popitem() == (2, 'bar') or fail('popitem 2')\n"
@@ -734,7 +734,10 @@ public final class MethodLibraryTest {
   public void testFail() throws Exception {
     ev.new Scenario()
         .testIfErrorContains("abc", "fail('abc')")
-        .testIfErrorContains("18", "fail(18)");
+        .testIfErrorContains("18", "fail(18)")
+        .testIfErrorContains("1 2 3", "fail(1, 2, 3)")
+        .testIfErrorContains("attribute foo: 1 2 3", "fail(1, 2, 3, attr='foo')") // deprecated
+        .testIfErrorContains("0 1 2 3", "fail(1, 2, 3, msg=0)"); // deprecated
   }
 
   @Test

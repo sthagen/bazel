@@ -15,10 +15,13 @@
 package net.starlark.java.eval;
 
 import com.google.common.base.Ascii;
+import com.google.common.base.Joiner;
 import com.google.common.collect.Ordering;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.NoSuchElementException;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.ParamType;
@@ -219,13 +222,14 @@ class MethodLibrary {
   @StarlarkMethod(
       name = "reversed",
       doc =
-          "Returns a list that contains the elements of the original sequence in reversed order."
-              + "<pre class=\"language-python\">reversed([3, 5, 4]) == [4, 5, 3]</pre>",
+          "Returns a new, unfrozen list that contains the elements of the original iterable"
+              + " sequence in reversed order.<pre class=\"language-python\">reversed([3, 5, 4]) =="
+              + " [4, 5, 3]</pre>",
       parameters = {
-        @Param(name = "sequence", doc = "The sequence (list or tuple) to be reversed."),
+        @Param(name = "sequence", doc = "The iterable sequence (e.g. list) to be reversed."),
       },
       useStarlarkThread = true)
-  public StarlarkList<?> reversed(Sequence<?> sequence, StarlarkThread thread)
+  public StarlarkList<?> reversed(StarlarkIterable<?> sequence, StarlarkThread thread)
       throws EvalException {
     Object[] array = Starlark.toArray(sequence);
     reverse(array);
@@ -645,15 +649,18 @@ class MethodLibrary {
 
   @StarlarkMethod(
       name = "fail",
-      doc =
-          "Raises an error that cannot be intercepted. It can be used anywhere, "
-              + "both in the loading phase and in the analysis phase.",
+      doc = "Causes execution to fail with an error.",
       parameters = {
+        // TODO(adonovan): remove. See https://github.com/bazelbuild/starlark/issues/47.
         @Param(
             name = "msg",
-            doc = "Error to display for the user. The object is converted to a string.",
+            doc =
+                "Deprecated: use positional arguments instead. "
+                    + "This argument acts like an implicit leading positional argument.",
             defaultValue = "None",
+            positional = false,
             named = true),
+        // TODO(adonovan): remove. See https://github.com/bazelbuild/starlark/issues/47.
         @Param(
             name = "attr",
             allowedTypes = {
@@ -662,14 +669,29 @@ class MethodLibrary {
             },
             defaultValue = "None",
             doc =
-                "The name of the attribute that caused the error. This is used only for "
-                    + "error reporting.",
+                "Deprecated. Causes an optional prefix containing this string to be added to the"
+                    + " error message.",
+            positional = false,
             named = true)
-      })
-  public NoneType fail(Object msg, Object attr) throws EvalException {
-    String str = Starlark.str(msg);
+      },
+      extraPositionals =
+          @Param(
+              name = "args",
+              doc =
+                  "A list of values, formatted with str and joined with spaces, that appear in the"
+                      + " error message."))
+  public NoneType fail(Object msg, Object attr, Tuple args) throws EvalException {
+    List<String> elems = new ArrayList<>();
+    // msg acts like a leading element of args.
+    if (msg != Starlark.NONE) {
+      elems.add(Starlark.str(msg));
+    }
+    for (Object arg : args) {
+      elems.add(Starlark.str(arg));
+    }
+    String str = Joiner.on(" ").join(elems);
     if (attr != Starlark.NONE) {
-      str = Starlark.format("attribute %s: %s", attr, str);
+      str = String.format("attribute %s: %s", attr, str);
     }
     throw Starlark.errorf("%s", str);
   }
@@ -751,7 +773,7 @@ class MethodLibrary {
       extraPositionals = @Param(name = "args", doc = "lists to zip."),
       useStarlarkThread = true)
   public StarlarkList<?> zip(Sequence<?> args, StarlarkThread thread) throws EvalException {
-    StarlarkList.Builder<Tuple> result = StarlarkList.builder();
+    StarlarkList<Tuple> result = StarlarkList.newList(thread.mutability());
     int ncols = args.size();
     if (ncols > 0) {
       Iterator<?>[] iterators = new Iterator<?>[ncols];
@@ -768,10 +790,10 @@ class MethodLibrary {
           }
           elem[i] = it.next();
         }
-        result.add(Tuple.wrap(elem));
+        result.addElement(Tuple.wrap(elem));
       }
     }
-    return result.build(thread.mutability());
+    return result;
   }
 
   /** Starlark bool type. */

@@ -72,10 +72,6 @@ java_test(
             ["*.java"],
             exclude = CROSS_PLATFORM_WINDOWS_TESTS,
         ),
-        "//src/conditions:darwin_x86_64": glob(
-            ["*.java"],
-            exclude = CROSS_PLATFORM_WINDOWS_TESTS,
-        ),
         "//conditions:default": glob(
             ["*.java"],
             exclude = ["MacOSXFsEventsDiffAwarenessTest.java"] + CROSS_PLATFORM_WINDOWS_TESTS,
@@ -90,11 +86,6 @@ java_test(
     ],
     deps = select({
         "//src/conditions:darwin": [
-            "//src/main/java/com/google/devtools/build/lib/skyframe:incompatible_view_exception",
-            "//src/main/java/com/google/devtools/build/lib/skyframe:local_diff_awareness",
-            "//src/main/java/com/google/devtools/build/lib/testing/common:fake-options",
-        ],
-        "//src/conditions:darwin_x86_64": [
             "//src/main/java/com/google/devtools/build/lib/skyframe:incompatible_view_exception",
             "//src/main/java/com/google/devtools/build/lib/skyframe:local_diff_awareness",
             "//src/main/java/com/google/devtools/build/lib/testing/common:fake-options",
@@ -138,6 +129,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target",
         "//src/main/java/com/google/devtools/build/lib/analysis:dependency",
         "//src/main/java/com/google/devtools/build/lib/analysis:dependency_kind",
+        "//src/main/java/com/google/devtools/build/lib/analysis:platform_configuration",
         "//src/main/java/com/google/devtools/build/lib/analysis:platform_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:server_directories",
         "//src/main/java/com/google/devtools/build/lib/analysis:test/test_configuration",
@@ -160,6 +152,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
+        "//src/main/java/com/google/devtools/build/lib/pkgcache:QueryTransitivePackagePreloader",
         "//src/main/java/com/google/devtools/build/lib/remote/options",
         "//src/main/java/com/google/devtools/build/lib/rules:repository/local_repository_rule",
         "//src/main/java/com/google/devtools/build/lib/rules:repository/managed_directories_knowledge_impl",
@@ -226,6 +219,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/skyframe:skyframe_aware_action",
         "//src/main/java/com/google/devtools/build/lib/skyframe:skyframe_cluster",
         "//src/main/java/com/google/devtools/build/lib/skyframe:starlark_builtins_value",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:target_cycle_reporter",
         "//src/main/java/com/google/devtools/build/lib/skyframe:target_pattern_phase_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:tests_for_target_pattern_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_exception",
