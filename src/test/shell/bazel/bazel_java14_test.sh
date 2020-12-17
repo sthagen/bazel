@@ -54,13 +54,10 @@ if "$is_windows"; then
   export MSYS2_ARG_CONV_EXCL="*"
 fi
 
-JAVA_TOOLCHAIN="$1"; shift
 JAVA_TOOLS_ZIP="$1"; shift
 JAVA_TOOLS_PREBUILT_ZIP="$1"; shift
-JAVA_RUNTIME="$1"; shift
 
 echo "JAVA_TOOLS_ZIP=$JAVA_TOOLS_ZIP"
-
 
 JAVA_TOOLS_RLOCATION=$(rlocation io_bazel/$JAVA_TOOLS_ZIP)
 
@@ -74,10 +71,6 @@ fi
 JAVA_TOOLS_ZIP_FILE_URL=${JAVA_TOOLS_ZIP_FILE_URL:-}
 JAVA_TOOLS_PREBUILT_ZIP_FILE_URL=${JAVA_TOOLS_PREBUILT_ZIP_FILE_URL:-}
 
-add_to_bazelrc "build --java_toolchain=${JAVA_TOOLCHAIN}"
-add_to_bazelrc "build --host_java_toolchain=${JAVA_TOOLCHAIN}"
-add_to_bazelrc "build --javabase=${JAVA_RUNTIME}"
-add_to_bazelrc "build --host_javabase=${JAVA_RUNTIME}"
 
 function set_up() {
     cat >>WORKSPACE <<EOF
@@ -125,8 +118,7 @@ public class Javac14Example {
   }
 }
 EOF
-  # TODO(ilist): remove tool_java_runtime_version after java_runtime is attached to the toolchain
-  bazel run java/main:Javac14Example --java_language_version=14 --java_runtime_version=14 --tool_java_runtime_version=14 --test_output=all --verbose_failures &>"${TEST_log}"
+  bazel run java/main:Javac14Example --java_language_version=14 --java_runtime_version=14 --test_output=all --verbose_failures &>"${TEST_log}"
   expect_log "0"
 }
 
