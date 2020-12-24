@@ -14,8 +14,6 @@
 
 """Bazel rules for creating Java toolchains."""
 
-load("@rules_java//java:defs.bzl", "java_toolchain")
-
 JDK8_JVM_OPTS = [
     "-Xbootclasspath/p:$(location @bazel_tools//tools/jdk:javac_jar)",
 ]
@@ -132,8 +130,8 @@ PREBUILT_TOOLCHAIN_CONFIGURATION = dict(
         "@remote_java_tools//:java_compiler_jar",
         "@remote_java_tools//:jdk_compiler_jar",
     ],
-    ijar = ["@remote_java_tools//:ijar_cc_binary"],
-    singlejar = ["@remote_java_tools//:singlejar_cc_bin"],
+    ijar = ["@bazel_tools//tools/jdk:ijar_prebuilt_binary"],
+    singlejar = ["@bazel_tools//tools/jdk:prebuilt_singlejar"],
     java_runtime = "@bazel_tools//tools/jdk:remote_jdk11",
 )
 
@@ -151,8 +149,8 @@ NONPREBUILT_TOOLCHAIN_CONFIGURATION = dict(
         "@remote_java_tools//:java_compiler_jar",
         "@remote_java_tools//:jdk_compiler_jar",
     ],
-    ijar = ["@bazel_tools//tools/jdk:ijar_prebuilt_binary"],
-    singlejar = ["@bazel_tools//tools/jdk:prebuilt_singlejar"],
+    ijar = ["@remote_java_tools//:ijar_cc_binary"],
+    singlejar = ["@remote_java_tools//:singlejar_cc_bin"],
     java_runtime = "@bazel_tools//tools/jdk:remote_jdk11",
 )
 
@@ -162,7 +160,7 @@ def default_java_toolchain(name, configuration = DEFAULT_TOOLCHAIN_CONFIGURATION
     toolchain_args = dict(_BASE_TOOLCHAIN_CONFIGURATION)
     toolchain_args.update(configuration)
     toolchain_args.update(kwargs)
-    java_toolchain(
+    native.java_toolchain(
         name = name,
         **toolchain_args
     )
