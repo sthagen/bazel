@@ -238,7 +238,11 @@ public class StarlarkOptionsParser {
     if (value != null) {
       // --flag=value or -flag=value form
       Target buildSettingTarget = loadBuildSetting(name, eventHandler);
-      unparsedOptions.put(name, new Pair<>(value, buildSettingTarget));
+      // Use the canonical form to ensure we don't have
+      // duplicate options getting into the starlark options map.
+      unparsedOptions.put(
+          buildSettingTarget.getLabel().getDefaultCanonicalForm(),
+          new Pair<>(value, buildSettingTarget));
     } else {
       boolean booleanValue = true;
       // check --noflag form

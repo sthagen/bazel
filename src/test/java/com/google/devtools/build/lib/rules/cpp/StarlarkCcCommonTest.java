@@ -3814,9 +3814,11 @@ public class StarlarkCcCommonTest extends BuildViewTestCase {
     assertThat(featureStruct).isNotNull();
     EvalException e =
         assertThrows(EvalException.class, () -> CcModule.featureFromStarlark(featureStruct));
-    assertThat(e)
-        .hasMessageThat()
-        .contains("A feature must either have a nonempty 'name' field or be enabled.");
+    String msg = e.getMessage();
+    assertThat(msg).contains("A feature must either have a nonempty 'name' field or be enabled.");
+    assertThat(msg)
+        .contains(
+            "in FeatureInfo instantiated at /workspace/tools/cpp/cc_toolchain_config_lib.bzl:");
   }
 
   @Test
@@ -7177,5 +7179,136 @@ public class StarlarkCcCommonTest extends BuildViewTestCase {
       AssertionError e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:foo"));
       assertThat(e).hasMessageThat().contains("Rule in 'b' cannot use private API");
     }
+  }
+
+  @Test
+  public void testExtraLinkTimeLibraryApiRaisesError() throws Exception {
+    scratch.file(
+        "b/BUILD",
+        "load('//b:rule.bzl', 'cc_rule')",
+        "cc_library(name='cc_dep', srcs=['cc_dep.cc'])",
+        "cc_rule(name='foo', cc_dep=':cc_dep')");
+    ImmutableList<String> calls =
+        ImmutableList.of(
+            "cc_common.create_linking_context(linker_inputs=depset([]), go_link_c_archive=None)",
+            "linking_context.go_link_c_archive()");
+    for (String call : calls) {
+      scratch.overwriteFile(
+          "b/rule.bzl",
+          "def _impl(ctx):",
+          "  linking_context = ctx.attr.cc_dep[CcInfo].linking_context",
+          "  " + call,
+          "  return [DefaultInfo()]",
+          "cc_rule = rule(",
+          "  implementation = _impl,",
+          "  attrs = { ",
+          "    'cc_dep': attr.label(),",
+          "  },",
+          ")");
+      invalidatePackages();
+      AssertionError e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:foo"));
+      assertThat(e).hasMessageThat().contains("Rule in 'b' cannot use private API");
+    }
+  }
+
+  @Test
+  public void testAllowedVariableExtensionCompileApi() throws Exception {
+    runTestVariableExtension(/* call= */ "compile", /* allowed= */ true);
+  }
+
+  @Test
+  public void testAllowedVariableExtensionLinkApi() throws Exception {
+    runTestVariableExtension(/* call= */ "link", /* allowed= */ true);
+  }
+
+  @Test
+  public void testVariableExtensionCompileApiRaisesError() throws Exception {
+    runTestVariableExtension(/* call= */ "compile", /* allowed= */ false);
+  }
+
+  @Test
+  public void testVariableExtensionLinkApiRaisesError() throws Exception {
+    runTestVariableExtension(/* call= */ "link", /* allowed= */ false);
+  }
+
+  private void runTestVariableExtension(String call, boolean allowed) throws Exception {
+    scratch.overwriteFile("bazel_internal/test_rules/cc/BUILD", "");
+    String rulePkg = "b";
+    if (allowed) {
+      rulePkg = "bazel_internal/test_rules/cc";
+    }
+    scratch.overwriteFile(
+        "b/BUILD",
+        "load('//" + rulePkg + ":rule.bzl', 'cc_rule')",
+        "cc_library(name='cc_dep', srcs=['cc_dep.cc'])",
+        "cc_toolchain_alias(name='alias')",
+        "cc_rule(name='foo', cc_dep=':cc_dep')");
+    scratch.overwriteFile(
+        rulePkg + "/rule.bzl",
+        getVariablesExtensionStarlarkRule(
+            call,
+            Joiner.on("\n")
+                .join(
+                    "dict = {'string_variable': 'foo',",
+                    "        'string_sequence_variable' : ['foo'],",
+                    "        'string_depset_variable': depset(['foo'])}")));
+    invalidatePackages();
+    if (allowed) {
+      getConfiguredTarget("//b:foo");
+      assertNoEvents();
+    } else {
+      AssertionError e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:foo"));
+      assertThat(e).hasMessageThat().contains("Rule in 'b' cannot use private API");
+    }
+  }
+
+  @Test
+  public void testVariablesExtensionValueTypes() throws Exception {
+    String rulePkg = "bazel_internal/test_rules/cc";
+    scratch.overwriteFile(rulePkg + "/BUILD", "");
+    scratch.overwriteFile(
+        "b/BUILD",
+        "load('//" + rulePkg + ":rule.bzl', 'cc_rule')",
+        "cc_library(name='cc_dep', srcs=['cc_dep.cc'])",
+        "cc_toolchain_alias(name='alias')",
+        "cc_rule(name='foo', cc_dep=':cc_dep')");
+    for (String value : ImmutableList.of("1", "[1]", "depset([1])")) {
+      scratch.overwriteFile(
+          rulePkg + "/rule.bzl",
+          getVariablesExtensionStarlarkRule("compile", "dict = {'variable': " + value + "}"));
+      invalidatePackages();
+      AssertionError e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:foo"));
+      assertThat(e).hasMessageThat().contains("Trying to build UserVariableExtension");
+    }
+  }
+
+  private String getVariablesExtensionStarlarkRule(String call, String dictionaryEntries) {
+    return Joiner.on("\n")
+        .join(
+            "def _impl(ctx):",
+            "  toolchain = ctx.attr._cc_toolchain[cc_common.CcToolchainInfo]",
+            "  feature_configuration = cc_common.configure_features(",
+            "      ctx = ctx,",
+            "      cc_toolchain = toolchain,",
+            "      requested_features = ctx.features,",
+            "      unsupported_features = ctx.disabled_features,",
+            "  )",
+            "  " + dictionaryEntries,
+            "  cc_common." + call + "(",
+            "      actions = ctx.actions,",
+            "      feature_configuration = feature_configuration,",
+            "      cc_toolchain = toolchain,",
+            "      name = ctx.label.name + '_aspect',",
+            "      variables_extension = dict,",
+            "  )",
+            "  return [DefaultInfo()]",
+            "cc_rule = rule(",
+            "  implementation = _impl,",
+            "  attrs = { ",
+            "    'cc_dep': attr.label(),",
+            "    '_cc_toolchain': attr.label(default=Label('//b:alias'))",
+            "  },",
+            "  fragments = ['cpp'],",
+            ")");
   }
 }

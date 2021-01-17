@@ -49,7 +49,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
@@ -118,7 +117,6 @@ public class LegacyIncludeScanner implements IncludeScanner {
      * Locates an included file along the search paths. The result is cacheable.
      *
      * @param inclusion the inclusion to locate
-     * @param pathToDeclaredHeader generated files which may be reached during scanning
      * @param onlyCheckGenerated if true, only search for generated output files
      * @return a tuple of the found file, the position of the respective include path entry on the
      *     search path (or null if no matching file was found), and whether the scan touched illegal
@@ -126,7 +124,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
      */
     LocateOnPathResult locateOnPaths(
         InclusionWithContext inclusion,
-        Map<PathFragment, Artifact> pathToDeclaredHeader,
+        IncludeScanningHeaderData headerData,
         boolean onlyCheckGenerated) {
       PathFragment name = inclusion.getInclusion().pathFragment;
 
@@ -158,7 +156,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
               locateOnFrameworkPaths(
                   frameworkName,
                   relHeaderPath,
-                  pathToDeclaredHeader,
+                  headerData,
                   onlyCheckGenerated,
                   viewedIllegalOutput);
           if (result.path != null) {
@@ -189,16 +187,15 @@ public class LegacyIncludeScanner implements IncludeScanner {
         if (onlyCheckGenerated && !isRealOutputFile(fileFragment)) {
           continue;
         }
-        viewedIllegalOutput =
-            viewedIllegalOutput || isIllegalOutputFile(fileFragment, pathToDeclaredHeader);
+        viewedIllegalOutput = viewedIllegalOutput || isIllegalOutputFile(fileFragment, headerData);
         boolean isOutputDirectory = fileFragment.startsWith(outputPathFragment);
-        if (!isFile(fileFragment, name, !isOutputDirectory, pathToDeclaredHeader)) {
+        if (!isFile(fileFragment, name, !isOutputDirectory, headerData)) {
           continue;
         }
         Artifact artifact;
         if (isOutputDirectory) {
           // May be a normal output file or an inc_library header.
-          artifact = pathToDeclaredHeader.get(fileFragment);
+          artifact = headerData.getHeaderArtifact(fileFragment);
           if (artifact == null) {
             // This happens if an included file exists in a cc_inc_library's output directory,
             // but is not an output of the cc_inc_library. This can happen if, for instance, the
@@ -239,7 +236,6 @@ public class LegacyIncludeScanner implements IncludeScanner {
      *
      * @param frameworkName the name of the framework, including the ".framework" suffix
      * @param relHeaderPath the path of the framework header, relative to the framework
-     * @param pathToDeclaredHeader generated files which may be reached during scanning
      * @param onlyCheckGenerated if true, only search for generated output files
      * @param viewedIllegalOutput whether the scanner has viewed an illegal output file.
      * @return a tuple of the found file, the context path position of the input inclusion, and
@@ -248,7 +244,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
     private LocateOnPathResult locateOnFrameworkPaths(
         String frameworkName,
         PathFragment relHeaderPath,
-        Map<PathFragment, Artifact> pathToDeclaredHeader,
+        IncludeScanningHeaderData headerData,
         boolean onlyCheckGenerated,
         boolean viewedIllegalOutput) {
       for (int i = 0; i < frameworkIncludePaths.size(); ++i) {
@@ -267,17 +263,17 @@ public class LegacyIncludeScanner implements IncludeScanner {
             fullFrameworkPath.getRelative("Headers").getRelative(relHeaderPath);
 
         viewedIllegalOutput =
-            viewedIllegalOutput || isIllegalOutputFile(fullHeaderPath, pathToDeclaredHeader);
+            viewedIllegalOutput || isIllegalOutputFile(fullHeaderPath, headerData);
         boolean isOutputDirectory = fullHeaderPath.startsWith(outputPathFragment);
-        if (isFile(fullHeaderPath, relHeaderPath, isOutputDirectory, pathToDeclaredHeader)) {
+        if (isFile(fullHeaderPath, relHeaderPath, isOutputDirectory, headerData)) {
           foundHeaderPath = fullHeaderPath;
         } else {
           // Look for header in path/to/foo.framework/PrivateHeaders/
           fullHeaderPath =
               fullFrameworkPath.getRelative("PrivateHeaders").getRelative(relHeaderPath);
           viewedIllegalOutput =
-              viewedIllegalOutput || isIllegalOutputFile(fullHeaderPath, pathToDeclaredHeader);
-          if (isFile(fullHeaderPath, relHeaderPath, isOutputDirectory, pathToDeclaredHeader)) {
+              viewedIllegalOutput || isIllegalOutputFile(fullHeaderPath, headerData);
+          if (isFile(fullHeaderPath, relHeaderPath, isOutputDirectory, headerData)) {
             foundHeaderPath = fullHeaderPath;
           } else {
             continue;
@@ -286,7 +282,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
 
         Artifact artifact;
         if (isOutputDirectory) {
-          artifact = pathToDeclaredHeader.get(foundHeaderPath);
+          artifact = headerData.getHeaderArtifact(foundHeaderPath);
           if (artifact == null) {
             // This happens if an included file exists in a framework directory but is not but is
             // not an output of the framework rule.
@@ -328,18 +324,17 @@ public class LegacyIncludeScanner implements IncludeScanner {
      * Locates an included file along the search paths.
      *
      * @param inclusion the inclusion to locate
-     * @param pathToDeclaredHeader generated files which may be reached during scanning
      * @return a LocateOnPathResult
      */
     LocateOnPathResult lookup(
-        InclusionWithContext inclusion, Map<PathFragment, Artifact> pathToDeclaredHeader) {
+        InclusionWithContext inclusion, IncludeScanningHeaderData headerData) {
       LocateOnPathResult result = cache.get(inclusion);
       if (result == null) {
         // Do not use computeIfAbsent() as the implementation of locateOnPaths might do multiple
         // file stats and this creates substantial contention given CompactHashMap's locking.
         // Do not use futures as the few duplicate executions are cheaper than the additional memory
         // that would be required.
-        result = locateOnPaths(inclusion, pathToDeclaredHeader, false);
+        result = locateOnPaths(inclusion, headerData, false);
         cache.put(inclusion, result);
         return result;
       }
@@ -356,14 +351,14 @@ public class LegacyIncludeScanner implements IncludeScanner {
       // is very rare. b/150307245.
       if (result.path != null) {
         if (result.path.isSourceArtifact()
-            || result.path.equals(pathToDeclaredHeader.get(result.path.getExecPath()))) {
+            || result.path.equals(headerData.getHeaderArtifact(result.path.getExecPath()))) {
           return result;
         }
       } else if (!result.viewedIllegalOutputFile) {
         return result;
       }
 
-      result = locateOnPaths(inclusion, pathToDeclaredHeader, true);
+      result = locateOnPaths(inclusion, headerData, true);
       if (result.path != null || !result.viewedIllegalOutputFile) {
         // In this case, the result is now cachable either because a file has been found or
         // because there are no more illegal output files. This is rare in practice. Avoid
@@ -508,7 +503,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
    */
   private Artifact locateRelative(
       Inclusion inclusion,
-      Map<PathFragment, Artifact> declaredHeaders,
+      IncludeScanningHeaderData headerData,
       Artifact includer,
       PathFragment parent) {
     if (inclusion.kind != Kind.QUOTE) {
@@ -528,7 +523,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
       }
     }
     PathFragment execPath = parent.getRelative(name);
-    if (!isFile(execPath, name, includer.isSourceArtifact(), declaredHeaders)) {
+    if (!isFile(execPath, name, includer.isSourceArtifact(), headerData)) {
       return null;
     }
     PathFragment parentDirectory = includer.getRootRelativePath().getParentDirectory();
@@ -539,7 +534,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
       // directory names there are in it.
       return null;
     }
-    Artifact header = declaredHeaders.get(execPath);
+    Artifact header = headerData.getHeaderArtifact(execPath);
     if (header != null) {
       return header;
     }
@@ -567,9 +562,9 @@ public class LegacyIncludeScanner implements IncludeScanner {
       PathFragment execPath,
       PathFragment includeAsWritten,
       boolean isSource,
-      Map<PathFragment, Artifact> declaredHeaders) {
+      IncludeScanningHeaderData headerData) {
     if (isRealOutputFile(execPath)) {
-      return declaredHeaders.containsKey(execPath);
+      return headerData.isDeclaredHeader(execPath);
     }
     // TODO(djasper): This code path cannot be hit with isSource being false. Verify and add
     // Preconditions check.
@@ -587,7 +582,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
       }
     }
     // Shortcut: If this is a declared header, it's bound to exist.
-    if (declaredHeaders.containsKey(execPath)) {
+    if (headerData.isDeclaredHeader(execPath)) {
       return true;
     }
     return pathCache.fileExists(execPath, isSource);
@@ -643,8 +638,8 @@ public class LegacyIncludeScanner implements IncludeScanner {
   }
 
   private boolean isIllegalOutputFile(
-      PathFragment includeFile, Map<PathFragment, Artifact> declaredHeaders) {
-    return isRealOutputFile(includeFile) && !declaredHeaders.containsKey(includeFile);
+      PathFragment includeFile, IncludeScanningHeaderData headerData) {
+    return isRealOutputFile(includeFile) && !headerData.isDeclaredHeader(includeFile);
   }
 
   private boolean isRealOutputFile(PathFragment path) {
@@ -666,9 +661,6 @@ public class LegacyIncludeScanner implements IncludeScanner {
     private final ActionExecutionContext actionExecutionContext;
     private final Artifact grepIncludes;
     private final IncludeScanningHeaderData headerData;
-    private final Map<PathFragment, Artifact> pathToDeclaredHeader;
-    /** The set of headers known to be part of a C++ module. Scanning can stop here. */
-    private final Set<Artifact> modularHeaders;
 
     /** The set of all processed inclusions, to avoid processing duplicate inclusions. */
     private final Set<ArtifactWithInclusionContext> visitedInclusions = Sets.newConcurrentHashSet();
@@ -687,8 +679,6 @@ public class LegacyIncludeScanner implements IncludeScanner {
       this.actionExecutionContext = actionExecutionContext;
       this.grepIncludes = grepIncludes;
       this.headerData = headerData;
-      this.pathToDeclaredHeader = headerData.getPathToDeclaredHeader();
-      this.modularHeaders = headerData.getModularHeaders();
     }
 
     void processInternal(
@@ -871,8 +861,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
         throws IOException, ExecException, InterruptedException {
       // Try to find the included file relative to the file that contains the inclusion. Relative
       // inclusions are handled like the first entry on the quote include path
-      Artifact includeFile =
-          locateRelative(inclusion.getInclusion(), pathToDeclaredHeader, source, parent);
+      Artifact includeFile = locateRelative(inclusion.getInclusion(), headerData, source, parent);
       int contextPathPos = 0;
       Kind contextKind = null;
 
@@ -881,7 +870,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
       // If nothing has been found, get an inclusion from the cache. This will automatically search
       // on the include paths and populate the cache if necessary.
       if (includeFile == null) {
-        LocateOnPathResult result = inclusionCache.lookup(inclusion, pathToDeclaredHeader);
+        LocateOnPathResult result = inclusionCache.lookup(inclusion, headerData);
         includeFile = result.path;
         contextPathPos = result.includePosition;
         contextKind = inclusion.getContextKind();
@@ -889,12 +878,12 @@ public class LegacyIncludeScanner implements IncludeScanner {
 
       // Recursively process the found file (if not yet done).
       if (includeFile != null
-          && !isIllegalOutputFile(includeFile.getExecPath(), pathToDeclaredHeader)
+          && !isIllegalOutputFile(includeFile.getExecPath(), headerData)
           && headerData.isLegalHeader(includeFile)
           && visitedInclusions.add(
               new ArtifactWithInclusionContext(includeFile, contextKind, contextPathPos))) {
         visited.add(includeFile);
-        if (modularHeaders.contains(includeFile)) {
+        if (headerData.isModularHeader(includeFile)) {
           return;
         }
         processAsyncIfNotExtracted(includeFile, contextPathPos, contextKind, visited);

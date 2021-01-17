@@ -1,3 +1,5 @@
+load("//:distdir_deps.bzl", "gen_workspace_stanza")
+
 package(default_visibility = ["//visibility:private"])
 
 filegroup(
@@ -18,6 +20,14 @@ genrule(
     srcs = ["//third_party/java/jdk/langtools:javac_jar"],
     outs = ["langtools.jar"],
     cmd = "cp $< $@",
+)
+
+gen_workspace_stanza(
+    name = "rules_proto_stanza",
+    out = "rules_proto_stanza.txt",
+    repos = [
+        "rules_proto",
+    ],
 )
 
 filegroup(
@@ -244,6 +254,8 @@ JAVA_VERSIONS = ("11", "14", "15")
             # java_tools zips to test
             "src/java_tools.zip",
             "src/java_tools_prebuilt.zip",
+            # --java_language_version value
+            java_version,
             # --java_runtime_version value
             java_version,
         ],
@@ -269,6 +281,8 @@ JAVA_VERSIONS = ("11", "14", "15")
             # java_tools zips to test
             "$(LOCAL_JAVA_TOOLS_ZIP_URL)",
             "$(LOCAL_JAVA_TOOLS_PREBUILT_ZIP_URL)",
+            # --java_language_version value
+            java_version,
             # --java_runtime_version value
             java_version,
         ],
@@ -322,7 +336,10 @@ sh_test(
     name = "bazel_proto_library_test",
     size = "large",  # Downloads and compiles protobuf for *every* *test* *case*
     srcs = ["bazel_proto_library_test.sh"],
-    data = [":test-deps"],
+    data = [
+        ":rules_proto_stanza.txt",
+        ":test-deps",
+    ],
     exec_compatible_with = ["//:highcpu_machine"],
     tags = ["no_windows"],  # Doesn't work on Windows for unknown reason
 )

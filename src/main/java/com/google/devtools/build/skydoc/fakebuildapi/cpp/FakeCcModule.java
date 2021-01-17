@@ -73,7 +73,7 @@ public class FakeCcModule
 
   @Override
   public ProviderApi getCcToolchainProvider() {
-    return new FakeProviderApi();
+    return new FakeProviderApi("CcToolchainInfo");
   }
 
   @Override
@@ -214,6 +214,7 @@ public class FakeCcModule
       Object librariesToLinkObject,
       Object userLinkFlagsObject,
       Object nonCodeInputs,
+      Object goLinkCArchiveObject,
       StarlarkThread thread) {
     return null;
   }
@@ -291,6 +292,7 @@ public class FakeCcModule
       Object doNotGenerateModuleMap,
       Object codeCoverageEnabled,
       Object hdrsCheckingMode,
+      Object variablesExtension,
       StarlarkThread thread)
       throws EvalException, InterruptedException {
     return null;
@@ -336,6 +338,7 @@ public class FakeCcModule
       Object linkArtifactNameSuffix,
       Object neverLink,
       Object testOnlyTarget,
+      Object variablesExtension,
       StarlarkThread thread)
       throws InterruptedException, EvalException {
     return null;

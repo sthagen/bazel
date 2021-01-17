@@ -526,6 +526,18 @@ distrib_java_import(
 )
 
 java_import(
+    name = "reactive_streams",
+    jars = ["reactive_streams/reactive-streams-1.0.3.jar"],
+)
+
+java_import(
+    name = "rxjava3",
+    jars = ["rxjava3/rxjava-3.0.9.jar"],
+    exports = [":reactive_streams"],
+    deps = [":reactive_streams"],
+)
+
+java_import(
     name = "jimfs",
     jars = ["jimfs/jimfs-1.1.jar"],
 )
@@ -624,8 +636,9 @@ java_import(
     jars = ["guava/guava-testlib-29.0-jre.jar"],
 )
 
-java_import(
+distrib_java_import(
     name = "junit4",
+    enable_distributions = ["debian"],
     jars = [
         "hamcrest/hamcrest-core-1.3.jar",
         "junit/junit-4.13.jar",
@@ -661,6 +674,7 @@ java_import(
     jars = ["truth/truth-1.0.1.jar"],
     exports = [
         ":truth8",
+        ":truth_proto",
     ],
     deps = [
         ":diffutils",
@@ -670,6 +684,11 @@ java_import(
 java_import(
     name = "truth8",
     jars = ["truth8/truth-java8-extension-1.0.1.jar"],
+)
+
+java_import(
+    name = "truth_proto",
+    jars = ["truth_proto/truth-proto-extension-1.0.1.jar"],
 )
 
 distrib_java_import(

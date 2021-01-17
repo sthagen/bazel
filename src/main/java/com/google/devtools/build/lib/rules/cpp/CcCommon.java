@@ -814,7 +814,9 @@ public final class CcCommon {
       // cc_toolchain rule.
       unsupportedFeaturesBuilder.add(CppRuleClasses.PARSE_HEADERS);
     }
-    if (toolchain.getCcInfo().getCcCompilationContext().getCppModuleMap() == null) {
+
+    if (!requestedFeatures.contains(CppRuleClasses.LANG_OBJC)
+        && toolchain.getCcInfo().getCcCompilationContext().getCppModuleMap() == null) {
       unsupportedFeaturesBuilder.add(CppRuleClasses.MODULE_MAPS);
     }
 
@@ -886,6 +888,12 @@ public final class CcCommon {
         if (toolchain.isLLVMCompiler()
             && !allUnsupportedFeatures.contains(CppRuleClasses.THIN_LTO)) {
           allFeatures.add(CppRuleClasses.ENABLE_FDO_THINLTO);
+        }
+
+        // Support implicit enabling of split functions for FDO unless it has been disabled.
+        if (toolchain.isLLVMCompiler()
+            && !allUnsupportedFeatures.contains(CppRuleClasses.SPLIT_FUNCTIONS)) {
+          allFeatures.add(CppRuleClasses.ENABLE_FDO_SPLIT_FUNCTIONS);
         }
       }
       if (branchFdoProvider.isLlvmCSFdo()) {
