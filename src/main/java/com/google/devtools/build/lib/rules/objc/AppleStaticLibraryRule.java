@@ -37,13 +37,6 @@ import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
  * Rule definition for apple_static_library.
  */
 public class AppleStaticLibraryRule implements RuleDefinition {
-
-  private final ObjcProtoAspect objcProtoAspect;
-
-  public AppleStaticLibraryRule(ObjcProtoAspect objcProtoAspect) {
-    this.objcProtoAspect = objcProtoAspect;
-  }
-
   /**
    * Template for the fat archive output (using Apple's "lipo" tool to combine .a archive files of
    * multiple architectures).
@@ -89,8 +82,7 @@ public class AppleStaticLibraryRule implements RuleDefinition {
                 .allowedRuleClasses(ObjcRuleClasses.CompilingRule.ALLOWED_CC_DEPS_RULE_CLASSES)
                 .mandatoryProviders(ObjcProvider.STARLARK_CONSTRUCTOR.id())
                 .cfg(splitTransitionProvider)
-                .allowedFileTypes()
-                .aspect(objcProtoAspect))
+                .allowedFileTypes())
         .add(
             attr("feature_flags", LABEL_KEYED_STRING_DICT)
                 .undocumented("the feature flag feature has not yet been launched")
@@ -120,7 +112,8 @@ public class AppleStaticLibraryRule implements RuleDefinition {
     return RuleDefinition.Metadata.builder()
         .name("apple_static_library")
         .factoryClass(AppleStaticLibrary.class)
-        .ancestors(BaseRuleClasses.BaseRule.class, ObjcRuleClasses.MultiArchPlatformRule.class)
+        .ancestors(
+            BaseRuleClasses.NativeBuildRule.class, ObjcRuleClasses.MultiArchPlatformRule.class)
         .build();
   }
 }

@@ -140,7 +140,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private final boolean usePic;
   private final boolean useHeaderModules;
   protected final boolean needsIncludeValidation;
-  private final IncludeProcessing includeProcessing;
 
   private final CcCompilationContext ccCompilationContext;
   private final ImmutableList<Artifact> builtinIncludeFiles;
@@ -274,7 +273,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     this.mandatoryInputs = mandatoryInputs;
     this.inputsForInvalidation = inputsForInvalidation;
     this.additionalPrunableHeaders = additionalPrunableHeaders;
-    this.shouldScanIncludes = shouldScanIncludes;
+    this.shouldScanIncludes = shouldScanIncludes && cppSemantics.allowIncludeScanning();
     this.usePic = usePic;
     this.useHeaderModules = useHeaderModules;
     this.ccCompilationContext = ccCompilationContext;
@@ -288,7 +287,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     this.actionName = actionName;
     this.featureConfiguration = featureConfiguration;
     this.needsIncludeValidation = cppSemantics.needsIncludeValidation();
-    this.includeProcessing = cppSemantics.getIncludeProcessing();
     this.actionClassId = actionClassId;
     this.builtInIncludeDirectories = builtInIncludeDirectories;
     this.additionalInputs = null;
@@ -397,6 +395,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   }
 
   /** Returns the results of include scanning. */
+  @Nullable
   private NestedSet<Artifact> findUsedHeaders(
       ActionExecutionContext actionExecutionContext, IncludeScanningHeaderData headerData)
       throws ActionExecutionException, InterruptedException {
@@ -407,7 +406,11 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         List<Artifact> includes =
             actionExecutionContext
                 .getContext(CppIncludeScanningContext.class)
-                .findAdditionalInputs(this, actionExecutionContext, includeProcessing, headerData);
+                .findAdditionalInputs(this, actionExecutionContext, headerData);
+        if (includes == null) {
+          return null;
+        }
+
         return NestedSetBuilder.wrap(Order.STABLE_ORDER, includes);
       } catch (IORuntimeException e) {
         throw new EnvironmentalExecException(
@@ -482,6 +485,9 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
               .setIsValidUndeclaredHeader(getValidUndeclaredHeaderPredicate(actionExecutionContext))
               .build();
       additionalInputs = findUsedHeaders(actionExecutionContext, includeScanningHeaderData);
+      if (additionalInputs == null) {
+        return null;
+      }
 
       if (useHeaderModules) {
         usedModules = ccCompilationContext.computeUsedModules(usePic, additionalInputs.toSet());

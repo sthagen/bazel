@@ -44,6 +44,7 @@ import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RequiredConfigFragmentsProvider;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.BuildType;
@@ -62,6 +63,7 @@ import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
+import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -90,6 +92,11 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
     @Override
     protected boolean platformBasedToolchains() {
       return true;
+    }
+
+    @Override
+    protected String defaultPlatformFlag() {
+      return String.format("--android_platforms=%s/android", TestConstants.PLATFORM_PACKAGE_ROOT);
     }
   }
 
@@ -1067,21 +1074,26 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
 
   @Test
   public void testV1SigningMethod() throws Exception {
-    actualSignerToolTests("v1", "true", "false");
+    actualSignerToolTests("v1", "true", "false", null);
   }
 
   @Test
   public void testV2SigningMethod() throws Exception {
-    actualSignerToolTests("v2", "false", "true");
+    actualSignerToolTests("v2", "false", "true", null);
   }
 
   @Test
   public void testV1V2SigningMethod() throws Exception {
-    actualSignerToolTests("v1_v2", "true", "true");
+    actualSignerToolTests("v1_v2", "true", "true", null);
   }
 
-  private void actualSignerToolTests(String apkSigningMethod, String signV1, String signV2)
-      throws Exception {
+  @Test
+  public void testV4SigningMethod() throws Exception {
+    actualSignerToolTests("v4", "false", "false", "true");
+  }
+
+  private void actualSignerToolTests(
+      String apkSigningMethod, String signV1, String signV2, String signV4) throws Exception {
     scratch.file(
         "java/com/google/android/hello/BUILD",
         "android_binary(name = 'hello',",
@@ -1119,6 +1131,14 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
 
     assertThat(flagValue("--v1-signing-enabled", args)).isEqualTo(signV1);
     assertThat(flagValue("--v2-signing-enabled", args)).isEqualTo(signV2);
+    if (signV4 != null) {
+      assertThat(flagValue("--v4-signing-enabled", args)).isEqualTo(signV4);
+      if (signV4.equals("true")) {
+        assertThat(getFirstArtifactEndingWith(artifacts, "hello.apk.idsig")).isNotNull();
+      }
+    } else {
+      assertThat(args).doesNotContain("--v4-signing-enabled");
+    }
   }
 
   @Test
@@ -2727,19 +2747,6 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
     List<String> args = getGeneratingSpawnActionArgs(getResourceApk(resource));
     assertPrimaryResourceDirs(ImmutableList.of("java/other/resources/res"), args);
     assertNoEvents();
-  }
-
-  @Test
-  public void testManifestMissingFails_localResources() throws Exception {
-    checkError(
-        "java/android/resources",
-        "r",
-        "manifest attribute of android_library rule //java/android/resources:r: manifest is "
-            + "required when resource_files or assets are defined.",
-        "filegroup(name = 'b')",
-        "android_library(name = 'r',",
-        "                resource_files = [':b'],",
-        "                )");
   }
 
   @Test
@@ -4487,15 +4494,22 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
         "    exports_manifest = 1,",
         "    resource_files = ['theme/res/values/values.xml'],",
         ")");
-    Artifact androidCoreManifest = getLibraryManifest(getConfiguredTarget("//java/android:core"));
+    ConfiguredTarget application = getConfiguredTarget("//java/binary:application");
+    BuildConfiguration appConfiguration = getConfiguration(application);
+    Artifact androidCoreManifest =
+        getLibraryManifest(getConfiguredTarget("//java/android:core", appConfiguration));
     Artifact androidUtilityManifest =
-        getLibraryManifest(getConfiguredTarget("//java/android:utility"));
+        getLibraryManifest(getConfiguredTarget("//java/android:utility", appConfiguration));
     Artifact binaryLibraryManifest =
-        getLibraryManifest(getConfiguredTarget("//java/binary:library"));
-    Artifact commonManifest = getLibraryManifest(getConfiguredTarget("//java/common:common"));
-    Artifact commonThemeManifest = getLibraryManifest(getConfiguredTarget("//java/common:theme"));
+        getLibraryManifest(getConfiguredTarget("//java/binary:library", appConfiguration));
+    Artifact commonManifest =
+        getLibraryManifest(getConfiguredTarget("//java/common:common", appConfiguration));
+    Artifact commonThemeManifest =
+        getLibraryManifest(getConfiguredTarget("//java/common:theme", appConfiguration));
 
-    assertThat(getBinaryMergeeManifests(getConfiguredTarget("//java/binary:application")))
+    assertThat(
+            getBinaryMergeeManifests(
+                getConfiguredTarget("//java/binary:application", appConfiguration)))
         .containsExactlyEntriesIn(
             ImmutableMap.of(
                 androidCoreManifest.getExecPath().toString(), "//java/android:core",

@@ -14,8 +14,9 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
 import com.google.auto.value.AutoValue;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -35,6 +36,8 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
+import com.google.devtools.build.lib.rules.cpp.CcInfo;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingContext;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.objc.CompilationSupport.ExtraLinkArgs;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
@@ -162,6 +165,10 @@ public class MultiArchBinarySupport {
           new J2ObjcEntryClassProvider.Builder()
               .addTransitive(getTypedProviders(infoCollections, J2ObjcEntryClassProvider.class))
               .build();
+      ImmutableList<CcLinkingContext> ccLinkingContexts =
+          getTypedProviders(infoCollections, CcInfo.PROVIDER).stream()
+              .map(CcInfo::getCcLinkingContext)
+              .collect(toImmutableList());
 
       binariesToLipo.add(intermediateArtifacts.strippedSingleArchitectureBinary());
 
@@ -183,6 +190,7 @@ public class MultiArchBinarySupport {
           .registerCompileAndArchiveActions(compilationArtifacts, ObjcCompilationContext.EMPTY)
           .registerLinkActions(
               objcProvider,
+              ccLinkingContexts,
               j2ObjcMappingFileProvider,
               j2ObjcEntryClassProvider,
               extraLinkArgs,
@@ -215,40 +223,13 @@ public class MultiArchBinarySupport {
       ImmutableList<TransitiveInfoCollection> dylibProviders)
       throws RuleErrorException, InterruptedException {
     Iterable<ObjcProvider> dylibObjcProviders = getDylibObjcProviders(dylibProviders);
-    Iterable<ObjcProtoProvider> dylibProtoProviders =
-        getTypedProviders(dylibProviders, ObjcProtoProvider.STARLARK_CONSTRUCTOR);
-    NestedSet<Artifact> protosToAvoid = protoArtifactsToAvoid(dylibProtoProviders);
     ImmutableSet.Builder<DependencySpecificConfiguration> childInfoBuilder = ImmutableSet.builder();
 
     for (BuildConfiguration childToolchainConfig : childConfigurationsAndToolchains.keySet()) {
       String childCpu = childToolchainConfig.getCpu();
-      Iterable<TransitiveInfoCollection> infoCollections = cpuToDepsCollectionMap.get(childCpu);
-      ImmutableList<ObjcProtoProvider> depProtoProviders =
-          getTypedProviders(infoCollections, ObjcProtoProvider.STARLARK_CONSTRUCTOR);
-      Optional<ObjcProvider> protosObjcProvider;
-      if (ObjcRuleClasses.objcConfiguration(ruleContext).enableAppleBinaryNativeProtos()) {
-        ProtobufSupport protoSupport =
-            new ProtobufSupport(
-                    ruleContext,
-                    childToolchainConfig,
-                    protosToAvoid,
-                    depProtoProviders,
-                    ProtobufSupport.getTransitivePortableProtoFilters(depProtoProviders),
-                    childConfigurationsAndToolchains.get(childToolchainConfig))
-                .registerGenerationAction()
-                .registerCompilationAction();
-        protosObjcProvider = protoSupport.getObjcProvider();
-      } else {
-        protosObjcProvider = Optional.absent();
-      }
 
       IntermediateArtifacts intermediateArtifacts =
           ObjcRuleClasses.intermediateArtifacts(ruleContext, childToolchainConfig);
-
-      Iterable<ObjcProvider> additionalDepProviders =
-          Iterables.concat(
-              dylibObjcProviders,
-              protosObjcProvider.asSet());
 
       ObjcCommon common =
           common(
@@ -256,7 +237,7 @@ public class MultiArchBinarySupport {
               childToolchainConfig,
               intermediateArtifacts,
               nullToEmptyList(cpuToCTATDepsCollectionMap.get(childCpu)),
-              additionalDepProviders);
+              dylibObjcProviders);
       ObjcProvider objcProviderWithDylibSymbols = common.getObjcProviderBuilder().build();
       ObjcProvider objcProvider =
           objcProviderWithDylibSymbols.subtractSubtrees(dylibObjcProviders, ImmutableList.of());
@@ -315,15 +296,6 @@ public class MultiArchBinarySupport {
 
   private <T> List<T> nullToEmptyList(List<T> inputList) {
     return inputList != null ? inputList : ImmutableList.<T>of();
-  }
-
-  private static NestedSet<Artifact> protoArtifactsToAvoid(
-      Iterable<ObjcProtoProvider> avoidedProviders) {
-    NestedSetBuilder<Artifact> avoidArtifacts = NestedSetBuilder.stableOrder();
-    for (ObjcProtoProvider avoidProvider : avoidedProviders) {
-      avoidArtifacts.addTransitive(avoidProvider.getProtoFiles());
-    }
-    return avoidArtifacts.build();
   }
 
   private static <T extends Info> ImmutableList<T> getTypedProviders(
