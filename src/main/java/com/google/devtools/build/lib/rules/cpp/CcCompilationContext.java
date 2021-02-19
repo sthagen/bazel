@@ -467,7 +467,7 @@ public final class CcCompilationContext implements CcCompilationContextApi<Artif
    * the modules that they are in.
    */
   public Collection<Artifact.DerivedArtifact> computeUsedModules(
-      boolean usePic, Set<Artifact> includes) {
+      boolean usePic, Set<Artifact> includes, boolean separate) {
     CompactHashSet<Artifact.DerivedArtifact> modules = CompactHashSet.create();
     for (HeaderInfo transitiveHeaderInfo : headerInfo.getTransitiveCollection()) {
       Artifact.DerivedArtifact module = transitiveHeaderInfo.getModule(usePic);
@@ -496,8 +496,7 @@ public final class CcCompilationContext implements CcCompilationContextApi<Artif
     // Do not add the module of the current rule for both:
     // 1. the module compile itself
     // 2. compiles of other translation units of the same rule.
-    modules.remove(headerInfo.getModule(usePic));
-    modules.remove(headerInfo.getSeparateModule(usePic));
+    modules.remove(separate ? headerInfo.getSeparateModule(usePic) : headerInfo.getModule(usePic));
     return modules;
   }
 

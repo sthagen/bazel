@@ -890,7 +890,7 @@ public final class CcCompilationHelper {
     }
   }
 
-  private PublicHeaders computePublicHeaders() throws InterruptedException {
+  private PublicHeaders computePublicHeaders(List<Artifact> headers) throws InterruptedException {
     PathFragment prefix = null;
     if (includePrefix != null) {
       prefix = PathFragment.create(includePrefix);
@@ -922,8 +922,8 @@ public final class CcCompilationHelper {
     if (stripPrefix == null && prefix == null) {
       // Simple case, no magic needed
       return new PublicHeaders(
-          ImmutableList.copyOf(Iterables.concat(publicHeaders, nonModuleMapHeaders)),
-          ImmutableList.copyOf(publicHeaders),
+          ImmutableList.copyOf(Iterables.concat(headers, nonModuleMapHeaders)),
+          ImmutableList.copyOf(headers),
           /*virtualIncludePath=*/ null,
           /* virtualToOriginalHeaders= */ NestedSetBuilder.create(Order.STABLE_ORDER));
     }
@@ -939,7 +939,7 @@ public final class CcCompilationHelper {
     ImmutableList.Builder<Artifact> moduleHeadersBuilder = ImmutableList.builder();
     NestedSetBuilder<Pair<String, String>> virtualToOriginalHeaders =
         NestedSetBuilder.stableOrder();
-    for (Artifact originalHeader : publicHeaders) {
+    for (Artifact originalHeader : headers) {
       if (!originalHeader.getRepositoryRelativePath().startsWith(stripPrefix)) {
         ruleErrorConsumer.ruleError(
             String.format(
@@ -1025,7 +1025,7 @@ public final class CcCompilationHelper {
       ccCompilationContextBuilder.addIncludeDir(includeDir);
     }
 
-    PublicHeaders publicHeaders = computePublicHeaders();
+    PublicHeaders publicHeaders = computePublicHeaders(this.publicHeaders);
     if (publicHeaders.getVirtualIncludePath() != null) {
       ccCompilationContextBuilder.addIncludeDir(publicHeaders.getVirtualIncludePath());
     }
@@ -1048,7 +1048,6 @@ public final class CcCompilationHelper {
     // There are no ordering constraints for declared include dirs/srcs.
     ccCompilationContextBuilder.addDeclaredIncludeSrcs(publicHeaders.getHeaders());
     ccCompilationContextBuilder.addDeclaredIncludeSrcs(publicTextualHeaders);
-    ccCompilationContextBuilder.addDeclaredIncludeSrcs(separateModuleHeaders);
     ccCompilationContextBuilder.addDeclaredIncludeSrcs(privateHeaders);
     ccCompilationContextBuilder.addDeclaredIncludeSrcs(additionalInputs);
     ccCompilationContextBuilder.addNonCodeInputs(additionalInputs);
@@ -1065,6 +1064,16 @@ public final class CcCompilationHelper {
       }
       ccCompilationContextBuilder.setHeadersCheckingMode(headersCheckingMode);
     }
+
+    if (!separateModuleHeaders.isEmpty()) {
+      Preconditions.checkState(
+          featureConfiguration.isEnabled(CppRuleClasses.MODULE_MAPS)
+              && generateModuleMap
+              && (getGeneratesPicHeaderModule() || getGeneratesNoPicHeaderModule()),
+          "Should use separate headers only when building modules",
+          label);
+    }
+    PublicHeaders separatePublicHeaders = computePublicHeaders(separateModuleHeaders);
 
     if (featureConfiguration.isEnabled(CppRuleClasses.MODULE_MAPS)) {
       if (cppModuleMap == null) {
@@ -1093,7 +1102,8 @@ public final class CcCompilationHelper {
         }
 
         actionRegistry.registerAction(
-            createModuleMapAction(cppModuleMap, publicHeaders, dependentModuleMaps, compiled));
+            createModuleMapAction(
+                cppModuleMap, publicHeaders, separatePublicHeaders, dependentModuleMaps, compiled));
       }
       Artifact mapArtifact = cppModuleMap.getArtifact();
       if (getGeneratesPicHeaderModule()) {
@@ -1102,11 +1112,15 @@ public final class CcCompilationHelper {
       if (getGeneratesNoPicHeaderModule()) {
         ccCompilationContextBuilder.setHeaderModule(getHeaderModule(mapArtifact, ""));
       }
-      if (!separateModuleHeaders.isEmpty()
-          && (getGeneratesPicHeaderModule() || getGeneratesNoPicHeaderModule())) {
+      if (!separateModuleHeaders.isEmpty()) {
+        ccCompilationContextBuilder.addDeclaredIncludeSrcs(separatePublicHeaders.getHeaders());
+        if (configuration.isCodeCoverageEnabled()) {
+          ccCompilationContextBuilder.addVirtualToOriginalHeaders(
+              publicHeaders.virtualToOriginalHeaders);
+        }
         String suffix = CppModuleMap.SEPARATE_MODULE_SUFFIX;
         ccCompilationContextBuilder.setSeparateModuleHdrs(
-            separateModuleHeaders,
+            separatePublicHeaders.getHeaders(),
             getGeneratesNoPicHeaderModule() ? getHeaderModule(mapArtifact, suffix) : null,
             getGeneratesPicHeaderModule() ? getPicHeaderModule(mapArtifact, suffix) : null);
       }
@@ -1170,6 +1184,7 @@ public final class CcCompilationHelper {
   private CppModuleMapAction createModuleMapAction(
       CppModuleMap moduleMap,
       PublicHeaders publicHeaders,
+      PublicHeaders separateModuleHeaders,
       List<CppModuleMap> dependentModuleMaps,
       boolean compiledModule) {
     return new CppModuleMapAction(
@@ -1183,7 +1198,7 @@ public final class CcCompilationHelper {
             : publicHeaders.getModuleMapHeaders(),
         dependentModuleMaps,
         additionalExportedHeaders,
-        separateModuleHeaders,
+        separateModuleHeaders.getModuleMapHeaders(),
         compiledModule,
         featureConfiguration.isEnabled(CppRuleClasses.MODULE_MAP_HOME_CWD),
         featureConfiguration.isEnabled(CppRuleClasses.GENERATE_SUBMODULES),
