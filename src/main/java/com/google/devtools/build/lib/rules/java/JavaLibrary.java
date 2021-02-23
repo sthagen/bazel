@@ -143,12 +143,7 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
             javaArtifacts, attributes, neverLink, helper.getBootclasspathOrDefault()));
 
     JavaCompilationArgsProvider javaCompilationArgs =
-        common.collectJavaCompilationArgs(
-            neverLink, /* srcLessDepsExport= */ false, /* javaProtoLibraryStrictDeps= */ false);
-    JavaStrictCompilationArgsProvider strictJavaCompilationArgs =
-        new JavaStrictCompilationArgsProvider(
-            common.collectJavaCompilationArgs(
-                neverLink, /* srcLessDepsExport= */ false, /* javaProtoLibraryStrictDeps= */ true));
+        common.collectJavaCompilationArgs(neverLink, /* srcLessDepsExport= */ false);
     NestedSet<LibraryToLink> transitiveJavaNativeLibraries =
         common.collectTransitiveJavaNativeLibraries();
 
@@ -181,11 +176,9 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
             // attrs.
             : JavaCommon.getTransitivePlugins(ruleContext);
 
-    // java_library doesn't need to return JavaRunfilesProvider
     JavaInfo javaInfo =
         javaInfoBuilder
             .addProvider(JavaCompilationArgsProvider.class, compilationArgsProvider)
-            .addProvider(JavaStrictCompilationArgsProvider.class, strictJavaCompilationArgs)
             .addProvider(JavaSourceJarsProvider.class, sourceJarsProvider)
             .addProvider(JavaRuleOutputJarsProvider.class, ruleOutputJarsProvider)
             // TODO(bazel-team): this should only happen for java_plugin
