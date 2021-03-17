@@ -121,7 +121,9 @@ final class JavaInfoBuildHelper {
     javaInfoBuilder.addProvider(
         JavaCompilationArgsProvider.class, javaCompilationArgsBuilder.build());
 
-    javaInfoBuilder.addProvider(JavaExportsProvider.class, createJavaExportsProvider(exports));
+    javaInfoBuilder.addProvider(
+        JavaExportsProvider.class,
+        createJavaExportsProvider(exports, /* labels = */ ImmutableList.of()));
 
     javaInfoBuilder.addProvider(JavaPluginInfoProvider.class, createJavaPluginsProvider(exports));
 
@@ -208,12 +210,15 @@ final class JavaInfoBuildHelper {
         streamProviders(javaInfos, JavaSourceJarsProvider.class)
             .map(JavaSourceJarsProvider::getTransitiveSourceJars);
 
-    return concat(sourceJars, transitiveSourceJars);
+    return concat(transitiveSourceJars, sourceJars);
   }
 
-  private JavaExportsProvider createJavaExportsProvider(Iterable<JavaInfo> javaInfos) {
-    return JavaExportsProvider.merge(
-        JavaInfo.fetchProvidersFromList(javaInfos, JavaExportsProvider.class));
+  private JavaExportsProvider createJavaExportsProvider(
+      Iterable<JavaInfo> exports, Iterable<Label> labels) {
+    ImmutableList.Builder<JavaExportsProvider> builder = new ImmutableList.Builder<>();
+    builder.addAll(JavaInfo.fetchProvidersFromList(exports, JavaExportsProvider.class));
+    builder.add(new JavaExportsProvider(NestedSetBuilder.wrap(Order.STABLE_ORDER, labels)));
+    return JavaExportsProvider.merge(builder.build());
   }
 
   private JavaPluginInfoProvider createJavaPluginsProvider(Iterable<JavaInfo> javaInfos) {
@@ -229,8 +234,10 @@ final class JavaInfoBuildHelper {
       Artifact outputSourceJar,
       List<String> javacOpts,
       List<JavaInfo> deps,
+      List<JavaInfo> runtimeDeps,
       List<JavaInfo> experimentalLocalCompileTimeDeps,
       List<JavaInfo> exports,
+      List<Label> exportLabels,
       List<JavaInfo> plugins,
       List<JavaInfo> exportedPlugins,
       List<Artifact> annotationProcessorAdditionalInputs,
@@ -266,6 +273,7 @@ final class JavaInfoBuildHelper {
                     .addAll(tokenize(javacOpts))
                     .build());
 
+    streamProviders(runtimeDeps, JavaCompilationArgsProvider.class).forEach(helper::addRuntimeDep);
     streamProviders(deps, JavaCompilationArgsProvider.class).forEach(helper::addDep);
     streamProviders(exports, JavaCompilationArgsProvider.class).forEach(helper::addExport);
     helper.setCompilationStrictDepsMode(getStrictDepsMode(Ascii.toUpperCase(strictDepsMode)));
@@ -314,11 +322,15 @@ final class JavaInfoBuildHelper {
         .addProvider(JavaCompilationArgsProvider.class, javaCompilationArgsProvider)
         .addProvider(
             JavaSourceJarsProvider.class,
-            createJavaSourceJarsProvider(outputSourceJars, concat(deps, exports)))
+            createJavaSourceJarsProvider(outputSourceJars, concat(runtimeDeps, exports, deps)))
         .addProvider(JavaRuleOutputJarsProvider.class, outputJarsBuilder.build())
         .addProvider(
             JavaPluginInfoProvider.class,
             createJavaPluginsProvider(concat(exportedPlugins, exports)))
+        .addProvider(JavaExportsProvider.class, createJavaExportsProvider(exports, exportLabels))
+        .addTransitiveOnlyRuntimeJarsToJavaInfo(deps)
+        .addTransitiveOnlyRuntimeJarsToJavaInfo(exports)
+        .addTransitiveOnlyRuntimeJarsToJavaInfo(runtimeDeps)
         .setNeverlink(neverlink)
         .build();
   }

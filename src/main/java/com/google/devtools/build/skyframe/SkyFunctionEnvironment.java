@@ -824,7 +824,7 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
     if (errorInfo == null) {
       errorInfo = evaluatorContext.getErrorInfoManager().getErrorInfoToUse(
           skyKey, value != null, childErrorInfos);
-      // TODO(b/166268889): remove when fixed.
+      // TODO(b/166268889, b/172223413): remove when fixed.
       if (errorInfo != null && errorInfo.getException() instanceof IOException) {
         logger.atInfo().withCause(errorInfo.getException()).log(
             "Synthetic errorInfo for %s", skyKey);

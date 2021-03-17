@@ -48,6 +48,7 @@ import com.google.devtools.build.lib.packages.Package.ConfigSettingVisibilityPol
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.EnvironmentExtension;
 import com.google.devtools.build.lib.packages.PackageLoadingListener;
+import com.google.devtools.build.lib.packages.PackageOverheadEstimator;
 import com.google.devtools.build.lib.packages.PackageValidator;
 import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
@@ -293,6 +294,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
             "PackageLoader",
             DefaultPackageSettings.INSTANCE,
             PackageValidator.NOOP_VALIDATOR,
+            PackageOverheadEstimator.NOOP_ESTIMATOR,
             PackageLoadingListener.NOOP_LISTENER);
   }
 
@@ -420,7 +422,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
         InMemoryMemoizingEvaluator.SUPPLIER.create(
             makeFreshSkyFunctions(),
             preinjectedDifferencer,
-            new EvaluationProgressReceiver.NullEvaluationProgressReceiver(),
+            EvaluationProgressReceiver.NULL,
             GraphInconsistencyReceiver.THROWING,
             InMemoryMemoizingEvaluator.DEFAULT_STORED_EVENT_FILTER,
             new MemoizingEvaluator.EmittedEventState(),
@@ -457,7 +459,6 @@ public abstract class AbstractPackageLoader implements PackageLoader {
             return pkgLocatorRef.get().getPackageBuildFileNullable(packageName, syscallCacheRef);
           }
         };
-    ExternalPackageHelper externalPackageHelper = getExternalPackageHelper();
     ImmutableMap.Builder<SkyFunctionName, SkyFunction> builder = ImmutableMap.builder();
     builder
         .put(SkyFunctions.PRECOMPUTED, new PrecomputedFunction())
@@ -507,8 +508,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
                 /*packageProgress=*/ null,
                 getActionOnIOExceptionReadingBuildFile(),
                 // Tell PackageFunction to optimize for our use-case of no incrementality.
-                IncrementalityIntent.NON_INCREMENTAL,
-                externalPackageHelper))
+                IncrementalityIntent.NON_INCREMENTAL))
         .putAll(extraSkyFunctions);
     return builder.build();
   }

@@ -17,13 +17,11 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.BlazeTestUtils.createFilesetRule;
 import static org.junit.Assert.assertThrows;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
-import com.google.devtools.build.lib.causes.Cause;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.testutil.Suite;
 import com.google.devtools.build.lib.testutil.TestSpec;
 import com.google.devtools.build.lib.testutil.TestUtils;
@@ -34,6 +32,7 @@ import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.NotifyingHelper;
 import java.io.IOException;
@@ -72,7 +71,7 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     customFileSystem.alwaysError(fooShFile);
 
     assertThrows(BuildFailedException.class, () -> buildTarget("//foo"));
-    events.assertContainsError("missing input file '//foo:foo.sh': nope");
+    events.assertContainsError("//foo:foo: error reading file '//foo:foo.sh': nope");
   }
 
   /** Tests that IOExceptions encountered while handling inputs are properly handled. */
@@ -88,7 +87,7 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
 
     assertThrows(BuildFailedException.class, () -> buildTarget("//foo:top"));
     events.assertContainsError(
-        "Executing genrule //foo:top failed: missing input file '//foo:foo.sh': nope");
+        "Executing genrule //foo:top failed: error reading file '//foo:foo.sh': nope");
   }
 
   /**
@@ -104,12 +103,9 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     customFileSystem.alwaysError(fooHFile);
 
     BuildFailedException e = assertThrows(BuildFailedException.class, () -> buildTarget("//foo"));
-    ImmutableList<Cause> rootCauses = e.getRootCauses().toList();
-    assertThat(rootCauses).hasSize(1);
-    assertThat(rootCauses.get(0).getLabel()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:foo"));
     assertThat(e.getDetailedExitCode().getExitCode()).isEqualTo(ExitCode.BUILD_FAILURE);
     events.assertContainsError(
-        "foo/BUILD:1:11: Compiling foo/foo.cc failed: missing input file 'foo/foo.h': nope");
+        "foo/BUILD:1:11: Compiling foo/foo.cc failed: error reading file 'foo/foo.h': nope");
   }
 
   /** Tests that IOExceptions encountered when not all discovered deps are done are handled. */
@@ -143,12 +139,9 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
                 }));
 
     BuildFailedException e = assertThrows(BuildFailedException.class, () -> buildTarget("//foo"));
-    ImmutableList<Cause> rootCauses = e.getRootCauses().toList();
-    assertThat(rootCauses).hasSize(1);
-    assertThat(rootCauses.get(0).getLabel()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:foo"));
     assertThat(e.getDetailedExitCode().getExitCode()).isEqualTo(ExitCode.BUILD_FAILURE);
     events.assertContainsError(
-        "foo/BUILD:1:11: Compiling foo/foo.cc failed: missing input file 'foo/error.h': nope");
+        "foo/BUILD:1:11: Compiling foo/foo.cc failed: error reading file 'foo/error.h': nope");
   }
 
   /**
@@ -223,9 +216,6 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     customFileSystem.errorOnDirectory("mytree");
     BuildFailedException e =
         assertThrows(BuildFailedException.class, () -> buildTarget("//foo:lib"));
-    ImmutableList<Cause> rootCauses = e.getRootCauses().toList();
-    assertThat(rootCauses).hasSize(1);
-    assertThat(rootCauses.get(0).getLabel()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:lib"));
     assertThat(e.getDetailedExitCode().getExitCode()).isEqualTo(ExitCode.BUILD_FAILURE);
     events.assertContainsError(
         "foo/BUILD:3:11: Failed to create output directory for TreeArtifact"
@@ -254,9 +244,6 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     addOptions("--experimental_nested_set_as_skykey_threshold=1");
     BuildFailedException e =
         assertThrows(BuildFailedException.class, () -> buildTarget("//foo:top"));
-    ImmutableList<Cause> rootCauses = e.getRootCauses().toList();
-    assertThat(rootCauses).hasSize(1);
-    assertThat(rootCauses.get(0).getLabel()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:lib"));
     assertThat(e.getDetailedExitCode().getExitCode()).isEqualTo(ExitCode.BUILD_FAILURE);
     events.assertContainsError(
         "foo/BUILD:3:11: Failed to create output directory for TreeArtifact"
@@ -276,10 +263,6 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     customFileSystem.alwaysError(filePath.getParentDirectory());
     BuildFailedException e =
         assertThrows(BuildFailedException.class, () -> buildTarget("//fileset"));
-    ImmutableList<Cause> rootCauses = e.getRootCauses().toList();
-    assertThat(rootCauses).hasSize(1);
-    assertThat(rootCauses.get(0).getLabel())
-        .isEqualTo(Label.parseAbsoluteUnchecked("//fileset:fileset"));
     assertThat(e.getDetailedExitCode().getExitCode()).isEqualTo(ExitCode.LOCAL_ENVIRONMENTAL_ERROR);
     events.assertContainsError(
         "Traversing Fileset trees to write manifest fileset/fileset.fileset_manifest failed: Error"
@@ -301,10 +284,6 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     customFileSystem.alwaysError(subdir.getChild("BUILD"));
     BuildFailedException e =
         assertThrows(BuildFailedException.class, () -> buildTarget("//fileset"));
-    ImmutableList<Cause> rootCauses = e.getRootCauses().toList();
-    assertThat(rootCauses).hasSize(1);
-    assertThat(rootCauses.get(0).getLabel())
-        .isEqualTo(Label.parseAbsoluteUnchecked("//fileset:fileset"));
     assertThat(e.getDetailedExitCode().getExitCode()).isEqualTo(ExitCode.LOCAL_ENVIRONMENTAL_ERROR);
     events.assertContainsError(
         "Traversing Fileset trees to write manifest fileset/fileset.fileset_manifest failed: Error"
@@ -312,8 +291,87 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
             + " errors while looking for BUILD file");
   }
 
+  private void runIoExceptionInTopLevelSource() throws Exception {
+    write(
+        "foo/rule.bzl",
+        "def _impl(ctx):",
+        "  return [DefaultInfo(files = depset([], transitive = [dep[DefaultInfo].files for dep in"
+            + " ctx.attr.srcs]))]",
+        "",
+        "top_source = rule(",
+        "    implementation = _impl,",
+        "    attrs = {'srcs': attr.label_list(allow_files = True)}",
+        ")");
+    Path buildFile =
+        write(
+            "foo/BUILD",
+            "load(':rule.bzl', 'top_source')",
+            "top_source(name = 'foo', srcs = ['error.in', 'missing.in'])");
+    customFileSystem.alwaysError(buildFile.getParentDirectory().getChild("error.in"));
+    assertThrows(BuildFailedException.class, () -> buildTarget("//foo:foo"));
+  }
+
+  @Test
+  public void ioExceptionInTopLevelSource_keepGoing() throws Exception {
+    addOptions("--keep_going");
+    runIoExceptionInTopLevelSource();
+    events.assertContainsError(
+        "foo/BUILD:2:11: //foo:foo: error reading file '//foo:error.in': nope");
+    events.assertContainsError("foo/BUILD:2:11: //foo:foo: missing input file '//foo:missing.in'");
+    events.assertContainsError("2 input file(s) are in error or do not exist");
+  }
+
+  @Test
+  public void ioExceptionInTopLevelSource_noKeepGoing() throws Exception {
+    runIoExceptionInTopLevelSource();
+    MoreAsserts.assertContainsEventRegex(
+        events.collector(),
+        ".*foo/BUILD:2:11: //foo:foo: (error reading file '//foo:error.in': nope|missing input file"
+            + " '//foo:missing.in')");
+    MoreAsserts.assertContainsEventRegex(
+        events.collector(),
+        ".*(1 input file\\(s\\) (are in error|do not exist)|2 input file\\(s\\) are in error or do"
+            + " not exist)");
+  }
+
+  private void runMissingFileAndIoException() throws Exception {
+    Path buildFile =
+        write(
+            "foo/BUILD",
+            "genrule(name = 'foo', srcs = ['error.in', 'missing.in'], outs = ['out'], cmd = 'touch"
+                + " $@')");
+    customFileSystem.alwaysError(buildFile.getParentDirectory().getChild("error.in"));
+    assertThrows(BuildFailedException.class, () -> buildTarget("//foo:foo"));
+  }
+
+  @Test
+  public void missingFileAndIoException_keepGoing() throws Exception {
+    addOptions("--keep_going");
+    runMissingFileAndIoException();
+    events.assertContainsError(
+        "foo/BUILD:1:8: Executing genrule //foo:foo failed: error reading file '//foo:error.in':"
+            + " nope");
+    events.assertContainsError(
+        "foo/BUILD:1:8: Executing genrule //foo:foo failed: missing input file '//foo:missing.in'");
+    events.assertContainsError(
+        "Executing genrule //foo:foo failed: 2 input file(s) are in error or do not exist");
+  }
+
+  @Test
+  public void missingFileAndIoException_noKeepGoing() throws Exception {
+    runMissingFileAndIoException();
+    MoreAsserts.assertContainsEventRegex(
+        events.collector(),
+        ".*foo/BUILD:1:8: Executing genrule //foo:foo failed: (error reading file '//foo:error.in':"
+            + " nope|missing input file '//foo:missing.in')");
+    MoreAsserts.assertContainsEventRegex(
+        events.collector(),
+        ".*(1 input file\\(s\\) (are in error|do not exist)|2 input file\\(s\\) are in error or do"
+            + " not exist)");
+  }
+
   private static class CustomRealFilesystem extends UnixFileSystem {
-    private final Map<Path, Integer> badPaths = new HashMap<>();
+    private final Map<PathFragment, Integer> badPaths = new HashMap<>();
     private final Set<String> createDirectoryErrorNames = new HashSet<>();
 
     private CustomRealFilesystem() {
@@ -325,7 +383,7 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     }
 
     void alwaysErrorAfter(Path path, int numCalls) {
-      badPaths.put(path, numCalls);
+      badPaths.put(path.asFragment(), numCalls);
     }
 
     void errorOnDirectory(String baseName) {
@@ -333,10 +391,10 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     }
 
     int getNumCallsUntilError(Path path) {
-      return badPaths.getOrDefault(path, 0);
+      return badPaths.getOrDefault(path.asFragment(), 0);
     }
 
-    private synchronized void maybeThrowExn(Path path) throws IOException {
+    private synchronized void maybeThrowExn(PathFragment path) throws IOException {
       if (badPaths.containsKey(path)) {
         Integer numCallsRemaining = badPaths.get(path);
         if (numCallsRemaining <= 0) {
@@ -348,7 +406,7 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     }
 
     @Override
-    protected FileStatus statNullable(Path path, boolean followSymlinks) {
+    protected FileStatus statNullable(PathFragment path, boolean followSymlinks) {
       try {
         maybeThrowExn(path);
       } catch (IOException e) {
@@ -358,25 +416,27 @@ public class CustomRealFilesystemBuildIntegrationTest extends BuildIntegrationTe
     }
 
     @Override
-    protected FileStatus statIfFound(Path path, boolean followSymlinks) throws IOException {
+    protected FileStatus statIfFound(PathFragment path, boolean followSymlinks) throws IOException {
       maybeThrowExn(path);
       return super.statIfFound(path, followSymlinks);
     }
 
     @Override
-    protected UnixFileStatus statInternal(Path path, boolean followSymlinks) throws IOException {
+    protected UnixFileStatus statInternal(PathFragment path, boolean followSymlinks)
+        throws IOException {
       maybeThrowExn(path);
       return super.statInternal(path, followSymlinks);
     }
 
     @Override
-    protected Collection<Dirent> readdir(Path path, boolean followSymlinks) throws IOException {
+    protected Collection<Dirent> readdir(PathFragment path, boolean followSymlinks)
+        throws IOException {
       maybeThrowExn(path);
       return super.readdir(path, followSymlinks);
     }
 
     @Override
-    public void createDirectoryAndParents(Path path) throws IOException {
+    public void createDirectoryAndParents(PathFragment path) throws IOException {
       if (createDirectoryErrorNames.contains(path.getBaseName())) {
         throw new IOException("nope");
       }
