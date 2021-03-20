@@ -142,9 +142,6 @@ java_library(
         ":directory_listing_state_value",
         ":execution_finished_event",
         ":file_function",
-        ":file_symlink_cycle_uniqueness_function",
-        ":file_symlink_exception",
-        ":file_symlink_infinite_expansion_uniqueness_function",
         ":fileset_entry_function",
         ":filesystem_value_checker",
         ":glob_descriptor",
@@ -275,6 +272,10 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_cycle_uniqueness_function",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_uniqueness_function",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
@@ -318,17 +319,6 @@ java_library(
         "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
-    ],
-)
-
-java_library(
-    name = "abstract_chain_uniqueness_function",
-    srcs = ["AbstractChainUniquenessFunction.java"],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib/events",
-        "//src/main/java/com/google/devtools/build/skyframe",
-        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
-        "//third_party:guava",
     ],
 )
 
@@ -923,6 +913,7 @@ java_library(
         ":precomputed_value",
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
         "//src/main/java/com/google/devtools/build/lib/rules:repository/repository_directory_value",
         "//src/main/java/com/google/devtools/build/lib/vfs",
@@ -1035,12 +1026,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//third_party:guava",
     ],
-)
-
-java_library(
-    name = "chain_uniqueness_utils",
-    srcs = ["ChainUniquenessUtils.java"],
-    deps = ["//third_party:guava"],
 )
 
 java_library(
@@ -1324,6 +1309,7 @@ java_library(
         ":directory_listing_state_value",
         ":directory_listing_value",
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
@@ -1385,12 +1371,12 @@ java_library(
     srcs = ["FileFunction.java"],
     deps = [
         ":cycle_utils",
-        ":file_symlink_cycle_exception",
-        ":file_symlink_cycle_uniqueness_function",
-        ":file_symlink_exception",
-        ":file_symlink_infinite_expansion_exception",
-        ":file_symlink_infinite_expansion_uniqueness_function",
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_cycle_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_cycle_uniqueness_function",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_uniqueness_function",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/vfs",
@@ -1399,62 +1385,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//third_party:guava",
         "//third_party:jsr305",
-    ],
-)
-
-java_library(
-    name = "file_symlink_cycle_exception",
-    srcs = ["FileSymlinkCycleException.java"],
-    deps = [
-        ":file_symlink_exception",
-        "//src/main/java/com/google/devtools/build/lib/vfs",
-        "//third_party:guava",
-    ],
-)
-
-java_library(
-    name = "file_symlink_cycle_uniqueness_function",
-    srcs = ["FileSymlinkCycleUniquenessFunction.java"],
-    deps = [
-        ":abstract_chain_uniqueness_function",
-        ":chain_uniqueness_utils",
-        ":sky_functions",
-        "//src/main/java/com/google/devtools/build/lib/concurrent",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
-        "//src/main/java/com/google/devtools/build/lib/vfs",
-        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
-        "//third_party:guava",
-    ],
-)
-
-java_library(
-    name = "file_symlink_exception",
-    srcs = ["FileSymlinkException.java"],
-)
-
-java_library(
-    name = "file_symlink_infinite_expansion_exception",
-    srcs = ["FileSymlinkInfiniteExpansionException.java"],
-    deps = [
-        ":file_symlink_exception",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
-        "//src/main/java/com/google/devtools/build/lib/vfs",
-        "//third_party:guava",
-    ],
-)
-
-java_library(
-    name = "file_symlink_infinite_expansion_uniqueness_function",
-    srcs = ["FileSymlinkInfiniteExpansionUniquenessFunction.java"],
-    deps = [
-        ":abstract_chain_uniqueness_function",
-        ":chain_uniqueness_utils",
-        ":sky_functions",
-        "//src/main/java/com/google/devtools/build/lib/concurrent",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
-        "//src/main/java/com/google/devtools/build/lib/vfs",
-        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
-        "//third_party:guava",
     ],
 )
 
@@ -1545,8 +1475,6 @@ java_library(
     srcs = ["GlobFunction.java"],
     deps = [
         ":directory_listing_value",
-        ":file_symlink_infinite_expansion_exception",
-        ":file_symlink_infinite_expansion_uniqueness_function",
         ":glob_descriptor",
         ":glob_value",
         ":ignored_package_prefixes_value",
@@ -1554,6 +1482,9 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_uniqueness_function",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
@@ -1585,10 +1516,10 @@ java_library(
         ":package_lookup_value",
         ":package_value",
         ":root_package_extractor",
-        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
         "//src/main/java/com/google/devtools/build/lib/query2/engine",
@@ -1777,7 +1708,6 @@ java_library(
     srcs = ["PackageLookupFunction.java"],
     deps = [
         ":already_reported_exception",
-        ":file_symlink_exception",
         ":ignored_package_prefixes_value",
         ":local_repository_lookup_value",
         ":package_lookup_value",
@@ -1785,16 +1715,20 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/cmdline:LabelValidator",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
         "//src/main/java/com/google/devtools/build/lib/repository:external_package_helper",
         "//src/main/java/com/google/devtools/build/lib/rules:repository/repository_directory_value",
+        "//src/main/java/com/google/devtools/build/lib/util:detailed_exit_code",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//src/main/java/net/starlark/java/eval",
+        "//src/main/protobuf:failure_details_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -2057,9 +1991,6 @@ java_library(
     deps = [
         ":directory_listing_value",
         ":dirents",
-        ":file_symlink_exception",
-        ":file_symlink_infinite_expansion_exception",
-        ":file_symlink_infinite_expansion_uniqueness_function",
         ":package_lookup_value",
         ":precomputed_value",
         ":process_package_directory_result",
@@ -2067,6 +1998,10 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_uniqueness_function",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/vfs",
@@ -2137,10 +2072,8 @@ java_library(
     ],
     deps = [
         ":action_execution_value",
+        ":detailed_exceptions",
         ":directory_listing_value",
-        ":file_symlink_exception",
-        ":file_symlink_infinite_expansion_exception",
-        ":file_symlink_infinite_expansion_uniqueness_function",
         ":package_lookup_value",
         ":sky_functions",
         ":tree_artifact_value",
@@ -2150,6 +2083,9 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_exception",
+        "//src/main/java/com/google/devtools/build/lib/io:file_symlink_infinite_expansion_uniqueness_function",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
@@ -2158,6 +2094,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//src/main/protobuf:failure_details_java_proto",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -2638,9 +2575,9 @@ java_library(
     deps = [
         ":containing_package_lookup_value",
         ":package_value",
-        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
