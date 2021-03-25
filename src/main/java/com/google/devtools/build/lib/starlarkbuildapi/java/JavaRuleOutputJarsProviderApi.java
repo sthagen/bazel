@@ -27,25 +27,33 @@ import net.starlark.java.eval.StarlarkValue;
     name = "java_output_jars",
     category = DocCategory.PROVIDER,
     doc = "Information about outputs of a Java rule.")
-public interface JavaRuleOutputJarsProviderApi<OutputJarT extends OutputJarApi<?>>
+public interface JavaRuleOutputJarsProviderApi<JavaOutputT extends JavaOutputApi<?>>
     extends StarlarkValue {
 
   @StarlarkMethod(name = "jars", doc = "A list of jars the rule outputs.", structField = true)
-  ImmutableList<OutputJarT> getOutputJars();
+  ImmutableList<JavaOutputT> getJavaOutputs();
 
   @StarlarkMethod(
       name = "jdeps",
-      doc = "The jdeps file for rule outputs.",
+      doc =
+          "A manifest proto file. The protobuf file containing the manifest generated from "
+              + "JavaBuilder. This function returns a value when exactly one manifest proto file is"
+              + " present in the outputs.  Deprecated: Use jars[i].jdeps.",
       structField = true,
       allowReturnNones = true)
   @Nullable
+  @Deprecated
   FileApi getJdeps();
 
   @StarlarkMethod(
       name = "native_headers",
-      doc = "An archive of native header files.",
+      doc =
+          "A jar containing CC header files supporting native method implementation. "
+              + " This function returns a value when exactly one native headers jar file is"
+              + " present in the outputs. Deprecated: Use jars[i].native_headers_jar.",
       structField = true,
       allowReturnNones = true)
   @Nullable
+  @Deprecated
   FileApi getNativeHeaders();
 }

@@ -32,7 +32,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.StarlarkProvider;
 import com.google.devtools.build.lib.packages.StructImpl;
-import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.OutputJar;
+import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.JavaOutput;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.util.FileType;
 import java.util.ArrayList;
@@ -286,12 +286,13 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         .containsExactly("libdep.jar");
     assertThat(artifactFilesNames(sourceJars)).containsExactly("libdep-src.jar");
 
-    assertThat(outputs.getOutputJars()).hasSize(1);
-    OutputJar output = outputs.getOutputJars().get(0);
-    assertThat(output.getClassJar().getFilename()).isEqualTo("libdep.jar");
-    assertThat(output.getIJar().getFilename()).isEqualTo("libdep-hjar.jar");
-    assertThat(artifactFilesNames(output.getSrcJars())).containsExactly("libdep-src.jar");
-    assertThat(outputs.getJdeps().getFilename()).isEqualTo("libdep.jdeps");
+    assertThat(outputs.getJavaOutputs()).hasSize(1);
+    JavaOutput javaOutput = outputs.getJavaOutputs().get(0);
+    assertThat(javaOutput.getClassJar().getFilename()).isEqualTo("libdep.jar");
+    assertThat(javaOutput.getCompileJar().getFilename()).isEqualTo("libdep-hjar.jar");
+    assertThat(artifactFilesNames(javaOutput.getSourceJars())).containsExactly("libdep-src.jar");
+    assertThat(javaOutput.getJdeps().getFilename()).isEqualTo("libdep.jdeps");
+    assertThat(javaOutput.getCompileJdeps().getFilename()).isEqualTo("libdep-hjar.jdeps");
   }
 
   @Test
@@ -396,15 +397,17 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
                     Label.parseAbsolute("//java/test:extension.bzl", ImmutableMap.of()), "result"));
 
     JavaRuleOutputJarsProvider outputs = ((JavaRuleOutputJarsProvider) info.getValue("outputs"));
-    assertThat(outputs.getOutputJars()).hasSize(1);
+    assertThat(outputs.getJavaOutputs()).hasSize(1);
 
-    OutputJar outputJar = outputs.getOutputJars().get(0);
-    assertThat(outputJar.getClassJar().getFilename()).isEqualTo("libdep.jar");
-    assertThat(outputJar.getIJar().getFilename()).isEqualTo("libdep-hjar.jar");
-    assertThat(prettyArtifactNames(outputJar.getSrcJars()))
+    JavaOutput javaOutput = outputs.getJavaOutputs().get(0);
+    assertThat(javaOutput.getClassJar().getFilename()).isEqualTo("libdep.jar");
+    assertThat(javaOutput.getCompileJar().getFilename()).isEqualTo("libdep-hjar.jar");
+    assertThat(prettyArtifactNames(javaOutput.getSourceJars()))
         .containsExactly("java/test/libdep-src.jar");
-    assertThat(outputs.getJdeps().getFilename()).isEqualTo("libdep.jdeps");
-    assertThat(outputs.getNativeHeaders().getFilename()).isEqualTo("libdep-native-header.jar");
+    assertThat(javaOutput.getJdeps().getFilename()).isEqualTo("libdep.jdeps");
+    assertThat(javaOutput.getNativeHeadersJar().getFilename())
+        .isEqualTo("libdep-native-header.jar");
+    assertThat(javaOutput.getCompileJdeps().getFilename()).isEqualTo("libdep-hjar.jdeps");
   }
 
   @Test
@@ -766,12 +769,13 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     Sequence<Artifact> sourceJars = info.getSourceJars();
     assertThat(artifactFilesNames(sourceJars)).containsExactly("libcustom-src.jar");
     JavaRuleOutputJarsProvider outputJars = info.getOutputJars();
-    assertThat(outputJars.getOutputJars()).hasSize(1);
-    OutputJar outputJar = outputJars.getOutputJars().get(0);
-    assertThat((outputJar.getClassJar().getFilename())).isEqualTo("libcustom.jar");
-    assertThat(outputJar.getSrcJar().getFilename()).isEqualTo("libcustom-src.jar");
-    assertThat((outputJar.getIJar().getFilename())).isEqualTo("libcustom-hjar.jar");
-    assertThat(outputJars.getJdeps().getFilename()).isEqualTo("libcustom.jdeps");
+    assertThat(outputJars.getJavaOutputs()).hasSize(1);
+    JavaOutput javaOutput = outputJars.getJavaOutputs().get(0);
+    assertThat(javaOutput.getClassJar().getFilename()).isEqualTo("libcustom.jar");
+    assertThat(javaOutput.getSrcJar().getFilename()).isEqualTo("libcustom-src.jar");
+    assertThat(javaOutput.getCompileJar().getFilename()).isEqualTo("libcustom-hjar.jar");
+    assertThat(javaOutput.getJdeps().getFilename()).isEqualTo("libcustom.jdeps");
+    assertThat(javaOutput.getCompileJdeps().getFilename()).isEqualTo("libcustom-hjar.jdeps");
   }
 
   @Test
@@ -814,10 +818,10 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     Sequence<Artifact> sourceJars = info.getSourceJars();
     assertThat(artifactFilesNames(sourceJars)).containsExactly("libcustom-src.jar");
     JavaRuleOutputJarsProvider outputJars = info.getOutputJars();
-    assertThat(outputJars.getOutputJars()).hasSize(1);
-    OutputJar outputJar = outputJars.getOutputJars().get(0);
-    assertThat(outputJar.getClassJar().getFilename()).isEqualTo("libcustom.jar");
-    assertThat(outputJar.getSrcJar().getFilename()).isEqualTo("libcustom-src.jar");
+    assertThat(outputJars.getJavaOutputs()).hasSize(1);
+    JavaOutput javaOutput = outputJars.getJavaOutputs().get(0);
+    assertThat(javaOutput.getClassJar().getFilename()).isEqualTo("libcustom.jar");
+    assertThat(javaOutput.getSrcJar().getFilename()).isEqualTo("libcustom-src.jar");
   }
 
   @Test
@@ -865,12 +869,13 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     Sequence<Artifact> sourceJars = info.getSourceJars();
     assertThat(artifactFilesNames(sourceJars)).containsExactly("libcustom-mysrc.jar");
     JavaRuleOutputJarsProvider outputJars = info.getOutputJars();
-    assertThat(outputJars.getOutputJars()).hasSize(1);
-    OutputJar outputJar = outputJars.getOutputJars().get(0);
-    assertThat(outputJar.getClassJar().getFilename()).isEqualTo("libcustom.jar");
-    assertThat(outputJar.getSrcJar().getFilename()).isEqualTo("libcustom-mysrc.jar");
-    assertThat(outputJar.getIJar().getFilename()).isEqualTo("libcustom-hjar.jar");
-    assertThat(outputJars.getJdeps().getFilename()).isEqualTo("libcustom.jdeps");
+    assertThat(outputJars.getJavaOutputs()).hasSize(1);
+    JavaOutput javaOutput = outputJars.getJavaOutputs().get(0);
+    assertThat(javaOutput.getClassJar().getFilename()).isEqualTo("libcustom.jar");
+    assertThat(javaOutput.getSrcJar().getFilename()).isEqualTo("libcustom-mysrc.jar");
+    assertThat(javaOutput.getCompileJar().getFilename()).isEqualTo("libcustom-hjar.jar");
+    assertThat(javaOutput.getJdeps().getFilename()).isEqualTo("libcustom.jdeps");
+    assertThat(javaOutput.getCompileJdeps().getFilename()).isEqualTo("libcustom-hjar.jdeps");
   }
 
   @Test
@@ -952,8 +957,10 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         "   depj = ctx.attr.dep[JavaInfo]",
         "   return [result(",
         "             enabled = depj.annotation_processing.enabled,",
-        "             class_jar = depj.annotation_processing.class_jar,",
-        "             source_jar = depj.annotation_processing.source_jar,",
+        "             class_jar = depj.outputs.jars[0].generated_class_jar,",
+        "             source_jar = depj.outputs.jars[0].generated_source_jar,",
+        "             old_class_jar = depj.annotation_processing.class_jar,",
+        "             old_source_jar = depj.annotation_processing.source_jar,",
         "             processor_classpath = depj.annotation_processing.processor_classpath,",
         "             processor_classnames = depj.annotation_processing.processor_classnames,",
         "             transitive_class_jars = depj.annotation_processing.transitive_class_jars,",
@@ -1003,6 +1010,8 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     assertThat(info.getValue("enabled")).isEqualTo(Boolean.TRUE);
     assertThat(info.getValue("class_jar")).isNotNull();
     assertThat(info.getValue("source_jar")).isNotNull();
+    assertThat(info.getValue("class_jar")).isEqualTo(info.getValue("old_class_jar"));
+    assertThat(info.getValue("source_jar")).isEqualTo(info.getValue("old_source_jar"));
     assertThat((List<?>) info.getValue("processor_classnames"))
         .containsExactly("com.google.process.stuff");
     assertThat(
@@ -2024,8 +2033,8 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     ConfiguredTarget configuredTarget = getConfiguredTarget("//foo:b");
     JavaInfo info = configuredTarget.get(JavaInfo.PROVIDER);
     JavaRuleOutputJarsProvider outputs = info.getOutputJars();
-    assertThat(outputs.getOutputJars()).hasSize(1);
-    OutputJar output = outputs.getOutputJars().get(0);
+    assertThat(outputs.getJavaOutputs()).hasSize(1);
+    JavaOutput output = outputs.getJavaOutputs().get(0);
     assertThat(output.getManifestProto().getFilename()).isEqualTo("libb.jar_manifest_proto");
   }
 
@@ -2108,10 +2117,10 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     assertThat(artifactFilesNames(info.getTransitiveCompileTimeJars().toList(Artifact.class)))
         .containsExactly("libb-hjar.jar");
     JavaRuleOutputJarsProvider outputs = info.getOutputJars();
-    assertThat(outputs.getOutputJars()).hasSize(1);
-    OutputJar output = outputs.getOutputJars().get(0);
+    assertThat(outputs.getJavaOutputs()).hasSize(1);
+    JavaOutput output = outputs.getJavaOutputs().get(0);
     assertThat(output.getClassJar().getFilename()).isEqualTo("libc.jar");
-    assertThat(output.getIJar()).isNull();
+    assertThat(output.getCompileJar()).isNull();
   }
 
   @Test

@@ -1138,7 +1138,7 @@ public final class SkyframeActionExecutor {
           actionExecutionValue =
               actuallyCompleteAction(eventHandler, nextActionContinuationOrResult.get());
         }
-        return new ActionCacheWriteStep(actionExecutionValue);
+        return new ActionPostprocessingStep(actionExecutionValue);
       } catch (ActionExecutionException e) {
         return ActionStepOrResult.of(e);
       } finally {
@@ -1281,11 +1281,14 @@ public final class SkyframeActionExecutor {
       }
     }
 
-    /** A closure to post-process the action and write the result to the action cache. */
-    private class ActionCacheWriteStep extends ActionStep {
+    /**
+     * A closure to post-process the executed action, doing work like updating cached state with any
+     * newly discovered inputs, and writing the result to the action cache.
+     */
+    private class ActionPostprocessingStep extends ActionStep {
       private final ActionExecutionValue value;
 
-      public ActionCacheWriteStep(ActionExecutionValue value) {
+      public ActionPostprocessingStep(ActionExecutionValue value) {
         this.value = value;
       }
 
