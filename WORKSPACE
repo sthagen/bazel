@@ -320,8 +320,6 @@ dist_http_archive(
 
 http_archive(
     name = "org_snakeyaml",
-    sha256 = "fd0e0cc6c5974fc8f08be3a15fb4a59954c7dd958b5b68186a803de6420b6e40",
-    strip_prefix = "asomov-snakeyaml-b28f0b4d87c6",
     build_file_content = """
 java_library(
     name = "snakeyaml",
@@ -330,14 +328,13 @@ java_library(
     visibility = ["@com_google_testparameterinjector//:__pkg__"],
 )
 """,
+    sha256 = "fd0e0cc6c5974fc8f08be3a15fb4a59954c7dd958b5b68186a803de6420b6e40",
+    strip_prefix = "asomov-snakeyaml-b28f0b4d87c6",
     urls = ["https://mirror.bazel.build/bitbucket.org/asomov/snakeyaml/get/snakeyaml-1.28.tar.gz"],
 )
 
-
 http_archive(
     name = "com_google_testparameterinjector",
-    sha256 = "562a0e87eb413a7dcad29ebc8d578f6f97503473943585b051c1398a58189b06",
-    strip_prefix = "TestParameterInjector-1.0",
     build_file_content = """
 java_library(
     name = "testparameterinjector",
@@ -353,6 +350,8 @@ java_library(
     visibility = ["//visibility:public"],
 )
 """,
+    sha256 = "562a0e87eb413a7dcad29ebc8d578f6f97503473943585b051c1398a58189b06",
+    strip_prefix = "TestParameterInjector-1.0",
     urls = [
         "https://mirror.bazel.build/github.com/google/TestParameterInjector/archive/v1.0.tar.gz",
         "https://github.com/google/TestParameterInjector/archive/v1.0.tar.gz",
@@ -812,8 +811,6 @@ register_execution_platforms("//:default_host_platform")  # buildozer: disable=p
 # Tools for building deb, rpm and tar files.
 dist_http_archive(
     name = "rules_pkg",
-    patch_cmds = EXPORT_WORKSPACE_IN_BUILD_FILE,
-    patch_cmds_win = EXPORT_WORKSPACE_IN_BUILD_FILE_WIN,
 )
 
 load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")

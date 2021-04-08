@@ -100,6 +100,7 @@ import com.google.devtools.build.lib.analysis.config.transitions.NullTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfiguredTarget;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition.TransitionException;
+import com.google.devtools.build.lib.bugreport.BugReporter;
 import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -152,6 +153,7 @@ import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.BuildConfiguration.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns;
+import com.google.devtools.build.lib.skyframe.ArtifactConflictFinder.ConflictException;
 import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.FileDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
@@ -254,6 +256,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
   protected final BlazeDirectories directories;
   protected final ExternalFilesHelper externalFilesHelper;
   private final GraphInconsistencyReceiver graphInconsistencyReceiver;
+  private final BugReporter bugReporter;
+
   /**
    * Measures source artifacts read this build. Does not include cached artifacts, so is less useful
    * on incremental builds.
@@ -421,7 +425,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
       @Nullable PackageProgressReceiver packageProgress,
       @Nullable ConfiguredTargetProgressReceiver configuredTargetProgress,
       @Nullable NonexistentFileReceiver nonexistentFileReceiver,
-      @Nullable ManagedDirectoriesKnowledge managedDirectoriesKnowledge) {
+      @Nullable ManagedDirectoriesKnowledge managedDirectoriesKnowledge,
+      BugReporter bugReporter) {
     // Strictly speaking, these arguments are not required for initialization, but all current
     // callsites have them at hand, so we might as well set them during construction.
     this.skyframeExecutorConsumerOnInit = skyframeExecutorConsumerOnInit;
@@ -430,6 +435,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     this.shouldUnblockCpuWorkWhenFetchingDeps = shouldUnblockCpuWorkWhenFetchingDeps;
     this.graphInconsistencyReceiver = graphInconsistencyReceiver;
     this.nonexistentFileReceiver = nonexistentFileReceiver;
+    this.bugReporter = bugReporter;
     this.pkgFactory.setSyscalls(syscalls);
     this.workspaceStatusActionFactory = workspaceStatusActionFactory;
     this.packageManager =
@@ -454,7 +460,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
             outputArtifactsSeen,
             outputArtifactsFromActionCache,
             statusReporterRef,
-            this::getPathEntries);
+            this::getPathEntries,
+            PathFragment.create(directories.getRelativeOutputPath()));
     this.artifactFactory =
         new ArtifactFactory(
             /* execRootParent= */ directories.getExecRootBase(),
@@ -599,11 +606,11 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     map.put(
         SkyFunctions.TARGET_COMPLETION,
         TargetCompletor.targetCompletionFunction(
-            pathResolverFactory, skyframeActionExecutor, topLevelArtifactsMetric));
+            pathResolverFactory, skyframeActionExecutor, topLevelArtifactsMetric, bugReporter));
     map.put(
         SkyFunctions.ASPECT_COMPLETION,
         AspectCompletor.aspectCompletionFunction(
-            pathResolverFactory, skyframeActionExecutor, topLevelArtifactsMetric));
+            pathResolverFactory, skyframeActionExecutor, topLevelArtifactsMetric, bugReporter));
     map.put(SkyFunctions.TEST_COMPLETION, new TestCompletionFunction());
     map.put(
         Artifact.ARTIFACT,
@@ -616,7 +623,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     map.put(SkyFunctions.BUILD_INFO, new WorkspaceStatusFunction(this::makeWorkspaceStatusAction));
     map.put(SkyFunctions.COVERAGE_REPORT, new CoverageReportFunction(actionKeyContext));
     ActionExecutionFunction actionExecutionFunction =
-        new ActionExecutionFunction(skyframeActionExecutor, directories, tsgm);
+        new ActionExecutionFunction(skyframeActionExecutor, directories, tsgm, bugReporter);
     map.put(SkyFunctions.ACTION_EXECUTION, actionExecutionFunction);
     this.actionExecutionFunction = actionExecutionFunction;
     map.put(SkyFunctions.ACTION_SKETCH, new ActionSketchFunction(actionKeyContext));
@@ -2424,13 +2431,10 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
   /**
    * Checks the given action lookup values for action conflicts. Values satisfying the returned
    * predicate are known to be transitively error-free from action conflicts. {@link
-   * #filterActionConflictsForTopLevelArtifacts} must be called after this to free memory coming
-   * from this call.
-   *
-   * <p>This method is only called in keep-going mode, since otherwise any known action conflicts
-   * will immediately fail the build.
+   * #resetActionConflictsStoredInSkyframe} must be called after this to free memory coming from
+   * this call.
    */
-  Predicate<ActionLookupKey> filterActionConflictsForConfiguredTargetsAndAspects(
+  TopLevelActionConflictReport filterActionConflictsForConfiguredTargetsAndAspects(
       ExtendedEventHandler eventHandler,
       Iterable<ActionLookupKey> keys,
       ImmutableMap<ActionAnalysisMetadata, ArtifactConflictFinder.ConflictException>
@@ -2452,11 +2456,59 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     // of action conflict is rare.
     memoizingEvaluator.delete(
         SkyFunctionName.functionIs(SkyFunctions.TOP_LEVEL_ACTION_LOOKUP_CONFLICT_FINDING));
+    return new TopLevelActionConflictReport(result, topLevelArtifactContext);
+  }
 
-    return k ->
-        result.get(
-                TopLevelActionLookupConflictFindingFunction.Key.create(k, topLevelArtifactContext))
-            != null;
+  /**
+   * Encapsulation of the result of #filterActionConflictsForConfiguredTargetsAndAspects() allowing
+   * callers to determine which top-level keys did not have conflicts and retrieve the
+   * ConflictException for those that keys that did have conflicts.
+   */
+  static final class TopLevelActionConflictReport {
+
+    private final EvaluationResult<ActionLookupConflictFindingValue> result;
+    private final TopLevelArtifactContext topLevelArtifactContext;
+
+    TopLevelActionConflictReport(
+        EvaluationResult<ActionLookupConflictFindingValue> result,
+        TopLevelArtifactContext topLevelArtifactContext) {
+      this.result = result;
+      this.topLevelArtifactContext = topLevelArtifactContext;
+    }
+
+    boolean isConflictFree(ActionLookupKey k) {
+      return result.get(
+              TopLevelActionLookupConflictFindingFunction.Key.create(k, topLevelArtifactContext))
+          != null;
+    }
+
+    /**
+     * Get the ConflictException produced for the given ActionLookupKey. Will throw if the given key
+     * {@link #isConflictFree is conflict-free}.
+     */
+    ConflictException getConflictException(ActionLookupKey k) {
+      ErrorInfo errorInfo =
+          result.getError(
+              TopLevelActionLookupConflictFindingFunction.Key.create(k, topLevelArtifactContext));
+      Exception e = errorInfo.getException();
+      Preconditions.checkState(
+          e instanceof ConflictException, "%s did not fail with ConflictException: %s", k, e);
+      return (ConflictException) e;
+    }
+  }
+
+  /**
+   * Clears all action conflicts stored in skyframe that were discovered by a call to {@link
+   * #filterActionConflictsForConfiguredTargetsAndAspects}.
+   *
+   * <p>This function must be called after a call to {@link
+   * #filterActionConflictsForConfiguredTargetsAndAspects}, either directly (in the case of
+   * no-keep_going evaluations) or indirectly by {@link #filterActionConflictsForTopLevelArtifacts}
+   * in keep_going evaluations.
+   */
+  public void resetActionConflictsStoredInSkyframe() {
+    memoizingEvaluator.delete(
+        SkyFunctionName.functionIs(SkyFunctions.ACTION_LOOKUP_CONFLICT_FINDING));
   }
 
   /**
@@ -2481,8 +2533,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
             eventHandler);
 
     // Remove remaining action-conflict detection values immediately for memory efficiency.
-    memoizingEvaluator.delete(
-        SkyFunctionName.functionIs(SkyFunctions.ACTION_LOOKUP_CONFLICT_FINDING));
+    resetActionConflictsStoredInSkyframe();
 
     return a -> result.get(ActionLookupConflictFindingValue.key(a)) != null;
   }
