@@ -13,7 +13,6 @@ java_library(
     srcs = [
         "GenericBuildInfoPropertiesTranslator.java",
         "JavaBinary.java",
-        "JavaCcLinkParamsProvider.java",
         "JavaImport.java",
         "JavaImportBaseRule.java",
         "JavaInfo.java",
@@ -121,6 +120,8 @@ java_library(
         "DeployArchiveBuilder.java",
         "ImportDepsCheckActionBuilder.java",
         "JavaBuildInfoFactory.java",
+        "JavaCcInfoProvider.java",
+        "JavaCcLinkParamsProvider.java",
         "JavaCommon.java",
         "JavaCompilationArgsProvider.java",
         "JavaCompilationArtifacts.java",
