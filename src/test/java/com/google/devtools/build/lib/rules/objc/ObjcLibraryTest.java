@@ -889,76 +889,6 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
   }
 
   @Test
-  public void testFullyLinkArchiveAction_simulator() throws Exception {
-    useConfiguration("--apple_platform_type=ios", "--cpu=ios_i386", "--ios_cpu=i386");
-    createLibraryTargetWriter("//objc:lib_dep")
-        .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
-        .setAndCreateFiles("hdrs", "a.h", "b.h")
-        .write();
-    createLibraryTargetWriter("//objc2:lib")
-        .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
-        .setAndCreateFiles("hdrs", "c.h", "d.h")
-        .setList("deps", "//objc:lib_dep")
-        .write();
-    CommandAction linkAction =
-        (CommandAction) getGeneratingActionForLabel("//objc2:lib_fully_linked.a");
-    assertRequiresDarwin(linkAction);
-    assertThat(linkAction.getArguments())
-        .isEqualTo(
-            ImmutableList.of(
-                "tools/osx/crosstool/iossim/libtool",
-                "-static",
-                "-arch_only",
-                "i386",
-                "-syslibroot",
-                AppleToolchain.sdkDir(),
-                "-o",
-                Iterables.getOnlyElement(linkAction.getOutputs()).getExecPathString(),
-                getBinArtifact("liblib.a", getConfiguredTarget("//objc2:lib")).getExecPathString(),
-                getBinArtifact("liblib_dep.a", getConfiguredTarget("//objc:lib_dep"))
-                    .getExecPathString()));
-    // TODO(hlopko): make containsExactly once crosstools are updated so
-    // link_dynamic_library.sh is not needed anymore
-    assertThat(baseArtifactNames(linkAction.getInputs()))
-        .containsAtLeast("liblib_dep.a", "liblib.a", CROSSTOOL_LINK_MIDDLEMAN);
-  }
-
-  @Test
-  public void testFullyLinkArchiveAction_device() throws Exception {
-    useConfiguration("--apple_platform_type=ios", "--cpu=ios_armv7", "--ios_cpu=armv7");
-    createLibraryTargetWriter("//objc:lib_dep")
-        .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
-        .setAndCreateFiles("hdrs", "a.h", "b.h")
-        .write();
-    createLibraryTargetWriter("//objc2:lib")
-        .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
-        .setAndCreateFiles("hdrs", "c.h", "d.h")
-        .setList("deps", "//objc:lib_dep")
-        .write();
-    CommandAction linkAction =
-        (CommandAction) getGeneratingActionForLabel("//objc2:lib_fully_linked.a");
-    assertRequiresDarwin(linkAction);
-    assertThat(linkAction.getArguments())
-        .isEqualTo(
-            ImmutableList.of(
-                "tools/osx/crosstool/ios/libtool",
-                "-static",
-                "-arch_only",
-                "armv7",
-                "-syslibroot",
-                AppleToolchain.sdkDir(),
-                "-o",
-                Iterables.getOnlyElement(linkAction.getOutputs()).getExecPathString(),
-                getBinArtifact("liblib.a", getConfiguredTarget("//objc2:lib")).getExecPathString(),
-                getBinArtifact("liblib_dep.a", getConfiguredTarget("//objc:lib_dep"))
-                    .getExecPathString()));
-    // TODO(hlopko): make containsExactly once crosstools are updated so
-    // link_dynamic_library.sh is not needed anymore
-    assertThat(baseArtifactNames(linkAction.getInputs()))
-        .containsAtLeast("liblib_dep.a", "liblib.a", CROSSTOOL_LINK_MIDDLEMAN);
-  }
-
-  @Test
   public void checkDoesNotStoreObjcLibsAsCC() throws Exception {
     createLibraryTargetWriter("//objc:lib_dep")
         .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
@@ -2087,16 +2017,6 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
   }
 
   @Test
-  public void testGenerateDsymFlagPropagatesToCcLibraryFeature() throws Exception {
-    useConfiguration("--apple_generate_dsym");
-    ScratchAttributeWriter.fromLabelString(this, "cc_library", "//cc/lib")
-        .setList("srcs", "a.cc")
-        .write();
-    CommandAction compileAction = compileAction("//cc/lib", "a.o");
-    assertThat(compileAction.getArguments()).contains("-DDUMMY_GENERATE_DSYM_FILE");
-  }
-
-  @Test
   public void testArtifactsToAlwaysBuild() throws Exception {
     ConfiguredTarget x =
         scratchConfiguredTarget(
@@ -2232,9 +2152,6 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
 
     CppLinkAction archiveAction = (CppLinkAction) archiveAction("//foo:x");
     assertThat(archiveAction.getMnemonic()).isEqualTo("CppLink");
-    CppLinkAction fullyArchiveAction =
-        (CppLinkAction) getGeneratingActionForLabel("//foo:x_fully_linked.a");
-    assertThat(fullyArchiveAction.getMnemonic()).isEqualTo("CppLink");
   }
 
   protected List<String> linkstampExecPaths(NestedSet<CcLinkingContext.Linkstamp> linkstamps) {

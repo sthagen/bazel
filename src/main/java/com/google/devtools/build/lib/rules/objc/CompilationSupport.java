@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.rules.objc;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
-import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromTemplates;
 import static com.google.devtools.build.lib.rules.cpp.Link.LINK_LIBRARY_FILETYPES;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.DYNAMIC_FRAMEWORK_FILE;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.FORCE_LOAD_LIBRARY;
@@ -72,7 +71,6 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.BuildType;
-import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions.AppleBitcodeMode;
@@ -175,18 +173,14 @@ public class CompilationSupport {
 
   private static final String XCODE_VERSION_FEATURE_NAME_PREFIX = "xcode_";
 
-  private static final ImmutableList<String> ACTIVATED_ACTIONS =
+  private static final ImmutableList<String> OBJC_ACTIONS =
       ImmutableList.of(
           "objc-compile",
           "objc++-compile",
           "objc-archive",
           "objc-fully-link",
           "objc-executable",
-          "objc++-executable",
-          "assemble",
-          "preprocess-assemble",
-          "c-compile",
-          "c++-compile");
+          "objc++-executable");
 
   /** Returns the location of the xcrunwrapper tool. */
   public static final FilesToRunProvider xcrunwrapper(RuleContext ruleContext) {
@@ -203,10 +197,6 @@ public class CompilationSupport {
               FileTypeSet.of(ObjcRuleClasses.NON_CPP_SOURCES, ObjcRuleClasses.CPP_SOURCES, HEADERS))
           .withSourceAttributes("srcs", "non_arc_srcs", "hdrs")
           .withDependencyAttributes("deps", "data", "binary", "xctest_app");
-
-  /** Defines a library that contains the transitive closure of dependencies. */
-  public static final SafeImplicitOutputsFunction FULLY_LINKED_LIB =
-      fromTemplates("%{name}_fully_linked.a");
 
   private static ImmutableList<String> pathsToIncludeArgs(Iterable<PathFragment> paths) {
     ImmutableList.Builder<String> builder = ImmutableList.<String>builder();
@@ -538,18 +528,12 @@ public class CompilationSupport {
     boolean isTool = ruleContext.getConfiguration().isToolConfiguration();
     ImmutableSet.Builder<String> activatedCrosstoolSelectables =
         ImmutableSet.<String>builder()
-            .addAll(ccToolchain.getFeatures().getDefaultFeaturesAndActionConfigs())
-            .addAll(ACTIVATED_ACTIONS)
-            .addAll(
-                ruleContext
-                    .getFragment(AppleConfiguration.class)
-                    .getBitcodeMode()
-                    .getFeatureNames())
+            .addAll(ruleContext.getFeatures())
+            .addAll(OBJC_ACTIONS)
             .add(CppRuleClasses.LANG_OBJC)
             .add(CppRuleClasses.DEPENDENCY_FILE)
             .add(CppRuleClasses.INCLUDE_PATHS)
-            .add(isTool ? "host" : "nonhost")
-            .add(configuration.getCompilationMode().toString());
+            .add(isTool ? "host" : "nonhost");
 
     if (!attributes.enableModules()) {
       activatedCrosstoolSelectables.add(NO_ENABLE_MODULES_FEATURE_NAME);
@@ -560,18 +544,8 @@ public class CompilationSupport {
     if (getPchFile().isPresent()) {
       activatedCrosstoolSelectables.add("pch");
     }
-    if (objcConfiguration.generateDsym()) {
-      activatedCrosstoolSelectables.add(CppRuleClasses.GENERATE_DSYM_FILE_FEATURE_NAME);
-    } else {
-      activatedCrosstoolSelectables.add(CppRuleClasses.NO_GENERATE_DEBUG_SYMBOLS_FEATURE_NAME);
-    }
     if (configuration.getFragment(ObjcConfiguration.class).generateLinkmap()) {
       activatedCrosstoolSelectables.add(GENERATE_LINKMAP_FEATURE_NAME);
-    }
-    AppleBitcodeMode bitcodeMode =
-        configuration.getFragment(AppleConfiguration.class).getBitcodeMode();
-    if (bitcodeMode != AppleBitcodeMode.NONE) {
-      activatedCrosstoolSelectables.addAll(bitcodeMode.getFeatureNames());
     }
     // Add a feature identifying the Xcode version so CROSSTOOL authors can enable flags for
     // particular versions of Xcode. To ensure consistency across platforms, use exactly two
@@ -582,13 +556,8 @@ public class CompilationSupport {
                 .getXcodeVersion()
                 .toStringWithComponents(2));
 
-    activatedCrosstoolSelectables.addAll(ruleContext.getFeatures());
-
-    CppConfiguration cppConfiguration = ruleContext.getFragment(CppConfiguration.class);
-    activatedCrosstoolSelectables.addAll(CcCommon.getCoverageFeatures(cppConfiguration));
-
-    ImmutableSet.Builder<String> disabledFeatures = ImmutableSet.<String>builder();
-    disabledFeatures.addAll(ruleContext.getDisabledFeatures());
+    ImmutableSet.Builder<String> disabledFeatures =
+        ImmutableSet.<String>builder().addAll(ruleContext.getDisabledFeatures());
     if (disableParseHeaders) {
       disabledFeatures.add(CppRuleClasses.PARSE_HEADERS);
     }
@@ -608,6 +577,7 @@ public class CompilationSupport {
 
     return CcCommon.configureFeaturesOrReportRuleError(
         ruleContext,
+        buildConfiguration,
         activatedCrosstoolSelectables.build(),
         disabledFeatures.build(),
         ccToolchain,
@@ -1210,6 +1180,7 @@ public class CompilationSupport {
       // Formed from existing label, just replacing name with artifact name.
     }
 
+    CppConfiguration cppConfiguration = buildConfiguration.getFragment(CppConfiguration.class);
     CcLinkingHelper executableLinkingHelper =
         new CcLinkingHelper(
                 ruleContext,
@@ -1221,7 +1192,7 @@ public class CompilationSupport {
                 toolchain,
                 toolchain.getFdoContext(),
                 buildConfiguration,
-                buildConfiguration.getFragment(CppConfiguration.class),
+                cppConfiguration,
                 ruleContext.getSymbolGenerator(),
                 TargetUtils.getExecutionInfo(
                     ruleContext.getRule(), ruleContext.isAllowTagsPropagation()))
@@ -1261,7 +1232,7 @@ public class CompilationSupport {
       linkerOutputs.add(linkmap);
     }
 
-    if (appleConfiguration.getBitcodeMode() == AppleBitcodeMode.EMBEDDED) {
+    if (cppConfiguration.getAppleBitcodeMode() == AppleBitcodeMode.EMBEDDED) {
       Artifact bitcodeSymbolMap = intermediateArtifacts.bitcodeSymbolMap();
       extensionBuilder
           .setBitcodeSymbolMap(bitcodeSymbolMap)
