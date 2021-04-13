@@ -21,9 +21,13 @@ import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.packages.BazelModuleContext;
+import com.google.devtools.build.lib.packages.BazelStarlarkContext;
+import com.google.devtools.build.lib.packages.BuildType.LabelConversionContext;
 import com.google.devtools.build.lib.starlarkbuildapi.platform.ToolchainContextApi;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Module;
 import net.starlark.java.eval.Printer;
 import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkSemantics;
@@ -39,9 +43,9 @@ public abstract class StarlarkToolchainContext implements ToolchainContextApi {
       new ToolchainContextApi() {
         @Override
         public Object getIndex(
-            StarlarkThread starlarkThread, StarlarkSemantics semantics, Object key) {
-          // TODO(jcater): throw Starlark.errorf instead of returning NONE.
-          return Starlark.NONE;
+            StarlarkThread starlarkThread, StarlarkSemantics semantics, Object key)
+            throws EvalException {
+          throw Starlark.errorf("Toolchains are not valid in this context");
         }
 
         @Override
@@ -84,9 +88,14 @@ public abstract class StarlarkToolchainContext implements ToolchainContextApi {
       return ((ToolchainTypeInfo) key).typeLabel();
     } else if (key instanceof String) {
       try {
-        // TODO(jcater): Use LabelConversionContext and StarlarkThread to convert this instead.
-        // Also remove repoMapping from ResolvedToolchainContext.
-        return Label.parseAbsolute((String) key, toolchainContext().repoMapping());
+        BazelStarlarkContext bazelStarlarkContext = BazelStarlarkContext.from(starlarkThread);
+        LabelConversionContext context =
+            new LabelConversionContext(
+                BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(starlarkThread))
+                    .label(),
+                bazelStarlarkContext.getRepoMapping(),
+                bazelStarlarkContext.getConvertedLabelsInPackage());
+        return context.convert((String) key);
       } catch (LabelSyntaxException e) {
         throw Starlark.errorf("Unable to parse toolchain label '%s': %s", key, e.getMessage());
       }
