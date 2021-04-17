@@ -94,8 +94,8 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     return new ActionRegistry() {
 
       @Override
-      public void registerAction(ActionAnalysisMetadata... actions) {
-        getRuleContext().registerAction(actions);
+      public void registerAction(ActionAnalysisMetadata action) {
+        getRuleContext().registerAction(action);
       }
 
       @Override
@@ -329,7 +329,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       Object unusedInputsList,
       Object executableUnchecked,
       Object toolsUnchecked,
-      Object arguments,
+      Sequence<?> arguments,
       Object mnemonicUnchecked,
       Object progressMessage,
       Boolean useDefaultShellEnv,
@@ -340,10 +340,9 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       Object shadowedActionUnchecked)
       throws EvalException {
     context.checkMutable("actions.run");
-    StarlarkAction.Builder builder = new StarlarkAction.Builder();
 
-    Sequence<?> argumentsList = ((Sequence) arguments);
-    buildCommandLine(builder, argumentsList);
+    StarlarkAction.Builder builder = new StarlarkAction.Builder();
+    buildCommandLine(builder, arguments);
     if (executableUnchecked instanceof Artifact) {
       Artifact executable = (Artifact) executableUnchecked;
       FilesToRunProvider provider = context.getExecutableRunfiles(executable);
@@ -386,19 +385,19 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
   }
 
   /**
-   * Registers actions in the context of this {@link StarlarkActionFactory}.
+   * Registers action in the context of this {@link StarlarkActionFactory}.
    *
-   * <p>Use {@link #getActionConstructionContext()} to obtain the context required to create those
-   * actions.
+   * <p>Use {@link #getActionConstructionContext()} to obtain the context required to create this
+   * action.
    */
-  public void registerAction(ActionAnalysisMetadata... actions) throws EvalException {
+  public void registerAction(ActionAnalysisMetadata action) throws EvalException {
     validateActionCreation();
-    getRuleContext().registerAction(actions);
+    getRuleContext().registerAction(action);
   }
 
   /**
    * Returns information needed to construct actions that can be registered with {@link
-   * #registerAction(ActionAnalysisMetadata...)}.
+   * #registerAction}.
    */
   public ActionConstructionContext getActionConstructionContext() {
     return context.getRuleContext();
@@ -417,7 +416,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       Sequence<?> outputs,
       Object inputs,
       Object toolsUnchecked,
-      Object arguments,
+      Sequence<?> arguments,
       Object mnemonicUnchecked,
       Object commandUnchecked,
       Object progressMessage,
@@ -431,9 +430,8 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     context.checkMutable("actions.run_shell");
     RuleContext ruleContext = getRuleContext();
 
-    Sequence<?> argumentList = (Sequence) arguments;
     StarlarkAction.Builder builder = new StarlarkAction.Builder();
-    buildCommandLine(builder, argumentList);
+    buildCommandLine(builder, arguments);
 
     if (commandUnchecked instanceof String) {
       Map<String, String> executionInfo =
@@ -464,7 +462,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
                 + " set --incompatible_run_shell_command_string=false.");
       }
       Sequence<?> commandList = (Sequence) commandUnchecked;
-      if (argumentList.size() > 0) {
+      if (!arguments.isEmpty()) {
         throw Starlark.errorf("'arguments' must be empty if 'command' is a sequence of strings");
       }
       List<String> command = Sequence.cast(commandList, String.class, "command");
@@ -474,7 +472,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
           "expected string or list of strings for command instead of %s",
           Starlark.type(commandUnchecked));
     }
-    if (argumentList.size() > 0) {
+    if (!arguments.isEmpty()) {
       // When we use a shell command, add an empty argument before other arguments.
       //   e.g.  bash -c "cmd" '' 'arg1' 'arg2'
       // bash will use the empty argument as the value of $0 (which we don't care about).

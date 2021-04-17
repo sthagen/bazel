@@ -704,9 +704,7 @@ public class JavaCommon {
   private void addCcRelatedProviders(
       RuleConfiguredTargetBuilder ruleBuilder, JavaInfo.Builder javaInfoBuilder) {
     Iterable<? extends TransitiveInfoCollection> deps = targetsTreatedAsDeps(ClasspathType.BOTH);
-    if (ruleContext.getRule().isAttrDefined("data", BuildType.LABEL_LIST)) {
-      deps = Iterables.concat(deps, ruleContext.getPrerequisites("data"));
-    }
+
 
     ImmutableList<CcInfo> ccInfos =
         Streams.concat(
@@ -719,14 +717,27 @@ public class JavaCommon {
 
     CcInfo mergedCcInfo = CcInfo.merge(ccInfos);
 
-    // Collect libraries coming from JavaNativeLibraryInfo provider
+    // Collect library paths from all attributes (including data)
+    Iterable<? extends TransitiveInfoCollection> data;
+    if (ruleContext.getRule().isAttrDefined("data", BuildType.LABEL_LIST)) {
+      data = ruleContext.getPrerequisites("data");
+    } else {
+      data = ImmutableList.of();
+    }
     CcNativeLibraryInfo mergedCcNativeLibraryInfo =
         CcNativeLibraryInfo.merge(
             Streams.concat(
                     Stream.of(mergedCcInfo.getCcNativeLibraryInfo()),
-                    AnalysisUtils.getProviders(deps, JavaNativeLibraryInfo.PROVIDER).stream()
+                    AnalysisUtils.getProviders(
+                            Iterables.concat(deps, data), JavaNativeLibraryInfo.PROVIDER)
+                        .stream()
                         .map(JavaNativeLibraryInfo::getTransitiveJavaNativeLibraries)
-                        .map(CcNativeLibraryInfo::new))
+                        .map(CcNativeLibraryInfo::new),
+                    JavaInfo.getProvidersFromListOfTargets(JavaCcInfoProvider.class, data).stream()
+                        .map(JavaCcInfoProvider::getCcInfo)
+                        .map(CcInfo::getCcNativeLibraryInfo),
+                    AnalysisUtils.getProviders(data, CcInfo.PROVIDER).stream()
+                        .map(CcInfo::getCcNativeLibraryInfo))
                 .collect(toImmutableList()));
 
     CcInfo filteredCcInfo =
