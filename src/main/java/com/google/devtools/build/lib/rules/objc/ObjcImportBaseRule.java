@@ -14,27 +14,38 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import static com.google.devtools.build.lib.packages.Attribute.attr;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.RuleClass;
+import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.RuleClass.ToolchainTransitionMode;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
+import com.google.devtools.build.lib.util.FileType;
 
 /**
- * Rule definition for objc_library.
+ * Abstract rule definition for {@code objc_import}.
  */
-public class ObjcLibraryRule implements RuleDefinition {
-
+public class ObjcImportBaseRule implements RuleDefinition {
   @Override
-  public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
+  public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
     return builder
         .requiresConfigurationFragments(
-            ObjcConfiguration.class, AppleConfiguration.class, CppConfiguration.class)
-        .cfg(AppleCrosstoolTransition.APPLE_CROSSTOOL_TRANSITION)
-        .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(env))
+            AppleConfiguration.class,
+            CppConfiguration.class,
+            ObjcConfiguration.class)
+        /* <!-- #BLAZE_RULE($objc_import_base_rule).ATTRIBUTE(archives) -->
+        The list of <code>.a</code> files provided to Objective-C targets that
+        depend on this target.
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(
+            attr("archives", LABEL_LIST).mandatory().nonEmpty().allowedFileTypes(FileType.of(".a")))
+        .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(environment))
         .useToolchainTransition(ToolchainTransitionMode.ENABLED)
         .build();
   }
@@ -42,8 +53,8 @@ public class ObjcLibraryRule implements RuleDefinition {
   @Override
   public Metadata getMetadata() {
     return RuleDefinition.Metadata.builder()
-        .name("objc_library")
-        .factoryClass(ObjcLibrary.class)
+        .name("$objc_import_base_rule")
+        .type(RuleClassType.ABSTRACT)
         .ancestors(
             BaseRuleClasses.NativeBuildRule.class,
             ObjcRuleClasses.CompilingRule.class,
@@ -52,11 +63,3 @@ public class ObjcLibraryRule implements RuleDefinition {
         .build();
   }
 }
-
-/*<!-- #BLAZE_RULE (NAME = objc_library, TYPE = LIBRARY, FAMILY = Objective-C) -->
-
-<p>This rule produces a static library from the given Objective-C source files.</p>
-
-${IMPLICIT_OUTPUTS}
-
-<!-- #END_BLAZE_RULE -->*/
