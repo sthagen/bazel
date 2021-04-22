@@ -492,7 +492,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
             outputBase,
             packageOptions.packagePath,
             reporter,
-            rootDirectory,
+            rootDirectory.asFragment(),
             rootDirectory,
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY);
     packageOptions.showLoadingProgress = true;
@@ -1745,7 +1745,9 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected static ConfiguredAttributeMapper getMapperFromConfiguredTargetAndTarget(
       ConfiguredTargetAndData ctad) {
     return ConfiguredAttributeMapper.of(
-        (Rule) ctad.getTarget(), ctad.getConfiguredTarget().getConfigConditions());
+        (Rule) ctad.getTarget(),
+        ctad.getConfiguredTarget().getConfigConditions(),
+        ctad.getConfiguration().checksum());
   }
 
   private ConfiguredTargetKey makeConfiguredTargetKey(String label) {
