@@ -185,6 +185,26 @@ ManifestCombiner::~ManifestCombiner() {}
 static const char *MULTI_RELEASE = "Multi-Release: true";
 static const size_t MULTI_RELEASE_LENGTH = strlen(MULTI_RELEASE);
 
+static const char *MULTI_RELEASE_PREFIX = "Multi-Release: ";
+static const size_t MULTI_RELEASE_PREFIX_LENGTH = strlen(MULTI_RELEASE_PREFIX);
+
+void ManifestCombiner::AppendLine(const std::string &line) {
+  if (line.find(MULTI_RELEASE_PREFIX, 0, MULTI_RELEASE_PREFIX_LENGTH) !=
+      std::string::npos) {
+    if (line.find("true", MULTI_RELEASE_PREFIX_LENGTH) != std::string::npos) {
+      multi_release_ = true;
+    } else if (line.find("false", MULTI_RELEASE_PREFIX_LENGTH) !=
+               std::string::npos) {
+      multi_release_ = false;
+    }
+    return;
+  }
+  concatenator_->Append(line);
+  if (line[line.size() - 1] != '\n') {
+    concatenator_->Append("\r\n");
+  }
+}
+
 bool ManifestCombiner::Merge(const CDH *cdh, const LH *lh) {
   TransientBytes bytes_;
   if (Z_NO_COMPRESSION == lh->compression_method()) {
@@ -211,6 +231,10 @@ bool ManifestCombiner::Merge(const CDH *cdh, const LH *lh) {
 
     line_end = line_end != nullptr ? line_end + 1 : data_end;
     if (strncmp(line_start, MULTI_RELEASE, MULTI_RELEASE_LENGTH) == 0) {
+      // The output jar is a MR-JAR if any of the inputs enable the feature.
+      // Do not check for `Multi-Release: false` here, since inputs shouldn't
+      // be allowed to override the configuration for other jars on the
+      // classpath.
       multi_release_ = true;
     }
     line_start = line_end;
@@ -221,8 +245,8 @@ bool ManifestCombiner::Merge(const CDH *cdh, const LH *lh) {
 
 void *ManifestCombiner::OutputEntry(bool compress) {
   if (multi_release_) {
-    Append(MULTI_RELEASE);
+    concatenator_->Append(MULTI_RELEASE);
   }
-  Append("\r\n");
-  return Concatenator::OutputEntry(compress);
+  concatenator_->Append("\r\n");
+  return concatenator_->OutputEntry(compress);
 }

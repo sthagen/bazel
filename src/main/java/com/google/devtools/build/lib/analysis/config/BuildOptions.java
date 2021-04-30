@@ -18,15 +18,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.MoreObjects;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.MapDifference;
 import com.google.common.collect.Maps;
@@ -37,8 +34,6 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skyframe.serialization.DeserializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skyframe.trimming.ConfigurationComparer;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.common.options.OptionDefinition;
@@ -52,10 +47,7 @@ import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
 import java.io.IOException;
 import java.io.Serializable;
-import java.lang.ref.SoftReference;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -66,14 +58,12 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /** Stores the command-line options from a set of configuration fragments. */
 // TODO(janakr): If overhead of FragmentOptions class names is too high, add constructor that just
 // takes fragments and gets names from them.
-@AutoCodec
 public final class BuildOptions implements Cloneable, Serializable {
   private static final Comparator<Class<? extends FragmentOptions>>
       lexicalFragmentOptionsComparator = Comparator.comparing(Class::getName);
@@ -87,12 +77,10 @@ public final class BuildOptions implements Cloneable, Serializable {
 
   public static BuildOptions getDefaultBuildOptionsForFragments(
       List<Class<? extends FragmentOptions>> fragmentClasses) {
-    ArrayList<String> collector = new ArrayList<>();
     try {
-      String[] stringCollector = new String[collector.size()];
-      return BuildOptions.of(fragmentClasses, collector.toArray(stringCollector));
+      return BuildOptions.of(fragmentClasses);
     } catch (OptionsParsingException e) {
-      throw new IllegalArgumentException("Failed to parse default options", e);
+      throw new IllegalArgumentException("Failed to parse empty options", e);
     }
   }
 
@@ -156,9 +144,7 @@ public final class BuildOptions implements Cloneable, Serializable {
       throws OptionsParsingException {
     Builder builder = builder();
     OptionsParser parser =
-        OptionsParser.builder()
-            .optionsClasses(ImmutableList.<Class<? extends OptionsBase>>copyOf(optionsList))
-            .build();
+        OptionsParser.builder().optionsClasses(ImmutableList.copyOf(optionsList)).build();
     parser.parse(args);
     for (Class<? extends FragmentOptions> optionsClass : optionsList) {
       builder.addFragmentOptions(parser.getOptions(optionsClass));
@@ -186,21 +172,21 @@ public final class BuildOptions implements Cloneable, Serializable {
     return fragmentOptionsMap.containsKey(optionsClass);
   }
 
-  /** The cache key for the options collection. Recomputes cache key every time it's called. */
-  public String computeCacheKey() {
-    StringBuilder keyBuilder = new StringBuilder();
-    for (FragmentOptions options : fragmentOptionsMap.values()) {
-      keyBuilder.append(options.cacheKey());
+  /** Returns a hex digest string uniquely identifying the build options. */
+  public String checksum() {
+    if (checksum == null) {
+      synchronized (this) {
+        if (checksum == null) {
+          Fingerprint fingerprint = new Fingerprint();
+          for (FragmentOptions options : fragmentOptionsMap.values()) {
+            fingerprint.addString(options.cacheKey());
+          }
+          fingerprint.addString(OptionsBase.mapToCacheKey(starlarkOptionsMap));
+          checksum = fingerprint.hexDigestAndReset();
+        }
+      }
     }
-    keyBuilder.append(
-        OptionsBase.mapToCacheKey(
-            starlarkOptionsMap.entrySet().stream()
-                .collect(Collectors.toMap(e -> e.getKey().toString(), Map.Entry::getValue))));
-    return keyBuilder.toString();
-  }
-
-  public String computeChecksum() {
-    return Fingerprint.getHexDigest(computeCacheKey());
+    return checksum;
   }
 
   /** String representation of build options. */
@@ -214,12 +200,12 @@ public final class BuildOptions implements Cloneable, Serializable {
   }
 
   /** Returns the options contained in this collection. */
-  public Collection<FragmentOptions> getNativeOptions() {
+  public ImmutableCollection<FragmentOptions> getNativeOptions() {
     return fragmentOptionsMap.values();
   }
 
   /** Returns the set of fragment classes contained in these options. */
-  public Set<Class<? extends FragmentOptions>> getFragmentClasses() {
+  public ImmutableSet<Class<? extends FragmentOptions>> getFragmentClasses() {
     return fragmentOptionsMap.keySet();
   }
 
@@ -234,7 +220,7 @@ public final class BuildOptions implements Cloneable, Serializable {
   @Override
   public BuildOptions clone() {
     ImmutableMap.Builder<Class<? extends FragmentOptions>, FragmentOptions> nativeOptionsBuilder =
-        ImmutableMap.builder();
+        ImmutableMap.builderWithExpectedSize(fragmentOptionsMap.size());
     for (Map.Entry<Class<? extends FragmentOptions>, FragmentOptions> entry :
         fragmentOptionsMap.entrySet()) {
       nativeOptionsBuilder.put(entry.getKey(), entry.getValue().clone());
@@ -242,118 +228,38 @@ public final class BuildOptions implements Cloneable, Serializable {
     return new BuildOptions(nativeOptionsBuilder.build(), ImmutableMap.copyOf(starlarkOptionsMap));
   }
 
-  private boolean fingerprintAndHashCodeInitialized() {
-    return fingerprint != null;
-  }
-
-  /**
-   * Lazily initialize {@link #fingerprint} and {@link #hashCode}. Keeps computation off critical
-   * path of build, while still avoiding expensive computation for equality and hash code each time.
-   *
-   * <p>We check {@link #fingerprintAndHashCodeInitialized} to see if this method has already been
-   * called. Using {@link #hashCode} after this method is called is safe because it is set here
-   * before {@link #fingerprint} is set, so if {@link #fingerprint} is non-null then {@link
-   * #hashCode} is definitely set.
-   */
-  private void maybeInitializeFingerprintAndHashCode() {
-    if (fingerprintAndHashCodeInitialized()) {
-      return;
-    }
-    synchronized (this) {
-      if (fingerprintAndHashCodeInitialized()) {
-        return;
-      }
-      Fingerprint fingerprint = new Fingerprint();
-      for (Map.Entry<Class<? extends FragmentOptions>, FragmentOptions> entry :
-          fragmentOptionsMap.entrySet()) {
-        fingerprint.addString(entry.getKey().getName());
-        fingerprint.addString(entry.getValue().cacheKey());
-      }
-      for (Map.Entry<Label, Object> entry : starlarkOptionsMap.entrySet()) {
-        fingerprint.addString(entry.getKey().toString());
-        fingerprint.addString(entry.getValue().toString());
-      }
-      byte[] computedFingerprint = fingerprint.digestAndReset();
-      hashCode = Arrays.hashCode(computedFingerprint);
-      this.fingerprint = computedFingerprint;
-    }
-  }
-
   @Override
   public boolean equals(Object other) {
     if (this == other) {
       return true;
-    } else if (!(other instanceof BuildOptions)) {
-      return false;
-    } else {
-      maybeInitializeFingerprintAndHashCode();
-      BuildOptions otherOptions = (BuildOptions) other;
-      otherOptions.maybeInitializeFingerprintAndHashCode();
-      return Arrays.equals(this.fingerprint, otherOptions.fingerprint);
     }
+    if (!(other instanceof BuildOptions)) {
+      return false;
+    }
+    return checksum().equals(((BuildOptions) other).checksum());
   }
 
   @Override
   public int hashCode() {
-    maybeInitializeFingerprintAndHashCode();
-    return hashCode;
+    return 31 + checksum().hashCode();
   }
-
-  // Lazily initialized.
-  @Nullable private volatile byte[] fingerprint;
-  private volatile int hashCode;
 
   /** Maps options class definitions to FragmentOptions objects. */
   private final ImmutableMap<Class<? extends FragmentOptions>, FragmentOptions> fragmentOptionsMap;
   /** Maps Starlark options names to Starlark options values. */
   private final ImmutableMap<Label, Object> starlarkOptionsMap;
 
-  @AutoCodec.VisibleForSerialization
-  BuildOptions(
+  // Lazily initialized both for performance and correctness - BuildOptions instances may be mutated
+  // after construction but before consumption. Access via checksum() to ensure initialization. This
+  // field is volatile as per https://errorprone.info/bugpattern/DoubleCheckedLocking, which
+  // encourages using volatile even for immutable objects.
+  @Nullable private volatile String checksum = null;
+
+  private BuildOptions(
       ImmutableMap<Class<? extends FragmentOptions>, FragmentOptions> fragmentOptionsMap,
       ImmutableMap<Label, Object> starlarkOptionsMap) {
     this.fragmentOptionsMap = fragmentOptionsMap;
     this.starlarkOptionsMap = starlarkOptionsMap;
-  }
-
-  public BuildOptions applyDiff(OptionsDiffForReconstruction optionsDiff) {
-    if (optionsDiff.isEmpty()) {
-      return this;
-    }
-    maybeInitializeFingerprintAndHashCode();
-    if (!Arrays.equals(fingerprint, optionsDiff.baseFingerprint)) {
-      throw new IllegalArgumentException("Cannot reconstruct BuildOptions with a different base.");
-    }
-    BuildOptions reconstructedOptions = optionsDiff.cachedReconstructed.get();
-    if (reconstructedOptions != null) {
-      return reconstructedOptions;
-    }
-    Builder builder = builder();
-    for (FragmentOptions options : fragmentOptionsMap.values()) {
-      FragmentOptions newOptions = optionsDiff.transformOptions(options);
-      if (newOptions != null) {
-        builder.addFragmentOptions(newOptions);
-      }
-    }
-    for (FragmentOptions extraSecondFragment : optionsDiff.extraSecondFragments) {
-      builder.addFragmentOptions(extraSecondFragment);
-    }
-
-    Map<Label, Object> starlarkOptions = new HashMap<>();
-    for (Map.Entry<Label, Object> buildSettingAndValue : starlarkOptionsMap.entrySet()) {
-      Label buildSetting = buildSettingAndValue.getKey();
-      if (optionsDiff.extraFirstStarlarkOptions.contains(buildSetting)) {
-        continue;
-      } else if (optionsDiff.differingStarlarkOptions.containsKey(buildSetting)) {
-        starlarkOptions.put(buildSetting, optionsDiff.differingStarlarkOptions.get(buildSetting));
-      } else {
-        starlarkOptions.put(buildSetting, starlarkOptionsMap.get(buildSetting));
-      }
-    }
-    starlarkOptions.putAll(optionsDiff.extraSecondStarlarkOptions);
-    reconstructedOptions = builder.addStarlarkOptions(starlarkOptions).build();
-    optionsDiff.cachedReconstructed = new SoftReference<>(reconstructedOptions);
-    return reconstructedOptions;
   }
 
   /**
@@ -411,9 +317,7 @@ public final class BuildOptions implements Cloneable, Serializable {
         continue;
       }
       FragmentOptions newOptions =
-          replacedOptions.computeIfAbsent(
-              fragmentOptionClass,
-              (Class<? extends FragmentOptions> k) -> originalFragment.clone());
+          replacedOptions.computeIfAbsent(fragmentOptionClass, unused -> originalFragment.clone());
       try {
         Object value =
             parsingResult.getOptionValueDescription(optionDefinition.getOptionName()).getValue();
@@ -531,11 +435,6 @@ public final class BuildOptions implements Cloneable, Serializable {
       return this;
     }
 
-    /** Returns whether the builder contains a particular Starlark option. */
-    boolean contains(Label key) {
-      return starlarkOptions.containsKey(key);
-    }
-
     /** Removes the value for the {@link FragmentOptions} with the given FragmentOptions class. */
     public Builder removeFragmentOptions(Class<? extends FragmentOptions> key) {
       fragmentOptions.remove(key);
@@ -579,25 +478,19 @@ public final class BuildOptions implements Cloneable, Serializable {
    * aggregating the difference between a single BuildOptions and the results of applying a {@link
    * com.google.devtools.build.lib.analysis.config.transitions.SplitTransition}) to it.
    */
-  @SuppressWarnings("ReferenceEquality") // See comments above == comparisons.
+  @SuppressWarnings("ReferenceEquality") // See comment above == comparison.
   public static OptionsDiff diff(OptionsDiff diff, BuildOptions first, BuildOptions second) {
-    if (diff.hasStarlarkOptions) {
-      throw new IllegalStateException(
-          "OptionsDiff cannot handle multiple 'second' BuildOptions with Starlark options "
-              + "and is trying to diff against a second BuildOptions with Starlark options.");
-    }
-    if (first == null || second == null) {
-      throw new IllegalArgumentException("Cannot diff null BuildOptions");
-    }
-    // For performance reasons, we avoid calling #equals unless both instances have had their
-    // fingerprint and hash code initialized. We don't typically encounter value-equal instances
-    // here anyway.
-    if (first == second
-        || (first.fingerprintAndHashCodeInitialized()
-            && second.fingerprintAndHashCodeInitialized()
-            && first.equals(second))) {
+    checkArgument(
+        !diff.hasStarlarkOptions,
+        "OptionsDiff cannot handle multiple 'second' BuildOptions with Starlark options and is"
+            + " trying to diff against %s",
+        diff);
+    checkNotNull(first);
+    checkNotNull(second);
+    if (first.equals(second)) {
       return diff;
     }
+
     // Check and report if either class has been trimmed of an options class that exists in the
     // other.
     ImmutableSet<Class<? extends FragmentOptions>> firstOptionClasses =
@@ -618,8 +511,7 @@ public final class BuildOptions implements Cloneable, Serializable {
         Sets.intersection(firstOptionClasses, secondOptionClasses)) {
       FragmentOptions firstOptions = first.get(clazz);
       FragmentOptions secondOptions = second.get(clazz);
-      // Similar to above, we avoid calling #equals because we are going to do a field-by-field
-      // comparison anyway.
+      // We avoid calling #equals because we are going to do a field-by-field comparison anyway.
       if (firstOptions == secondOptions) {
         continue;
       }
@@ -649,94 +541,10 @@ public final class BuildOptions implements Cloneable, Serializable {
   }
 
   /**
-   * Cache for {@link OptionsDiffForReconstruction}, which is expensive to compute.
-   *
-   * <p>The reason for using {@linkplain CacheBuilder#weakKeys weak keys} is twofold: we want
-   * objects in the cache to be garbage collected, and we also want to use reference equality to
-   * avoid the expensive initialization in {@link #maybeInitializeFingerprintAndHashCode}.
-   */
-  private static final Cache<BuildOptions, OptionsDiffForReconstruction>
-      diffForReconstructionCache = CacheBuilder.newBuilder().weakKeys().build();
-
-  /**
-   * Returns a {@link OptionsDiffForReconstruction} object that can be applied to {@code first} via
-   * {@link #applyDiff} to get a {@link BuildOptions} object equal to {@code second}.
-   */
-  public static OptionsDiffForReconstruction diffForReconstruction(
-      BuildOptions first, BuildOptions second) {
-    OptionsDiffForReconstruction diff;
-    try {
-      diff =
-          diffForReconstructionCache.get(second, () -> createDiffForReconstruction(first, second));
-    } catch (ExecutionException e) {
-      throw new IllegalStateException(e);
-    }
-
-    // We need to ensure that the possibly cached diff was computed against the same base options.
-    // In practice this should always be the case, since callers pass in a "default" options
-    // instance as "first". To be safe however, we create an uncached diff if there is a mismatch.
-    // Note that this check should be fast because the fingerprints should be reference-equal.
-    return Arrays.equals(first.fingerprint, diff.baseFingerprint)
-        ? diff
-        : createDiffForReconstruction(first, second);
-  }
-
-  private static OptionsDiffForReconstruction createDiffForReconstruction(
-      BuildOptions first, BuildOptions second) {
-    OptionsDiff diff = diff(first, second);
-    if (diff.areSame()) {
-      first.maybeInitializeFingerprintAndHashCode();
-      return OptionsDiffForReconstruction.getEmpty(first.fingerprint, second.computeChecksum());
-    }
-    LinkedHashMap<Class<? extends FragmentOptions>, Map<String, Object>> differingOptions =
-        new LinkedHashMap<>(diff.differingOptions.keySet().size());
-    for (Class<? extends FragmentOptions> clazz :
-        diff.differingOptions.keySet().stream()
-            .sorted(lexicalFragmentOptionsComparator)
-            .collect(Collectors.toList())) {
-      Collection<OptionDefinition> fields = diff.differingOptions.get(clazz);
-      LinkedHashMap<String, Object> valueMap = new LinkedHashMap<>(fields.size());
-      for (OptionDefinition optionDefinition :
-          fields.stream()
-              .sorted(Comparator.comparing(o -> o.getField().getName()))
-              .collect(Collectors.toList())) {
-        Object secondValue;
-        try {
-          secondValue = Iterables.getOnlyElement(diff.second.get(optionDefinition));
-        } catch (IllegalArgumentException e) {
-          // TODO(janakr): Currently this exception should never be thrown since diff is never
-          // constructed using the diff method that takes in a preexisting OptionsDiff. If this
-          // changes, add a test verifying this error catching works properly.
-          throw new IllegalStateException(
-              "OptionsDiffForReconstruction can only handle a single first BuildOptions and a "
-                  + "single second BuildOptions and has encountered multiple second BuildOptions",
-              e);
-        }
-        valueMap.put(optionDefinition.getField().getName(), secondValue);
-      }
-      differingOptions.put(clazz, valueMap);
-    }
-    first.maybeInitializeFingerprintAndHashCode();
-    return new OptionsDiffForReconstruction(
-        differingOptions,
-        diff.extraFirstFragments.stream()
-            .sorted(lexicalFragmentOptionsComparator)
-            .collect(ImmutableSet.toImmutableSet()),
-        ImmutableList.sortedCopyOf(
-            Comparator.comparing(o -> o.getClass().getName()), diff.extraSecondFragments),
-        first.fingerprint,
-        second.computeChecksum(),
-        diff.starlarkSecond,
-        diff.extraStarlarkOptionsFirst,
-        diff.extraStarlarkOptionsSecond,
-        second);
-  }
-
-  /**
    * A diff class for BuildOptions. Fields are meant to be populated and returned by {@link
-   * BuildOptions#diff}
+   * BuildOptions#diff}.
    */
-  public static class OptionsDiff {
+  public static final class OptionsDiff {
     private final Multimap<Class<? extends FragmentOptions>, OptionDefinition> differingOptions =
         ArrayListMultimap.create();
     // The keyset for the {@link first} and {@link second} maps are identical and indicate which
@@ -880,324 +688,50 @@ public final class BuildOptions implements Cloneable, Serializable {
     }
   }
 
-  /**
-   * An object that encapsulates the data needed to transform one {@link BuildOptions} object into
-   * another: the full fragments of the second one, the fragment classes of the first that should be
-   * omitted, and the values of any fields that should be changed.
-   */
-  public static final class OptionsDiffForReconstruction {
-    private final Map<Class<? extends FragmentOptions>, Map<String, Object>> differingOptions;
-    private final ImmutableSet<Class<? extends FragmentOptions>> extraFirstFragmentClasses;
-    private final ImmutableList<FragmentOptions> extraSecondFragments;
-    private final byte[] baseFingerprint;
-    private final String checksum;
+  @SuppressWarnings("unused") // Used reflectively.
+  private static final class Codec implements ObjectCodec<BuildOptions> {
 
-    private final Map<Label, Object> differingStarlarkOptions;
-    private final List<Label> extraFirstStarlarkOptions;
-    private final Map<Label, Object> extraSecondStarlarkOptions;
-
-    /**
-     * A soft reference to the reconstructed build options to save work and garbage creation in
-     * {@link #applyDiff}.
-     *
-     * <p>Promotes reuse of a single {@code BuildOptions} instance to preserve reference equality
-     * and limit fingerprint/hashCode initialization.
-     */
-    private SoftReference<BuildOptions> cachedReconstructed;
-
-    public OptionsDiffForReconstruction(
-        Map<Class<? extends FragmentOptions>, Map<String, Object>> differingOptions,
-        ImmutableSet<Class<? extends FragmentOptions>> extraFirstFragmentClasses,
-        ImmutableList<FragmentOptions> extraSecondFragments,
-        byte[] baseFingerprint,
-        String checksum,
-        Map<Label, Object> differingStarlarkOptions,
-        List<Label> extraFirstStarlarkOptions,
-        Map<Label, Object> extraSecondStarlarkOptions,
-        @Nullable BuildOptions original) {
-      this.differingOptions = differingOptions;
-      this.extraFirstFragmentClasses = extraFirstFragmentClasses;
-      this.extraSecondFragments = extraSecondFragments;
-      this.baseFingerprint = baseFingerprint;
-      this.checksum = checksum;
-      this.differingStarlarkOptions = differingStarlarkOptions;
-      this.extraFirstStarlarkOptions = extraFirstStarlarkOptions;
-      this.extraSecondStarlarkOptions = extraSecondStarlarkOptions;
-      this.cachedReconstructed = new SoftReference<>(original);
-    }
-
-    private static OptionsDiffForReconstruction getEmpty(byte[] baseFingerprint, String checksum) {
-      return new OptionsDiffForReconstruction(
-          ImmutableMap.of(),
-          ImmutableSet.of(),
-          ImmutableList.of(),
-          baseFingerprint,
-          checksum,
-          ImmutableMap.of(),
-          ImmutableList.of(),
-          ImmutableMap.of(),
-          /*original=*/ null);
-    }
-
-    @Nullable
-    @VisibleForTesting
-    FragmentOptions transformOptions(FragmentOptions input) {
-      Class<? extends FragmentOptions> clazz = input.getClass();
-      if (extraFirstFragmentClasses.contains(clazz)) {
-        return null;
-      }
-      Map<String, Object> changedOptions = differingOptions.get(clazz);
-      if (changedOptions == null || changedOptions.isEmpty()) {
-        return input;
-      }
-      FragmentOptions newOptions = input.clone();
-      for (Map.Entry<String, Object> entry : changedOptions.entrySet()) {
-        try {
-          clazz.getField(entry.getKey()).set(newOptions, entry.getValue());
-        } catch (IllegalAccessException | NoSuchFieldException e) {
-          throw new IllegalStateException("Couldn't set " + entry + " for " + newOptions, e);
-        }
-      }
-      return newOptions;
-    }
-
-    public String getChecksum() {
-      return checksum;
-    }
-
-    private boolean isEmpty() {
-      return differingOptions.isEmpty()
-          && extraFirstFragmentClasses.isEmpty()
-          && extraSecondFragments.isEmpty()
-          && differingStarlarkOptions.isEmpty()
-          && extraFirstStarlarkOptions.isEmpty()
-          && extraSecondStarlarkOptions.isEmpty();
-    }
-
-    /**
-     * Compares the fragment sets in the options described by two diffs with the same base.
-     *
-     * @see ConfigurationComparer
-     */
-    public static ConfigurationComparer.Result compareFragments(
-        OptionsDiffForReconstruction left, OptionsDiffForReconstruction right) {
-      // TODO: Add support for marking Starlark options as known default when trimming
-      // (sentinel object?)
-      checkArgument(
-          Arrays.equals(left.baseFingerprint, right.baseFingerprint),
-          "Can't compare diffs with different bases: %s and %s",
-          left,
-          right);
-      // This code effectively looks up each piece of data (native fragment or Starlark option) in
-      // this table (numbers reference comments in the code below):
-      // ▼left  right▶  (none)           extraSecond      extraFirst      differing
-      // (none)          equal            right only (#4)  left only (#4)  different (#1)
-      // extraSecond     left only (#4)   compare (#3)     (impossible)    (impossible)
-      // extraFirst      right only (#4)  (impossible)     equal           right only (#4)
-      // differing       different (#1)   (impossible)     left only (#4)  compare (#2)
-
-      // Any difference in shared data is grounds to return DIFFERENT, which happens if:
-      // 1a. any starlark option was changed by one diff, but is neither changed nor removed by
-      // the other
-      if (left.hasChangeToStarlarkOptionUnchangedIn(right)
-          || right.hasChangeToStarlarkOptionUnchangedIn(left)) {
-        return ConfigurationComparer.Result.DIFFERENT;
-      }
-      // 1b. any native fragment was changed by one diff, but is neither changed nor removed by
-      // the other
-      if (left.hasChangeToNativeFragmentUnchangedIn(right)
-          || right.hasChangeToNativeFragmentUnchangedIn(left)) {
-        return ConfigurationComparer.Result.DIFFERENT;
-      }
-      // 2a. any starlark option was changed by both diffs, but to different values
-      if (!commonKeysHaveEqualValues(
-          left.differingStarlarkOptions, right.differingStarlarkOptions)) {
-        return ConfigurationComparer.Result.DIFFERENT;
-      }
-      // 2b. any native fragment was changed by both diffs, but to different values
-      if (!commonKeysHaveEqualValues(left.differingOptions, right.differingOptions)) {
-        return ConfigurationComparer.Result.DIFFERENT;
-      }
-      // 3a. any starlark option was added by both diffs, but with different values
-      if (!commonKeysHaveEqualValues(
-          left.extraSecondStarlarkOptions, right.extraSecondStarlarkOptions)) {
-        return ConfigurationComparer.Result.DIFFERENT;
-      }
-      // 3b. any native fragment was added by both diffs, but with different values
-      if (!commonKeysHaveEqualValues(
-          left.getExtraSecondFragmentsByClass(), right.getExtraSecondFragmentsByClass())) {
-        return ConfigurationComparer.Result.DIFFERENT;
-      }
-
-      // At this point DIFFERENT is definitely not the result, so depending on which side(s) have
-      // extra data, we can decide which of the remaining choices to return. (#4)
-      boolean leftHasExtraData = left.hasExtraNativeFragmentsOrStarlarkOptionsNotIn(right);
-      boolean rightHasExtraData = right.hasExtraNativeFragmentsOrStarlarkOptionsNotIn(left);
-
-      if (leftHasExtraData && rightHasExtraData) {
-        // If both have data that the other does not, all-shared-fragments-are-equal is all
-        // that can be said.
-        return ConfigurationComparer.Result.ALL_SHARED_FRAGMENTS_EQUAL;
-      } else if (leftHasExtraData) {
-        // If only the left instance has extra data, left is a superset of right.
-        return ConfigurationComparer.Result.SUPERSET;
-      } else if (rightHasExtraData) {
-        // If only the right instance has extra data, left is a subset of right.
-        return ConfigurationComparer.Result.SUBSET;
-      } else {
-        // If there is no extra data, the two options described by these diffs are equal.
-        return ConfigurationComparer.Result.EQUAL;
-      }
-    }
-
-    /**
-     * Clears {@link #cachedReconstructed} so that tests can cover the core logic of {@link
-     * #applyDiff}.
-     */
-    @VisibleForTesting
-    void clearCachedReconstructedForTesting() {
-      cachedReconstructed = new SoftReference<>(null);
-    }
-
-    private boolean hasChangeToStarlarkOptionUnchangedIn(OptionsDiffForReconstruction that) {
-      Set<Label> starlarkOptionsChangedOrRemovedInThat =
-          Sets.union(
-              that.differingStarlarkOptions.keySet(),
-              ImmutableSet.copyOf(that.extraFirstStarlarkOptions));
-      return !starlarkOptionsChangedOrRemovedInThat.containsAll(
-          this.differingStarlarkOptions.keySet());
-    }
-
-    private boolean hasChangeToNativeFragmentUnchangedIn(OptionsDiffForReconstruction that) {
-      Set<Class<? extends FragmentOptions>> nativeFragmentsChangedOrRemovedInThat =
-          Sets.union(that.differingOptions.keySet(), that.extraFirstFragmentClasses);
-      return !nativeFragmentsChangedOrRemovedInThat.containsAll(this.differingOptions.keySet());
-    }
-
-    private Map<Class<? extends FragmentOptions>, FragmentOptions>
-        getExtraSecondFragmentsByClass() {
-      ImmutableMap.Builder<Class<? extends FragmentOptions>, FragmentOptions> builder =
-          new ImmutableMap.Builder<>();
-      for (FragmentOptions options : extraSecondFragments) {
-        builder.put(options.getClass(), options);
-      }
-      return builder.build();
-    }
-
-    private static <K> boolean commonKeysHaveEqualValues(Map<K, ?> left, Map<K, ?> right) {
-      Set<K> commonKeys = Sets.intersection(left.keySet(), right.keySet());
-      for (K commonKey : commonKeys) {
-        if (!Objects.equals(left.get(commonKey), right.get(commonKey))) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    private boolean hasExtraNativeFragmentsOrStarlarkOptionsNotIn(
-        OptionsDiffForReconstruction that) {
-      // extra fragments/options can be...
-      // starlark options added by this diff, but not that one
-      if (!that.extraSecondStarlarkOptions
-          .keySet()
-          .containsAll(this.extraSecondStarlarkOptions.keySet())) {
-        return true;
-      }
-      // native fragments added by this diff, but not that one
-      if (!that.getExtraSecondFragmentsByClass()
-          .keySet()
-          .containsAll(this.getExtraSecondFragmentsByClass().keySet())) {
-        return true;
-      }
-      // starlark options removed by that diff, but not this one
-      if (!this.extraFirstStarlarkOptions.containsAll(that.extraFirstStarlarkOptions)) {
-        return true;
-      }
-      // native fragments removed by that diff, but not this one
-      if (!this.extraFirstFragmentClasses.containsAll(that.extraFirstFragmentClasses)) {
-        return true;
-      }
-      return false;
+    @Override
+    public Class<BuildOptions> getEncodedClass() {
+      return BuildOptions.class;
     }
 
     @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (!(o instanceof OptionsDiffForReconstruction)) {
-        return false;
-      }
-      OptionsDiffForReconstruction that = (OptionsDiffForReconstruction) o;
-      return Arrays.equals(this.baseFingerprint, that.baseFingerprint)
-          && this.checksum.equals(that.checksum);
+    public void serialize(
+        SerializationContext context, BuildOptions options, CodedOutputStream codedOut)
+        throws IOException {
+      context.getDependency(OptionsChecksumCache.class).prime(options);
+      codedOut.writeStringNoTag(options.checksum());
     }
 
     @Override
-    public String toString() {
-      return MoreObjects.toStringHelper(this)
-          .add("differingOptions", differingOptions)
-          .add("extraFirstFragmentClasses", extraFirstFragmentClasses)
-          .add("extraSecondFragments", extraSecondFragments)
-          .add("differingStarlarkOptions", differingStarlarkOptions)
-          .add("extraFirstStarlarkOptions", extraFirstStarlarkOptions)
-          .add("extraSecondStarlarkOptions", extraSecondStarlarkOptions)
-          .toString();
-    }
-
-    @Override
-    public int hashCode() {
-      return 31 * Arrays.hashCode(baseFingerprint) + checksum.hashCode();
-    }
-
-    @SuppressWarnings("unused") // Used reflectively.
-    private static final class Codec implements ObjectCodec<OptionsDiffForReconstruction> {
-
-      @Override
-      public Class<OptionsDiffForReconstruction> getEncodedClass() {
-        return OptionsDiffForReconstruction.class;
-      }
-
-      @Override
-      public void serialize(
-          SerializationContext context,
-          OptionsDiffForReconstruction optionsDiff,
-          CodedOutputStream codedOut)
-          throws IOException {
-        context.getDependency(OptionsChecksumCache.class).prime(optionsDiff);
-        codedOut.writeStringNoTag(optionsDiff.getChecksum());
-      }
-
-      @Override
-      public OptionsDiffForReconstruction deserialize(
-          DeserializationContext context, CodedInputStream codedIn) throws IOException {
+    public BuildOptions deserialize(DeserializationContext context, CodedInputStream codedIn)
+        throws IOException {
         String checksum = codedIn.readString();
-        return checkNotNull(
-            context.getDependency(OptionsChecksumCache.class).getOptionsDiff(checksum),
-            "No options instance for %s",
-            checksum);
-      }
+      return checkNotNull(
+          context.getDependency(OptionsChecksumCache.class).getOptions(checksum),
+          "No options instance for %s",
+          checksum);
     }
   }
 
   /**
-   * Provides {@link OptionsDiffForReconstruction} instances when requested via their {@linkplain
-   * OptionsDiffForReconstruction#getChecksum checksum}.
+   * Provides {@link BuildOptions} instances when requested via their {@linkplain
+   * BuildOptions#checksum() checksum}.
    */
   public interface OptionsChecksumCache {
 
     /**
-     * Called during deserialization to transform a checksum into an {@link
-     * OptionsDiffForReconstruction} instance.
+     * Called during deserialization to transform a checksum into a {@link BuildOptions} instance.
      */
-    OptionsDiffForReconstruction getOptionsDiff(String checksum);
+    BuildOptions getOptions(String checksum);
 
     /**
      * Notifies the cache that it may be necessary to deserialize the given options diff's checksum.
      *
-     * <p>Called each time an {@link OptionsDiffForReconstruction} instance is serialized.
+     * <p>Called each time an {@link BuildOptions} instance is serialized.
      */
-    void prime(OptionsDiffForReconstruction optionsDiff);
+    void prime(BuildOptions options);
   }
 
   /**
@@ -1206,17 +740,16 @@ public final class BuildOptions implements Cloneable, Serializable {
    * <p>Checksum mappings are retained indefinitely.
    */
   public static final class MapBackedChecksumCache implements OptionsChecksumCache {
-    private final ConcurrentMap<String, OptionsDiffForReconstruction> map =
-        new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, BuildOptions> map = new ConcurrentHashMap<>();
 
     @Override
-    public OptionsDiffForReconstruction getOptionsDiff(String checksum) {
+    public BuildOptions getOptions(String checksum) {
       return map.get(checksum);
     }
 
     @Override
-    public void prime(OptionsDiffForReconstruction optionsDiff) {
-      map.putIfAbsent(optionsDiff.getChecksum(), optionsDiff);
+    public void prime(BuildOptions options) {
+      map.putIfAbsent(options.checksum(), options);
     }
   }
 }

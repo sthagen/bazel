@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.rules.java;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.concat;
+import static com.google.common.collect.Streams.stream;
 import static com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType.BOTH;
 import static com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType.COMPILE_ONLY;
 import static com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType.RUNTIME_ONLY;
@@ -44,6 +45,7 @@ import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
@@ -123,7 +125,7 @@ final class JavaInfoBuildHelper {
         JavaExportsProvider.class,
         createJavaExportsProvider(exports, /* labels = */ ImmutableList.of()));
 
-    javaInfoBuilder.addProvider(JavaPluginInfoProvider.class, createJavaPluginsProvider(exports));
+    javaInfoBuilder.javaPluginInfo(mergeExportedJavaPluginInfo(exports));
 
     javaInfoBuilder.addProvider(
         JavaSourceJarsProvider.class,
@@ -136,7 +138,7 @@ final class JavaInfoBuildHelper {
             false,
             javaOutput.getGeneratedClassJar(),
             javaOutput.getGeneratedSourceJar(),
-            JavaPluginInfoProvider.empty(),
+            JavaPluginInfo.empty(),
             JavaInfo.fetchProvidersFromList(
                 concat(compileTimeDeps, exports), JavaGenJarsProvider.class)));
 
@@ -230,9 +232,12 @@ final class JavaInfoBuildHelper {
     return JavaExportsProvider.merge(builder.build());
   }
 
-  private JavaPluginInfoProvider createJavaPluginsProvider(Iterable<JavaInfo> javaInfos) {
-    return JavaPluginInfoProvider.merge(
-        JavaInfo.fetchProvidersFromList(javaInfos, JavaPluginInfoProvider.class));
+  private JavaPluginInfo mergeExportedJavaPluginInfo(Iterable<JavaInfo> javaInfos) {
+    return JavaPluginInfo.merge(
+        stream(javaInfos)
+            .map(JavaInfo::getJavaPluginInfo)
+            .filter(Objects::nonNull)
+            .collect(toImmutableList()));
   }
 
   public JavaInfo createJavaCompileAction(
@@ -287,7 +292,7 @@ final class JavaInfoBuildHelper {
     streamProviders(deps, JavaCompilationArgsProvider.class).forEach(helper::addDep);
     streamProviders(exports, JavaCompilationArgsProvider.class).forEach(helper::addExport);
     helper.setCompilationStrictDepsMode(getStrictDepsMode(Ascii.toUpperCase(strictDepsMode)));
-    helper.setPlugins(createJavaPluginsProvider(concat(plugins, deps)));
+    helper.setPlugins(mergeExportedJavaPluginInfo(concat(plugins, deps)));
     helper.setNeverlink(neverlink);
 
     NestedSet<Artifact> localCompileTimeDeps =
@@ -342,9 +347,7 @@ final class JavaInfoBuildHelper {
             JavaSourceJarsProvider.class,
             createJavaSourceJarsProvider(outputSourceJars, concat(runtimeDeps, exports, deps)))
         .addProvider(JavaRuleOutputJarsProvider.class, outputJarsBuilder.build())
-        .addProvider(
-            JavaPluginInfoProvider.class,
-            createJavaPluginsProvider(concat(exportedPlugins, exports)))
+        .javaPluginInfo(mergeExportedJavaPluginInfo(concat(exportedPlugins, exports)))
         .addProvider(JavaExportsProvider.class, createJavaExportsProvider(exports, exportLabels))
         .addProvider(JavaCcInfoProvider.class, JavaCcInfoProvider.merge(transitiveNativeLibraries))
         .addTransitiveOnlyRuntimeJarsToJavaInfo(deps)

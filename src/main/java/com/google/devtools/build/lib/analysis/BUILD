@@ -116,7 +116,6 @@ java_library(
         ":print_action_visitor",
         ":provider_collection",
         ":required_config_fragments_provider",
-        ":rule_definition_context",
         ":rule_definition_environment",
         ":server_directories",
         ":starlark/args",
@@ -228,10 +227,10 @@ java_library(
         "config/BuildConfigurationCollection.java",
         "config/ConfigAwareRuleClassBuilder.java",
         "config/ConfigurationResolver.java",
-        "config/ConvenienceSymlinks.java",
         "config/DependencyEvaluationException.java",
         "config/FragmentCollection.java",
         "config/RequiredFragmentsUtil.java",
+        "config/SymlinkDefinition.java",
         "config/TransitionResolver.java",
         "configuredtargets/AbstractConfiguredTarget.java",
         "configuredtargets/ConfiguredTargetsUtil.java",
@@ -341,7 +340,6 @@ java_library(
         ":required_config_fragments_provider",
         ":resolved_toolchain_context",
         ":rule_configured_object_value",
-        ":rule_definition_context",
         ":rule_definition_environment",
         ":starlark/args",
         ":starlark/bazel_build_api_globals",
@@ -420,8 +418,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe:sane_analysis_exception",
         "//src/main/java/com/google/devtools/build/lib/skyframe:starlark_builtins_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_context_key",
-        "//src/main/java/com/google/devtools/build/lib/skyframe:transitive_target_key",
-        "//src/main/java/com/google/devtools/build/lib/skyframe:transitive_target_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:workspace_status_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi",
@@ -1028,15 +1024,9 @@ java_library(
 )
 
 java_library(
-    name = "rule_definition_context",
-    srcs = ["RuleDefinitionContext.java"],
-)
-
-java_library(
     name = "rule_definition_environment",
     srcs = ["RuleDefinitionEnvironment.java"],
     deps = [
-        ":rule_definition_context",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
     ],
 )
@@ -1581,10 +1571,8 @@ java_library(
         ":config/fragment_options",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/trimming:trimmed_configuration_cache",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/common/options",
-        "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf:protobuf_java",

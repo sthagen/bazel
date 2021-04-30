@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.java;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -33,7 +35,7 @@ import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.cpp.LibraryToLink;
-import com.google.devtools.build.lib.rules.java.JavaPluginInfoProvider.JavaPluginInfo;
+import com.google.devtools.build.lib.rules.java.JavaPluginInfo.JavaPluginData;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.JavaOutput;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
@@ -76,7 +78,6 @@ public final class JavaInfo extends NativeInfo
           JavaCompilationArgsProvider.class,
           JavaSourceJarsProvider.class,
           JavaRuleOutputJarsProvider.class,
-          JavaPluginInfoProvider.class,
           JavaGenJarsProvider.class,
           JavaExportsProvider.class,
           JavaCompilationInfoProvider.class,
@@ -115,6 +116,11 @@ public final class JavaInfo extends NativeInfo
     return providers;
   }
 
+  @Nullable
+  public JavaPluginInfo getJavaPluginInfo() {
+    return providers.get(JavaPluginInfo.PROVIDER);
+  }
+
   /**
    * Merges the given providers into one {@link JavaInfo}. All the providers with the same type in
    * the given list are merged into one provider that is added to the resulting {@link JavaInfo}.
@@ -124,8 +130,11 @@ public final class JavaInfo extends NativeInfo
         JavaInfo.fetchProvidersFromList(providers, JavaCompilationArgsProvider.class);
     List<JavaSourceJarsProvider> javaSourceJarsProviders =
         JavaInfo.fetchProvidersFromList(providers, JavaSourceJarsProvider.class);
-    List<JavaPluginInfoProvider> javaPluginInfoProviders =
-        JavaInfo.fetchProvidersFromList(providers, JavaPluginInfoProvider.class);
+    List<JavaPluginInfo> javaPluginInfos =
+        providers.stream()
+            .map(JavaInfo::getJavaPluginInfo)
+            .filter(Objects::nonNull)
+            .collect(toImmutableList());
     List<JavaExportsProvider> javaExportsProviders =
         JavaInfo.fetchProvidersFromList(providers, JavaExportsProvider.class);
     List<JavaRuleOutputJarsProvider> javaRuleOutputJarsProviders =
@@ -149,8 +158,7 @@ public final class JavaInfo extends NativeInfo
         .addProvider(
             JavaRuleOutputJarsProvider.class,
             JavaRuleOutputJarsProvider.merge(javaRuleOutputJarsProviders))
-        .addProvider(
-            JavaPluginInfoProvider.class, JavaPluginInfoProvider.merge(javaPluginInfoProviders))
+        .javaPluginInfo(JavaPluginInfo.merge(javaPluginInfos))
         .addProvider(JavaExportsProvider.class, JavaExportsProvider.merge(javaExportsProviders))
         .addProvider(JavaCcInfoProvider.class, JavaCcInfoProvider.merge(javaCcInfoProviders))
         // TODO(b/65618333): add merge function to JavaGenJarsProvider. See #3769
@@ -167,7 +175,7 @@ public final class JavaInfo extends NativeInfo
    */
   public static <T extends TransitiveInfoProvider> ImmutableList<T> fetchProvidersFromList(
       Iterable<JavaInfo> javaProviders, Class<T> providerClass) {
-    return streamProviders(javaProviders, providerClass).collect(ImmutableList.toImmutableList());
+    return streamProviders(javaProviders, providerClass).collect(toImmutableList());
   }
 
   /**
@@ -538,7 +546,7 @@ public final class JavaInfo extends NativeInfo
           deps.stream()
               .map(JavaInfo::getJavaInfo)
               .filter(Objects::nonNull)
-              .collect(ImmutableList.toImmutableList()));
+              .collect(toImmutableList()));
       return this;
     }
 
@@ -562,13 +570,13 @@ public final class JavaInfo extends NativeInfo
     }
 
     public Builder experimentalDisableAnnotationProcessing() {
-      JavaPluginInfoProvider provider = providerMap.getProvider(JavaPluginInfoProvider.class);
+      JavaPluginInfo provider =
+          (JavaPluginInfo) providerMap.getProvider(JavaPluginInfo.PROVIDER.getKey());
       if (provider != null) {
-        JavaPluginInfo plugins = provider.plugins();
+        JavaPluginData plugins = provider.plugins();
         providerMap.put(
-            JavaPluginInfoProvider.class,
-            JavaPluginInfoProvider.create(
-                JavaPluginInfo.create(
+            JavaPluginInfo.create(
+                JavaPluginData.create(
                     /* processorClasses= */ NestedSetBuilder.emptySet(Order.NAIVE_LINK_ORDER),
                     // Preserve the processor path, since it may contain Error Prone plugins which
                     // will be service-loaded by JavaBuilder.
@@ -588,6 +596,11 @@ public final class JavaInfo extends NativeInfo
         Class<P> providerClass, TransitiveInfoProvider provider) {
       Preconditions.checkArgument(ALLOWED_PROVIDERS.contains(providerClass));
       providerMap.put(providerClass, provider);
+      return this;
+    }
+
+    public Builder javaPluginInfo(JavaPluginInfo javaPluginInfo) {
+      providerMap.put(javaPluginInfo);
       return this;
     }
 

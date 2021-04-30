@@ -28,12 +28,13 @@ import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.rules.android.AndroidApplicationResourceInfo;
 import com.google.devtools.build.lib.rules.android.AndroidCommon;
 import com.google.devtools.build.lib.rules.android.AndroidDataBindingProcessorBuilder;
 import com.google.devtools.build.lib.rules.android.AndroidDataContext;
 import com.google.devtools.build.lib.rules.android.AndroidResources;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
-import com.google.devtools.build.lib.rules.java.JavaPluginInfoProvider;
+import com.google.devtools.build.lib.rules.java.JavaPluginInfo;
 import com.google.devtools.build.lib.starlarkbuildapi.android.DataBindingV2ProviderApi;
 import com.google.devtools.build.lib.starlarkbuildapi.android.DataBindingV2ProviderApi.LabelJavaPackagePair;
 import java.util.Collection;
@@ -132,17 +133,17 @@ class DataBindingV2Context implements DataBindingContext {
 
   @Override
   public void supplyAnnotationProcessor(
-      RuleContext ruleContext, BiConsumer<JavaPluginInfoProvider, Iterable<Artifact>> consumer) {
+      RuleContext ruleContext, BiConsumer<JavaPluginInfo, Iterable<Artifact>> consumer) {
 
-    JavaPluginInfoProvider javaPluginInfoProvider =
-        JavaInfo.getProvider(
-            JavaPluginInfoProvider.class,
-            ruleContext.getPrerequisite(DataBinding.DATABINDING_ANNOTATION_PROCESSOR_ATTR));
+    JavaPluginInfo javaPluginInfo =
+        JavaInfo.getJavaInfo(
+                ruleContext.getPrerequisite(DataBinding.DATABINDING_ANNOTATION_PROCESSOR_ATTR))
+            .getJavaPluginInfo();
 
     ImmutableList<Artifact> annotationProcessorOutputs =
         DataBinding.getMetadataOutputs(ruleContext, useUpdatedArgs, metadataOutputSuffixes);
 
-    consumer.accept(javaPluginInfoProvider, annotationProcessorOutputs);
+    consumer.accept(javaPluginInfo, annotationProcessorOutputs);
   }
 
   @Override
@@ -334,7 +335,14 @@ class DataBindingV2Context implements DataBindingContext {
 
   @Override
   public void addProvider(RuleConfiguredTargetBuilder builder, RuleContext ruleContext) {
-
+    if (shouldGetDatabindingArtifactsFromApplicationResources(ruleContext)) {
+      DataBindingV2Provider p =
+          ruleContext.getPrerequisite("application_resources", DataBindingV2Provider.PROVIDER);
+      if (p != null) {
+        builder.addNativeDeclaredProvider(p);
+        return;
+      }
+    }
     Artifact setterStoreFile =
         DataBinding.getMetadataOutput(ruleContext, useUpdatedArgs, setterStoreName);
 
@@ -395,7 +403,7 @@ class DataBindingV2Context implements DataBindingContext {
     return useAndroidX;
   }
 
-  private static Artifact getClassInfoFile(ActionConstructionContext context) {
+  private static Artifact getClassInfoFile(RuleContext context) {
     return context.getUniqueDirectoryArtifact("databinding", "class-info.zip");
   }
 
@@ -404,5 +412,15 @@ class DataBindingV2Context implements DataBindingContext {
       return DataBinding.getLayoutInfoFile(actionContext);
     }
     return injectedLayoutInfoZip;
+  }
+
+  private static boolean shouldGetDatabindingArtifactsFromApplicationResources(
+      RuleContext context) {
+    if (!context.attributes().isAttributeValueExplicitlySpecified("application_resources")) {
+      return false;
+    }
+    AndroidApplicationResourceInfo androidApplicationResourceInfo =
+        context.getPrerequisite("application_resources", AndroidApplicationResourceInfo.PROVIDER);
+    return !androidApplicationResourceInfo.shouldCompileJavaSrcs();
   }
 }

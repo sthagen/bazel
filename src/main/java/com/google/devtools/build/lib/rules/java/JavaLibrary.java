@@ -172,11 +172,11 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
 
     NestedSet<Artifact> proguardSpecs = new ProguardLibrary(ruleContext).collectProguardSpecs();
 
-    JavaPluginInfoProvider pluginInfoProvider =
+    JavaPluginInfo javaPluginInfo =
         isJavaPluginRule
             // For java_plugin we create the provider with content retrieved from the rule
             // attributes.
-            ? common.getJavaPluginInfoProvider(ruleContext)
+            ? common.createJavaPluginInfo(ruleContext)
             // For java_library we add the transitive plugins from plugins and exported_plugins
             // attrs.
             : JavaCommon.getTransitivePlugins(ruleContext);
@@ -187,7 +187,7 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
             .addProvider(JavaSourceJarsProvider.class, sourceJarsProvider)
             .addProvider(JavaRuleOutputJarsProvider.class, ruleOutputJarsProvider)
             // TODO(bazel-team): this should only happen for java_plugin
-            .addProvider(JavaPluginInfoProvider.class, pluginInfoProvider)
+            .javaPluginInfo(javaPluginInfo)
             .addTransitiveOnlyRuntimeJars(common.getDependencies())
             .setRuntimeJars(javaArtifacts.getRuntimeJars())
             .setJavaConstraints(JavaCommon.getConstraints(ruleContext))
@@ -207,6 +207,10 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
             JavaSemantics.DIRECT_SOURCE_JARS_OUTPUT_GROUP,
             NestedSetBuilder.wrap(Order.STABLE_ORDER, sourceJarsProvider.getSourceJars()))
         .addOutputGroup(OutputGroupInfo.HIDDEN_TOP_LEVEL, proguardSpecs);
+
+    if (isJavaPluginRule) {
+      builder.addStarlarkDeclaredProvider(javaPluginInfo);
+    }
 
     Artifact validation =
         AndroidLintActionBuilder.create(

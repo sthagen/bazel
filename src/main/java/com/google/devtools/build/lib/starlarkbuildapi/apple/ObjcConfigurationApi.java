@@ -75,12 +75,6 @@ public interface ObjcConfigurationApi<ApplePlatformTypeApiT extends ApplePlatfor
   DottedVersionApi<?> getSimulatorVersionForPlatformType(ApplePlatformTypeApiT platformType);
 
   @StarlarkMethod(
-      name = "generate_dsym",
-      doc = "Whether to generate debug symbol(.dSYM) artifacts.",
-      structField = true)
-  boolean generateDsym();
-
-  @StarlarkMethod(
       name = "generate_linkmap",
       doc = "Whether to generate linkmap artifacts.",
       structField = true)
@@ -108,6 +102,12 @@ public interface ObjcConfigurationApi<ApplePlatformTypeApiT extends ApplePlatfor
               + " after any default options but before options specified in the attributes of the"
               + " rule.")
   ImmutableList<String> getCopts();
+
+  @StarlarkMethod(
+      name = "should_strip_binary",
+      structField = true,
+      doc = "Returns whether to perform symbol and dead-code strippings on linked binaries.")
+  boolean shouldStripBinary();
 
   @StarlarkMethod(
       name = "signing_certificate_name",

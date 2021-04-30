@@ -1866,7 +1866,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -1897,7 +1897,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -1930,7 +1930,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -1962,7 +1962,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -1993,7 +1993,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -2024,7 +2024,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -2056,7 +2056,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -2090,7 +2090,7 @@ def _impl(ctx):
                                 "-syslibroot",
                                 "%{sdk_dir}",
                                 "-o",
-                                "%{archive_path}",
+                                "%{output_execpath}",
                             ],
                         ),
                     ],
@@ -3341,25 +3341,6 @@ def _impl(ctx):
         ],
     )
 
-    use_objc_modules_feature = feature(
-        name = "use_objc_modules",
-        flag_sets = [
-            flag_set(
-                actions = [ACTION_NAMES.objc_compile, ACTION_NAMES.objcpp_compile],
-                flag_groups = [
-                    flag_group(
-                        flags = [
-                            "-fmodule-name=%{module_name}",
-                            "-iquote",
-                            "%{module_maps_dir}",
-                            "-fmodules-cache-path=%{modules_cache_path}",
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
-
     objc_arc_feature = feature(
         name = "objc_arc",
         flag_sets = [
@@ -3983,17 +3964,6 @@ def _impl(ctx):
                 ],
             ),
         ],
-    )
-
-    no_enable_modules_feature = feature(
-        name = "no_enable_modules",
-        flag_sets = [
-            flag_set(
-                actions = [ACTION_NAMES.objc_compile, ACTION_NAMES.objcpp_compile],
-                flag_groups = [flag_group(flags = ["-fmodule-maps"])],
-            ),
-        ],
-        requires = [feature_set(features = ["use_objc_modules"])],
     )
 
     pic_feature = feature(
@@ -6347,8 +6317,6 @@ def _impl(ctx):
             force_pic_flags_feature,
             pch_feature,
             module_maps_feature,
-            use_objc_modules_feature,
-            no_enable_modules_feature,
             apply_default_warnings_feature,
             includes_feature,
             include_paths_feature,
@@ -6429,8 +6397,6 @@ def _impl(ctx):
             force_pic_flags_feature,
             pch_feature,
             module_maps_feature,
-            use_objc_modules_feature,
-            no_enable_modules_feature,
             apply_default_warnings_feature,
             includes_feature,
             include_paths_feature,
@@ -6510,8 +6476,6 @@ def _impl(ctx):
             force_pic_flags_feature,
             pch_feature,
             module_maps_feature,
-            use_objc_modules_feature,
-            no_enable_modules_feature,
             apply_default_warnings_feature,
             includes_feature,
             include_paths_feature,
