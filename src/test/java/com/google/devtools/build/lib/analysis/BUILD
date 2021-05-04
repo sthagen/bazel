@@ -68,6 +68,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:config/execution_info_modifier",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/execution_transition_factory",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment",
+        "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_class_set",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/host_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/per_label_options",
@@ -171,6 +172,7 @@ java_library(
         "//third_party:mockito",
         "//third_party:truth",
         "//third_party/protobuf:protobuf_java",
+        "@com_google_testparameterinjector//:testparameterinjector",
     ],
 )
 

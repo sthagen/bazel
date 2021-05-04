@@ -1,4 +1,4 @@
-// Copyright 2020 The Bazel Authors. All rights reserved.
+// Copyright 2021 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,15 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package com.google.devtools.build.lib.analysis.config;
-
-import com.google.devtools.build.lib.packages.RuleClassProvider;
+package com.google.devtools.build.skyframe;
 
 /**
- * Marker interface for {@link RuleClassProvider} instances that can contain configuration
- * fragments.
+ * An empty interface used to annotate whether the evaluation of a SkyKey contributes significantly
+ * to the CPU footprint of Skyframe.
+ *
+ * <p>This is currently only applicable to the loading/analysis phase of Skyframe.
  */
-public interface FragmentProvider extends RuleClassProvider {
-  /** Returns the set of configuration fragments provided by this module. */
-  FragmentClassSet getConfigurationFragments();
-}
+public interface CPUHeavySkyKey extends SkyKey {}
