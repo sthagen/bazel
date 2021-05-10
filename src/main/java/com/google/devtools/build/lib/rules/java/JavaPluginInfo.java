@@ -17,21 +17,28 @@ package com.google.devtools.build.lib.rules.java;
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
+import com.google.devtools.build.lib.rules.java.JavaPluginInfo.JavaPluginData;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.starlarkbuildapi.java.JavaPluginInfoApi;
 import java.util.ArrayList;
 import java.util.List;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
 
 /** Provider for users of Java plugins. */
 @AutoCodec
 @Immutable
 @AutoValue
-public abstract class JavaPluginInfo extends NativeInfo {
+public abstract class JavaPluginInfo extends NativeInfo
+    implements JavaPluginInfoApi<JavaPluginData> {
   public static final String PROVIDER_NAME = "JavaPluginInfo";
   public static final Provider PROVIDER = new Provider();
 
@@ -41,9 +48,36 @@ public abstract class JavaPluginInfo extends NativeInfo {
   }
 
   /** Provider class for {@link JavaPluginInfo} objects. */
-  public static class Provider extends BuiltinProvider<JavaPluginInfo> {
+  public static class Provider extends BuiltinProvider<JavaPluginInfo>
+      implements JavaPluginInfoApi.Provider<JavaInfo> {
     private Provider() {
       super(PROVIDER_NAME, JavaPluginInfo.class);
+    }
+
+    @Override
+    public JavaPluginInfoApi<JavaPluginData> javaPluginInfo(
+        Sequence<?> runtimeDeps, Object processorClass, Object processorData, Boolean generatesApi)
+        throws EvalException {
+      NestedSet<String> processorClasses =
+          processorClass == Starlark.NONE
+              ? NestedSetBuilder.emptySet(Order.NAIVE_LINK_ORDER)
+              : NestedSetBuilder.create(Order.NAIVE_LINK_ORDER, (String) processorClass);
+      NestedSet<Artifact> processorClasspath =
+          JavaInfo.merge(Sequence.cast(runtimeDeps, JavaInfo.class, "runtime_deps"))
+              .getProvider(JavaCompilationArgsProvider.class)
+              .getRuntimeJars();
+
+      final NestedSet<Artifact> data;
+      if (processorData instanceof Depset) {
+        data = Depset.cast(processorData, Artifact.class, "data");
+      } else {
+        data =
+            NestedSetBuilder.wrap(
+                Order.NAIVE_LINK_ORDER, Sequence.cast(processorData, Artifact.class, "data"));
+      }
+
+      return JavaPluginInfo.create(
+          JavaPluginData.create(processorClasses, processorClasspath, data), generatesApi);
     }
   }
 
@@ -51,7 +85,7 @@ public abstract class JavaPluginInfo extends NativeInfo {
   @AutoCodec
   @Immutable
   @AutoValue
-  public abstract static class JavaPluginData {
+  public abstract static class JavaPluginData implements JavaPluginInfoApi.JavaPluginDataApi {
 
     public static JavaPluginData create(
         NestedSet<String> processorClasses,
@@ -91,6 +125,21 @@ public abstract class JavaPluginInfo extends NativeInfo {
     public abstract NestedSet<Artifact> processorClasspath();
 
     public abstract NestedSet<Artifact> data();
+
+    @Override
+    public Depset /*<FileApi>*/ getProcessorJarsForStarlark() {
+      return Depset.of(Artifact.TYPE, processorClasspath());
+    }
+
+    @Override
+    public Depset /*<String>*/ getProcessorClassesForStarlark() {
+      return Depset.of(Depset.ElementType.STRING, processorClasses());
+    }
+
+    @Override
+    public Depset /*<FileApi>*/ getProcessorDataForStarlark() {
+      return Depset.of(Artifact.TYPE, data());
+    }
 
     public boolean isEmpty() {
       return processorClasses().isEmpty() && processorClasspath().isEmpty() && data().isEmpty();

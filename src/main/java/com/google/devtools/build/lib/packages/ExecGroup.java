@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.packages;
 
 import com.google.auto.value.AutoValue;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.starlarkbuildapi.ExecGroupApi;
@@ -24,17 +25,23 @@ import java.util.Set;
 @AutoValue
 public abstract class ExecGroup implements ExecGroupApi {
 
-  // An exec group that inherits requirements from the rule.
-  public static final ExecGroup COPY_FROM_RULE_EXEC_GROUP =
-      createCopied(ImmutableSet.of(), ImmutableSet.of());
+  // This is intentionally a string that would fail {@code Identifier.isValid} so that
+  // users can't create a group with the same name.
+  @VisibleForTesting public static final String DEFAULT_EXEC_GROUP_NAME = "default-exec-group";
 
   // Create an exec group that is marked as copying from the rule.
+  // TODO(b/183268405): Remove this when RuleClass is updated to better handle inheritance.
   public static ExecGroup createCopied(
       Set<Label> requiredToolchains, Set<Label> execCompatibleWith) {
     return create(requiredToolchains, execCompatibleWith, /* copyFromRule= */ true);
   }
 
-  // Create an exec group.
+  /** Create an exec group that inherits from the default exec group. */
+  public static ExecGroup copyFromDefault() {
+    return create(ImmutableSet.of(), ImmutableSet.of(), /* copyFromRule= */ true);
+  }
+
+  /** Create an exec group with the given toolchains and execution constraints. */
   public static ExecGroup create(Set<Label> requiredToolchains, Set<Label> execCompatibleWith) {
     return create(requiredToolchains, execCompatibleWith, /* copyFromRule= */ false);
   }
@@ -51,5 +58,5 @@ public abstract class ExecGroup implements ExecGroupApi {
 
   public abstract ImmutableSet<Label> execCompatibleWith();
 
-  public abstract boolean copyFromRule();
+  public abstract boolean isCopiedFromDefault();
 }

@@ -16,6 +16,7 @@ java_library(
     name = "testing",
     testonly = 1,
     srcs = [
+        "ExecGroupSubject.java",
         "ResolvedToolchainContextSubject.java",
         "ToolchainCollectionSubject.java",
         "ToolchainContextSubject.java",
@@ -28,6 +29,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/cmdline:cmdline-primitives",
+        "//src/main/java/com/google/devtools/build/lib/packages:exec_group",
         "//src/main/java/net/starlark/java/eval",
         "//third_party:guava",
         "//third_party:truth",

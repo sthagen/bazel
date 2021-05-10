@@ -644,12 +644,32 @@ public class JavaOptions extends FragmentOptions {
   public boolean dontCollectSoArtifacts;
 
   @Option(
+      name = "incompatible_dont_collect_native_libraries_in_data",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "When enabled the native libraries in the data attribute are not collected.")
+  public boolean dontCollectDataLibraries;
+
+  @Option(
       name = "experimental_publish_javacclinkparamsinfo",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help = "If enabled, JavaCcLinkParamsInfo is published as part of JavaInfo.")
+      effectTags = {OptionEffectTag.NO_OP},
+      help = "Deprecated no-op.")
   public boolean experimentalPublishJavaCcLinkParamsInfo;
+
+  @Option(
+      name = "experimental_enable_jspecify",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "Enable experimental jspecify integration.")
+  public boolean experimentalEnableJspecify;
 
   Label defaultJavaBase() {
     return Label.parseAbsoluteUnchecked(DEFAULT_JAVABASE);
@@ -732,7 +752,7 @@ public class JavaOptions extends FragmentOptions {
     host.experimentalTurbineAnnotationProcessing = experimentalTurbineAnnotationProcessing;
 
     host.dontCollectSoArtifacts = dontCollectSoArtifacts;
-    host.experimentalPublishJavaCcLinkParamsInfo = experimentalPublishJavaCcLinkParamsInfo;
+    host.dontCollectDataLibraries = dontCollectDataLibraries;
 
     return host;
   }

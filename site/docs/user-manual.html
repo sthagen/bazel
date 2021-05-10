@@ -1165,8 +1165,9 @@ memory-saving mode</a>.
   syntax checking source files in IDEs, for example, by rebuilding a single
   target that depends on the source file to detect errors as early as
   possible in the edit/build/test cycle. This argument affects the way all
-  non-flag arguments are interpreted: for each source filename, one
-  rule that depends on it will be built. For
+  non-flag arguments are interpreted: each argument must be a
+  file target label or a plain filename relative to the current working
+  directory, and one rule that depends on each source filename is built. For
 
   C++ and Java
   sources, rules in the same language space are preferentially chosen. For
@@ -3060,10 +3061,10 @@ adb -s deadbeef install ...
 
 <h4 id='flag--config'><code class='flag'>--config=<var>name</var></code></h4>
 <p>
- Selects additional config section from the rc files; for the current
- <code>command</code>, it also pulls in the options from
- <code>command:name</code> if such a section exists. Can be specified multiple
- times to add flags from several config sections. Expansions can refer to other
+ Selects additional config section from
+ <a href="guide#where-are-the-bazelrc-files">the rc files</a>; for the current <code>command</code>,
+ it also pulls in the options from <code>command:name</code> if such a section exists. Can be
+ specified multiple times to add flags from several config sections. Expansions can refer to other
  definitions (i.e. expansions can be chained).
 </p>
 
