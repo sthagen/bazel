@@ -208,7 +208,6 @@ import com.google.devtools.build.skyframe.WalkableGraph.WalkableGraphFactory;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsProvider;
 import com.google.errorprone.annotations.ForOverride;
-import java.io.IOException;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -386,10 +385,9 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     @Override
     public ArtifactPathResolver createPathResolverForArtifactValues(
         ActionInputMap actionInputMap,
-        Map<Artifact, ImmutableCollection<Artifact>> expandedArtifacts,
+        Map<Artifact, ImmutableCollection<? extends Artifact>> expandedArtifacts,
         Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesets,
-        String workspaceName)
-        throws IOException {
+        String workspaceName) {
       Preconditions.checkState(shouldCreatePathResolverForArtifactValues());
       return outputService.createPathResolverForArtifactValues(
           directories.getExecRoot(workspaceName).asFragment(),
@@ -470,8 +468,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
             directories,
             managedDirectoriesKnowledge != null
                 ? managedDirectoriesKnowledge
-                : ManagedDirectoriesKnowledge.NO_MANAGED_DIRECTORIES,
-            externalPackageHelper);
+                : ManagedDirectoriesKnowledge.NO_MANAGED_DIRECTORIES);
     this.crossRepositoryLabelViolationStrategy = crossRepositoryLabelViolationStrategy;
     this.buildFilesByPriority = buildFilesByPriority;
     this.externalPackageHelper = externalPackageHelper;

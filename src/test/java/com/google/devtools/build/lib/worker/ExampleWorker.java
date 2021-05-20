@@ -86,6 +86,7 @@ public final class ExampleWorker {
         if (request == null) {
           break;
         }
+
         currentRequest = request;
         inputs.clear();
         for (Input input : request.getInputsList()) {
@@ -94,11 +95,10 @@ public final class ExampleWorker {
         if (poisoned && workerOptions.hardPoison) {
           throw new IllegalStateException("I'm a very poisoned worker and will just crash.");
         }
-        if (request.getRequestId() != 0) {
-          Thread t = createResponseThread(request);
-          t.start();
+        if (request.getCancel()) {
+          respondToCancelRequest(request);
         } else {
-          respondToRequest(request, new RequestInfo());
+          startResponseThread(request);
         }
         if (workerOptions.exitAfter > 0 && workUnitCounter > workerOptions.exitAfter) {
           System.exit(0);

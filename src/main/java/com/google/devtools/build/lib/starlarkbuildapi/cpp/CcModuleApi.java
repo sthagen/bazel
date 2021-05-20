@@ -672,11 +672,15 @@ public interface CcModuleApi<
             allowedTypes = {@ParamType(type = NoneType.class), @ParamType(type = Depset.class)}),
         @Param(
             name = "user_link_flags",
-            doc = "Depset of user link flags passed as strings.",
+            doc = "Depset of user link flags passed as strings. Sequence not accepted for now.",
             positional = false,
             named = true,
             defaultValue = "None",
-            allowedTypes = {@ParamType(type = NoneType.class), @ParamType(type = Depset.class)}),
+            allowedTypes = {
+              @ParamType(type = NoneType.class),
+              @ParamType(type = Depset.class),
+              @ParamType(type = Sequence.class)
+            }),
         @Param(
             name = "additional_inputs",
             doc = "For additional inputs to the linking action, e.g.: linking scripts.",
@@ -1262,5 +1266,22 @@ public interface CcModuleApi<
       boolean shouldCreatePerObjectDebugInfo,
       Sequence<?> argv,
       StarlarkThread thread)
+      throws EvalException;
+
+  @StarlarkMethod(
+      name = "merge_compilation_contexts",
+      doc = "Merges multiple <code>CompilationContexts</code>s into one.",
+      parameters = {
+        @Param(
+            name = "compilation_contexts",
+            doc =
+                "List of <code>CompilationContexts</code>s to be merged. The headers of each "
+                    + "context will be exported by the direct fields in the returned provider.",
+            positional = false,
+            named = true,
+            defaultValue = "[]"),
+      })
+  CompilationContextT mergeCompilationContexts(
+      Sequence<?> compilationContexts) // <CcCompilationContextApi> expected
       throws EvalException;
 }
