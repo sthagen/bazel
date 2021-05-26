@@ -32,8 +32,11 @@ fsutil 8dot3name set 0
 
 ### Enable symlink support
 
-Some features require Bazel to create file symlink on Windows, you can allow Bazel to do that by enabling [Developer Mode](https://docs.microsoft.com/en-us/windows/uwp/get-started/enable-your-device-for-development) on Windows (Only works for Windows 10, version 1703 or newer).
-After enabling the Developer Mode, you should be able to use the following features:
+Some features require Bazel to be able to create file symlinks on Windows,
+either by enabling
+[Developer Mode](https://docs.microsoft.com/en-us/windows/uwp/get-started/enable-your-device-for-development)
+(on Windows 10 version 1703 or newer), or by running Bazel as an administrator.
+This enables the following features:
 
 * [\-\-windows_enable_symlinks](command-line-reference.html#flag--windows_enable_symlinks)
 * [\-\-enable_runfiles](command-line-reference.html#flag--enable_runfiles)
@@ -236,7 +239,7 @@ To enable the Clang toolchain for building C++, there are several situations.
   You can enable the Clang toolchain by a build flag `--compiler=clang-cl`.
 
 * With `--incompatible_enable_cc_toolchain_resolution`:
-  You have to add a platform target to your BUILD file (eg. the top level BUILD file):
+  You have to add a platform target to your `BUILD file` (eg. the top level `BUILD` file):
     ```
     platform(
         name = "x64_windows-clang-cl",
@@ -254,7 +257,7 @@ To enable the Clang toolchain for building C++, there are several situations.
     --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows-clang-cl --extra_execution_platforms=//:x64_windows-clang-cl
     ```
 
-    * Register the platform and toolchain in your WORKSPACE file:
+    * Register the platform and toolchain in your `WORKSPACE` file:
 
     ```
     register_execution_platforms(

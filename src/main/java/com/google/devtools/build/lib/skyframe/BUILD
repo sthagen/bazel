@@ -19,6 +19,7 @@ java_library(
         "ActionArtifactCycleReporter.java",
         "ActionExecutionFunction.java",
         "ActionLookupConflictFindingFunction.java",
+        "ActionOutputDirectoryHelper.java",
         "AspectCompletionValue.java",
         "AspectCompletor.java",
         "AspectFunction.java",
@@ -155,6 +156,7 @@ java_library(
         ":output_store",
         ":package_error_function",
         ":package_error_message_function",
+        ":package_identifier_batching_callback",
         ":package_lookup_function",
         ":package_lookup_value",
         ":package_progress_receiver",
@@ -209,6 +211,7 @@ java_library(
         ":unloaded_toolchain_context",
         ":unloaded_toolchain_context_impl",
         ":workspace_info",
+        ":workspace_info_receiver",
         ":workspace_name_function",
         ":workspace_name_value",
         ":workspace_status_function",
@@ -1705,7 +1708,10 @@ java_library(
 
 java_library(
     name = "package_identifier_batching_callback",
-    srcs = ["PackageIdentifierBatchingCallback.java"],
+    srcs = [
+        "PackageIdentifierBatchingCallback.java",
+        "SimplePackageIdentifierBatchingCallback.java",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
@@ -2748,6 +2754,16 @@ java_library(
 java_library(
     name = "workspace_info",
     srcs = ["WorkspaceInfoFromDiff.java"],
+)
+
+java_library(
+    name = "workspace_info_receiver",
+    srcs = ["WorkspaceInfoFromDiffReceiver.java"],
+    deps = [
+        ":workspace_info",
+        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//third_party:jsr305",
+    ],
 )
 
 java_library(

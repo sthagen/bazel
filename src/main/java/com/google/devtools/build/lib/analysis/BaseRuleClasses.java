@@ -357,7 +357,7 @@ public class BaseRuleClasses {
   public static RuleClass.Builder execPropertiesAttribute(RuleClass.Builder builder)
       throws ConversionException {
     return builder.add(
-        attr(RuleClass.EXEC_PROPERTIES, STRING_DICT).defaultValue(ImmutableMap.of()));
+        attr(RuleClass.EXEC_PROPERTIES_ATTR, STRING_DICT).defaultValue(ImmutableMap.of()));
   }
 
   /**
@@ -384,9 +384,12 @@ public class BaseRuleClasses {
           // Any rule that has provides its own meaning for the "target_compatible_with" attribute
           // has to be excluded in `RuleContextConstraintSemantics.incompatibleConfiguredTarget()`.
           .add(
-              attr(RuleClass.TARGET_RESTRICTED_TO_ATTR, LABEL_LIST)
+              attr(RuleClass.TARGET_COMPATIBLE_WITH_ATTR, LABEL_LIST)
                   .mandatoryProviders(ConstraintValueInfo.PROVIDER.id())
                   // This should be configurable to allow for complex types of restrictions.
+                  .tool(
+                      "target_compatible_with exists for constraint checking, not to create an"
+                          + " actual dependency")
                   .allowedFileTypes(FileTypeSet.NO_FILE))
           .build();
     }
@@ -442,11 +445,14 @@ public class BaseRuleClasses {
               attr("data", LABEL_LIST)
                   .allowedFileTypes(FileTypeSet.ANY_FILE)
                   .dontCheckConstraints())
-          .add(attr(RuleClass.EXEC_PROPERTIES, Type.STRING_DICT).value(ImmutableMap.of()))
+          .add(attr(RuleClass.EXEC_PROPERTIES_ATTR, Type.STRING_DICT).value(ImmutableMap.of()))
           .add(
               attr(RuleClass.EXEC_COMPATIBLE_WITH_ATTR, BuildType.LABEL_LIST)
                   .allowedFileTypes()
                   .nonconfigurable("Used in toolchain resolution")
+                  .tool(
+                      "exec_compatible_with exists for constraint checking, not to create an"
+                          + " actual dependency")
                   .value(ImmutableList.of()))
           .build();
     }

@@ -389,7 +389,7 @@ function test_failure_on_incompatible_top_level_target() {
 
 # Crudely validates that the build event protocol contains useful information
 # when targets are skipped due to incompatibilities.
-function atest_build_event_protocol() {
+function test_build_event_protocol() {
   cd target_skipping || fail "couldn't cd into workspace"
 
   bazel test \
@@ -926,6 +926,20 @@ function test_query() {
     || fail "Bazel query failed unexpectedly."
   expect_log '^//target_skipping:sh_foo1$'
   expect_log '^//target_skipping:genrule_foo1$'
+}
+
+# Regression test for http://b/189071321: --notool_deps should exclude constraints.
+function test_query_no_tools() {
+  write_query_test_targets
+  cd target_skipping || fail "couldn't cd into workspace"
+
+  bazel query \
+    --notool_deps \
+    'deps(//target_skipping:sh_foo1)' &> "${TEST_log}" \
+    || fail "Bazel query failed unexpectedly."
+  expect_log '^//target_skipping:sh_foo1$'
+  expect_log '^//target_skipping:genrule_foo1$'
+  expect_not_log '^//target_skipping:foo1$'
 }
 
 # Run a cquery on a target that is compatible. This should pass.
