@@ -78,6 +78,7 @@ public class JavaStarlarkCommon
       Sequence<?> sourcepathEntries, // <Artifact> expected
       Sequence<?> resources, // <Artifact> expected
       Boolean neverlink,
+      Boolean enableAnnotationProcessing,
       StarlarkThread thread)
       throws EvalException, InterruptedException {
 
@@ -146,6 +147,7 @@ public class JavaStarlarkCommon
             ImmutableList.copyOf(Sequence.cast(sourcepathEntries, Artifact.class, "sourcepath")),
             Sequence.cast(resources, Artifact.class, "resources"),
             neverlink,
+            enableAnnotationProcessing,
             javaSemantics,
             thread);
   }
