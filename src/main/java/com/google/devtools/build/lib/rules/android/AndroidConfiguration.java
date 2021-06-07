@@ -887,22 +887,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
         help = "Tracking flag for when busybox workers are enabled.")
     public boolean persistentBusyboxTools;
 
-    // TODO(b/142520065): Remove.
-    @Option(
-        name = "incompatible_prohibit_aapt1",
-        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-        effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.AFFECTS_OUTPUTS},
-        metadataTags = {
-          OptionMetadataTag.INCOMPATIBLE_CHANGE,
-          OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-        },
-        defaultValue = "true",
-        help =
-            "End support for aapt in Android rules. "
-                + "To resolve issues when migrating your app to build with aapt2, see "
-                + "https://developer.android.com/studio/command-line/aapt2#aapt2_changes")
-    public boolean incompatibleProhibitAapt1;
-
     @Option(
         name = "experimental_remove_r_classes_from_instrumentation_test_jar",
         defaultValue = "true",
@@ -1016,8 +1000,6 @@ public class AndroidConfiguration extends Fragment implements AndroidConfigurati
       host.oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest =
           oneVersionEnforcementUseTransitiveJarsForBinaryUnderTest;
       host.persistentBusyboxTools = persistentBusyboxTools;
-
-      host.incompatibleProhibitAapt1 = incompatibleProhibitAapt1;
 
       // Unless the build was started from an Android device, host means MAIN.
       host.configurationDistinguisher = ConfigurationDistinguisher.MAIN;
