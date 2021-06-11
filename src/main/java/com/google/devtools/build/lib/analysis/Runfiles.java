@@ -785,18 +785,6 @@ public final class Runfiles implements RunfilesApi {
     }
 
     /**
-     * @deprecated Use {@link #addTransitiveArtifacts} instead, to prevent increased memory use.
-     *     <p>See also {@link Builder#addTransitiveArtifactsWrappedInStableOrder}
-     */
-    @Deprecated
-    public Builder addArtifacts(NestedSet<Artifact> artifacts) {
-      // Do not delete this method, or else addArtifacts(Iterable) calls with a NestedSet argument
-      // will not be flagged.
-      addArtifacts(artifacts.toList());
-      return this;
-    }
-
-    /**
      * Adds a nested set to the internal collection.
      */
     public Builder addTransitiveArtifacts(NestedSet<Artifact> artifacts) {
