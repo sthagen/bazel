@@ -485,8 +485,6 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
             ccToolchain,
             featureConfiguration,
             ruleContext,
-            /* generateHeaderTokensGroup= */ true,
-            /* addSelfHeaderTokens= */ true,
             /* generateHiddenTopLevelGroup= */ true);
     CcStarlarkApiProvider.maybeAdd(ruleContext, targetBuilder);
     targetBuilder
@@ -750,7 +748,6 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
         Iterables.concat(staticLibraries.entrySet(), alwayslinkStaticLibraries.entrySet())) {
       LibraryToLink.Builder libraryToLinkBuilder = LibraryToLink.builder();
       String identifier = staticLibraryEntry.getKey();
-      libraryToLinkBuilder.setLibraryIdentifier(identifier);
       boolean hasPic = picStaticLibraries.containsKey(identifier);
       boolean hasAlwaysPic = alwayslinkPicStaticLibraries.containsKey(identifier);
       if (hasPic || hasAlwaysPic) {
@@ -783,7 +780,6 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
         continue;
       }
       LibraryToLink.Builder libraryToLinkBuilder = LibraryToLink.builder();
-      libraryToLinkBuilder.setLibraryIdentifier(identifier);
       libraryToLinkBuilder.setPicStaticLibrary(picStaticLibraryEntry.getValue());
       if (dynamicLibraries.containsKey(identifier)) {
         Artifact library = dynamicLibraries.get(identifier);
@@ -802,7 +798,6 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
         continue;
       }
       LibraryToLink.Builder libraryToLinkBuilder = LibraryToLink.builder();
-      libraryToLinkBuilder.setLibraryIdentifier(identifier);
       Artifact library = dynamicLibraryEntry.getValue();
       Artifact symlink = common.getDynamicLibrarySymlink(library, true);
       libraryToLinkBuilder.setDynamicLibrary(symlink);

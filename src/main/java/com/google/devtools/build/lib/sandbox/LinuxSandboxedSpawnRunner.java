@@ -190,7 +190,7 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
         LinuxSandboxUtil.commandLineBuilder(linuxSandbox, spawn.getArguments())
             .addExecutionInfo(spawn.getExecutionInfo())
             .setWritableFilesAndDirectories(writableDirs)
-            .setTmpfsDirectories(getTmpfsPaths())
+            .setTmpfsDirectories(ImmutableSet.copyOf(getSandboxOptions().sandboxTmpfsPath))
             .setBindMounts(getReadOnlyBindMounts(blazeDirs, sandboxExecRoot))
             .setUseFakeHostname(getSandboxOptions().sandboxFakeHostname)
             .setCreateNetworkNamespace(
@@ -239,7 +239,10 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
           outputs,
           writableDirs,
           treeDeleter,
-          statisticsPath);
+          statisticsPath,
+          getSandboxOptions().reuseSandboxDirectories,
+          sandboxBase,
+          spawn.getMnemonic());
     }
   }
 
@@ -259,14 +262,6 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     writableDirs.add(fs.getPath("/tmp"));
 
     return writableDirs.build();
-  }
-
-  private ImmutableSet<Path> getTmpfsPaths() {
-    ImmutableSet.Builder<Path> tmpfsPaths = ImmutableSet.builder();
-    for (String tmpfsPath : getSandboxOptions().sandboxTmpfsPath) {
-      tmpfsPaths.add(fileSystem.getPath(tmpfsPath));
-    }
-    return tmpfsPaths.build();
   }
 
   private SortedMap<Path, Path> getReadOnlyBindMounts(

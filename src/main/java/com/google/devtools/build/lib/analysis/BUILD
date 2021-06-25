@@ -372,6 +372,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:build-request-options",
         "//src/main/java/com/google/devtools/build/lib:runtime/build_event_streamer_utils",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/actions:action_input_helper",
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_key",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/actions:commandline_item",
@@ -444,6 +445,7 @@ java_library(
         "//src/main/protobuf:failure_details_java_proto",
         "//src/main/protobuf:test_status_java_proto",
         "//third_party:auto_value",
+        "//third_party:caffeine",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf:protobuf_java",
@@ -1143,6 +1145,7 @@ java_library(
     srcs = ["TransitiveInfoProviderEffectiveClassHelper.java"],
     deps = [
         ":transitive_info_provider",
+        "//third_party:caffeine",
         "//third_party:guava",
     ],
 )
@@ -1605,6 +1608,7 @@ java_library(
     srcs = ["config/BuildOptionsCache.java"],
     deps = [
         ":config/build_options",
+        "//third_party:caffeine",
         "//third_party:guava",
     ],
 )
@@ -2239,6 +2243,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi",
         "//src/main/java/net/starlark/java/annot",
         "//src/main/java/net/starlark/java/eval",
+        "//third_party:caffeine",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

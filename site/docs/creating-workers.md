@@ -98,6 +98,9 @@ for cancel requests, see below).
 * JSON requests and responses are not preceded by a size indicator.
 * JSON requests uphold the same structure as the protobuf, but use standard
  JSON.
+* In order to maintain the same backward and forward compatibility
+  properties as protobuf, JSON workers must tolerate unknown fields in
+  these messages, and use the protobuf defaults for missing values.
 * Bazel stores requests as protobufs and converts them to JSON using
 [protobuf's JSON format](https://cs.opensource.google/protobuf/protobuf/+/master:java/util/src/main/java/com/google/protobuf/util/JsonFormat.java)
 
@@ -132,7 +135,7 @@ including temporary files.
 ## Making the rule that uses the worker
 
 You'll also need to create a rule that generates actions to be performed by the
-worker. Making a Starlark rule that uses a worker is just like [creating any other rule](https://github.com/bazelbuild/examples/tree/master/rules).
+worker. Making a Starlark rule that uses a worker is just like [creating any other rule](https://github.com/bazelbuild/examples/tree/HEAD/rules).
 
 In addition, the rule needs to contain a reference to the worker itself, and
 there are some requirements for the actions it produces.

@@ -17,8 +17,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import com.google.common.base.Throwables;
-import com.google.common.cache.Cache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -26,6 +26,7 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -101,6 +102,7 @@ import net.starlark.java.syntax.SyntaxError;
 
 /** A SkyFunction for {@link PackageValue}s. */
 public class PackageFunction implements SkyFunction {
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   private final PackageFactory packageFactory;
   private final CachingPackageLocator packageLocator;
@@ -1077,8 +1079,8 @@ public class PackageFunction implements SkyFunction {
           if (valueOrException.get() == null) {
             missingKeys.add(globKey);
           }
-        } catch (IOException | BuildFileNotFoundException doesntMatter) {
-          continue;
+        } catch (IOException | BuildFileNotFoundException e) {
+          logger.atWarning().withCause(e).log("Exception processing %s", globKey);
         }
       }
       return missingKeys;

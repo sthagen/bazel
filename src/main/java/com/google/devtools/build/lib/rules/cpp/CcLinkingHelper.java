@@ -600,7 +600,6 @@ public final class CcLinkingHelper {
                   staticLinkType, ccOutputs, /* usePic= */ false, libraryIdentifier)
               .getOutputLibrary();
       libraryToLinkBuilder
-          .setLibraryIdentifier(staticLibrary.getLibraryIdentifier())
           .setStaticLibrary(staticLibrary.getArtifact())
           .setObjectFiles(ImmutableList.copyOf(staticLibrary.getObjectFiles()))
           .setLtoCompilationContext(staticLibrary.getLtoCompilationContext())
@@ -625,7 +624,6 @@ public final class CcLinkingHelper {
                   linkTargetTypeUsedForNaming, ccOutputs, /* usePic= */ true, libraryIdentifier)
               .getOutputLibrary();
       libraryToLinkBuilder
-          .setLibraryIdentifier(picStaticLibrary.getLibraryIdentifier())
           .setPicStaticLibrary(picStaticLibrary.getArtifact())
           .setPicObjectFiles(ImmutableList.copyOf(picStaticLibrary.getObjectFiles()))
           .setPicLtoCompilationContext(picStaticLibrary.getLtoCompilationContext())
@@ -749,7 +747,8 @@ public final class CcLinkingHelper {
           convertLibraryToLinkListToLinkerInputList(
               ccLinkingContext.getLibraries(),
               linkingMode != LinkingMode.DYNAMIC,
-              dynamicLinkType.isDynamicLibrary());
+              dynamicLinkType.isDynamicLibrary(),
+              featureConfiguration);
       dynamicLinkActionBuilder.addLinkParams(
           libraries,
           ccLinkingContext.getFlattenedUserLinkFlags(),
@@ -805,7 +804,6 @@ public final class CcLinkingHelper {
     // solibDir, instead we use the original interface library and dynamic library.
     if (dynamicLibrary != null) {
       hasBuiltDynamicLibrary = true;
-      libraryToLinkBuilder.setLibraryIdentifier(dynamicLibrary.getLibraryIdentifier());
       if (neverlink
           || featureConfiguration.isEnabled(CppRuleClasses.COPY_DYNAMIC_LIBRARIES_TO_BINARY)) {
         if (interfaceLibrary != null) {
@@ -936,7 +934,10 @@ public final class CcLinkingHelper {
   }
 
   private static List<LinkerInputs.LibraryToLink> convertLibraryToLinkListToLinkerInputList(
-      NestedSet<LibraryToLink> librariesToLink, boolean staticMode, boolean forDynamicLibrary) {
+      NestedSet<LibraryToLink> librariesToLink,
+      boolean staticMode,
+      boolean forDynamicLibrary,
+      FeatureConfiguration featureConfiguration) {
     ImmutableList.Builder<LinkerInputs.LibraryToLink> librariesToLinkBuilder =
         ImmutableList.builder();
     for (LibraryToLink libraryToLink : librariesToLink.toList()) {
@@ -974,7 +975,8 @@ public final class CcLinkingHelper {
         } else if (libraryToLink.getDynamicLibrary() != null) {
           libraryToLinkToUse = libraryToLink.getDynamicLibraryToLink();
         }
-        if (libraryToLinkToUse == null) {
+        if (libraryToLinkToUse == null
+            || !featureConfiguration.isEnabled(CppRuleClasses.SUPPORTS_DYNAMIC_LINKER)) {
           if (forDynamicLibrary) {
             if (picStaticLibraryToLink != null) {
               libraryToLinkToUse = picStaticLibraryToLink;

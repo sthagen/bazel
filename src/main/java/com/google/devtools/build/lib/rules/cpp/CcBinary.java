@@ -598,7 +598,6 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
       Artifact symlink = common.getDynamicLibrarySymlink(library, true);
       LibraryToLink libraryToLink =
           LibraryToLink.builder()
-              .setLibraryIdentifier(CcLinkingOutputs.libraryIdentifierOf(library))
               .setDynamicLibrary(symlink)
               .setResolvedSymlinkDynamicLibrary(library)
               .build();
@@ -810,7 +809,6 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
       if (Link.SHARED_LIBRARY_FILETYPES.matches(library.getFilename())) {
         LibraryToLink libraryToLink =
             LibraryToLink.builder()
-                .setLibraryIdentifier(CcLinkingOutputs.libraryIdentifierOf(library))
                 .setDynamicLibrary(
                     common.getDynamicLibrarySymlink(library, /* preserveName= */ true))
                 .setResolvedSymlinkDynamicLibrary(library)
@@ -819,7 +817,6 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
       } else if (Link.LINK_LIBRARY_FILETYPES.matches(library.getFilename())) {
         LibraryToLink libraryToLink =
             LibraryToLink.builder()
-                .setLibraryIdentifier(CcLinkingOutputs.libraryIdentifierOf(library))
                 .setStaticLibrary(library)
                 .setAlwayslink(true)
                 .build();
@@ -827,7 +824,6 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
       } else if (Link.ARCHIVE_FILETYPES.matches(library.getFilename())) {
         LibraryToLink libraryToLink =
             LibraryToLink.builder()
-                .setLibraryIdentifier(CcLinkingOutputs.libraryIdentifierOf(library))
                 .setStaticLibrary(library)
                 .build();
         precompiledLibraries.add(libraryToLink);
@@ -1179,10 +1175,6 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
             ccCompilationContext.getVirtualToOriginalHeaders(),
             /* additionalMetadata= */ additionalMetadata);
 
-    NestedSet<Artifact> headerTokens =
-        CcCompilationHelper.collectHeaderTokens(
-            ruleContext, cppConfiguration, ccCompilationOutputs, /* addSelfTokens= */ true);
-
     Map<String, NestedSet<Artifact>> outputGroups =
         CcCompilationHelper.buildOutputGroupsForEmittingCompileProviders(
             ccCompilationOutputs,
@@ -1191,8 +1183,6 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
             toolchain,
             featureConfiguration,
             ruleContext,
-            /* generateHeaderTokensGroup= */ false,
-            /* addSelfHeaderTokens= */ false,
             /* generateHiddenTopLevelGroup= */ false);
 
     builder
@@ -1205,7 +1195,7 @@ public abstract class CcBinary implements RuleConfiguredTargetFactory {
                         collectTransitiveCcNativeLibraries(ruleContext, libraries)))
                 .build())
         .addNativeDeclaredProvider(instrumentedFilesProvider)
-        .addOutputGroup(OutputGroupInfo.VALIDATION, headerTokens)
+        .addOutputGroup(OutputGroupInfo.VALIDATION, ccCompilationContext.getHeaderTokens())
         .addOutputGroups(outputGroups);
 
     CppHelper.maybeAddStaticLinkMarkerProvider(builder, ruleContext);

@@ -109,6 +109,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_data",
         "//src/main/java/com/google/devtools/build/lib/actions:package_roots",
+        "//src/main/java/com/google/devtools/build/lib/actions:action_input_helper",
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_key",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/actions:artifact_owner",
@@ -285,6 +286,7 @@ java_test(
         "//src/test/java/com/google/devtools/build/lib/vfs/util",
         "//src/test/java/com/google/devtools/build/skyframe:testutil",
         "//third_party:auto_value",
+        "//third_party:caffeine",
         "//third_party:flogger",
         "//third_party:guava",
         "//third_party:guava-testlib",
@@ -358,8 +360,6 @@ test_suite(
     name = "all_windows_tests",
     tests = [
         ":windows_tests",
-        "//src/test/java/com/google/devtools/build/lib/skyframe/packages:all_windows_tests",
-        "//src/test/java/com/google/devtools/build/lib/skyframe/serialization:all_windows_tests",
     ],
     visibility = ["//src/test/java/com/google/devtools/build/lib:__pkg__"],
 )

@@ -941,8 +941,10 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     // Current behavior is that nothing gets forwarded if IntstrumentedFilesInfo is not configured.
     // That means that source files are not collected for the coverage manifest unless the entire
     // dependency chain between the test and the source file explicitly configures coverage.
-    // New behavior is protected by --experimental_forward_instrumented_files_info_by_default.
-    useConfiguration("--collect_code_coverage");
+    // New behavior is controlled by --experimental_forward_instrumented_files_info_by_default,
+    // which is now on by default.
+    useConfiguration(
+        "--collect_code_coverage", "--noexperimental_forward_instrumented_files_info_by_default");
     ConfiguredTarget target = getConfiguredTarget("//test/starlark:outer");
     InstrumentedFilesInfo provider = target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
     assertWithMessage("InstrumentedFilesInfo should be set.").that(provider).isNotNull();
@@ -952,8 +954,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     // dependencies. Coverage still needs to be configured for rules that handle source files for
     // languages which support coverage instrumentation, but not every wrapper rule in the
     // dependency chain needs to configure that for instrumentation to be correct.
-    useConfiguration(
-        "--collect_code_coverage", "--experimental_forward_instrumented_files_info_by_default");
+    useConfiguration("--collect_code_coverage");
     target = getConfiguredTarget("//test/starlark:outer");
     provider = target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
     assertWithMessage("InstrumentedFilesInfo should be set.").that(provider).isNotNull();
@@ -2789,7 +2790,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
   @Test
   public void testBadAllowlistTransition_noAllowlist() throws Exception {
-    scratch.file(
+    scratch.overwriteFile(
         "tools/allowlists/function_transition_allowlist/BUILD",
         "package_group(",
         "    name = 'function_transition_allowlist',",
@@ -2830,7 +2831,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
   @Test
   public void testPrintFromTransitionImpl() throws Exception {
-    scratch.file(
+    scratch.overwriteFile(
         "tools/allowlists/function_transition_allowlist/BUILD",
         "package_group(",
         "    name = 'function_transition_allowlist',",
@@ -2880,7 +2881,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
   @Test
   public void testTransitionEquality() throws Exception {
-    scratch.file(
+    scratch.overwriteFile(
         "tools/allowlists/function_transition_allowlist/BUILD",
         "package_group(",
         "    name = 'function_transition_allowlist',",
@@ -2939,7 +2940,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
   @Test
   public void testBadAllowlistTransition_allowlistNoCfg() throws Exception {
-    scratch.file(
+    scratch.overwriteFile(
         "tools/allowlists/function_transition_allowlist/BUILD",
         "package_group(",
         "    name = 'function_transition_allowlist',",
@@ -3525,9 +3526,9 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     ObjcProvider providerFromFoo = (ObjcProvider) target.get("foo");
 
     // The modern key and the canonical legacy key "objc" are set to the one available ObjcProvider.
-    assertThat(providerFromModernKey.get(ObjcProvider.LINKOPT).toList()).containsExactly("foo");
-    assertThat(providerFromObjc.get(ObjcProvider.LINKOPT).toList()).containsExactly("foo");
-    assertThat(providerFromFoo.get(ObjcProvider.LINKOPT).toList()).containsExactly("foo");
+    assertThat(providerFromModernKey.getLinkopt().toList()).containsExactly("foo");
+    assertThat(providerFromObjc.getLinkopt().toList()).containsExactly("foo");
+    assertThat(providerFromFoo.getLinkopt().toList()).containsExactly("foo");
   }
 
   @Test
@@ -3554,9 +3555,9 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     ObjcProvider providerFromObjc = (ObjcProvider) target.get("objc");
     ObjcProvider providerFromBah = (ObjcProvider) target.get("bah");
 
-    assertThat(providerFromModernKey.get(ObjcProvider.LINKOPT).toList()).containsExactly("prov");
-    assertThat(providerFromObjc.get(ObjcProvider.LINKOPT).toList()).containsExactly("objc");
-    assertThat(providerFromBah.get(ObjcProvider.LINKOPT).toList()).containsExactly("bah");
+    assertThat(providerFromModernKey.getLinkopt().toList()).containsExactly("prov");
+    assertThat(providerFromObjc.getLinkopt().toList()).containsExactly("objc");
+    assertThat(providerFromBah.getLinkopt().toList()).containsExactly("bah");
   }
 
   @Test
@@ -3584,11 +3585,11 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     ObjcProvider providerFromFoo = (ObjcProvider) target.get("foo");
     ObjcProvider providerFromBar = (ObjcProvider) target.get("bar");
 
-    assertThat(providerFromModernKey.get(ObjcProvider.LINKOPT).toList()).containsExactly("prov");
+    assertThat(providerFromModernKey.getLinkopt().toList()).containsExactly("prov");
     // The first defined provider is set to the legacy "objc" key.
-    assertThat(providerFromObjc.get(ObjcProvider.LINKOPT).toList()).containsExactly("foo");
-    assertThat(providerFromFoo.get(ObjcProvider.LINKOPT).toList()).containsExactly("foo");
-    assertThat(providerFromBar.get(ObjcProvider.LINKOPT).toList()).containsExactly("bar");
+    assertThat(providerFromObjc.getLinkopt().toList()).containsExactly("foo");
+    assertThat(providerFromFoo.getLinkopt().toList()).containsExactly("foo");
+    assertThat(providerFromBar.getLinkopt().toList()).containsExactly("bar");
   }
 
   @Test

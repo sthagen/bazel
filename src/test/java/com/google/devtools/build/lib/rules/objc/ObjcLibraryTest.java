@@ -21,10 +21,8 @@ import static com.google.devtools.build.lib.rules.apple.AppleBitcodeConverter.IN
 import static com.google.devtools.build.lib.rules.objc.CompilationSupport.ABSOLUTE_INCLUDES_PATH_FORMAT;
 import static com.google.devtools.build.lib.rules.objc.CompilationSupport.BOTH_MODULE_NAME_AND_MODULE_MAP_SPECIFIED;
 import static com.google.devtools.build.lib.rules.objc.CompilationSupport.FILE_IN_SRCS_AND_HDRS_WARNING_FORMAT;
-import static com.google.devtools.build.lib.rules.objc.ObjcProvider.CC_LIBRARY;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.LIBRARY;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.SDK_DYLIB;
-import static com.google.devtools.build.lib.rules.objc.ObjcProvider.SDK_FRAMEWORK;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.WEAK_SDK_FRAMEWORK;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.NON_ARC_SRCS_TYPE;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.SRCS_TYPE;
@@ -42,6 +40,7 @@ import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
@@ -54,7 +53,6 @@ import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.util.MockObjcSupport;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationContext;
-import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.cpp.CcLinkingContext;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction;
@@ -76,13 +74,6 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
 
   static final RuleType RULE_TYPE = new OnlyNeedsSourcesRuleType("objc_library");
   private static final String WRAPPED_CLANG = "wrapped_clang";
-
-  /**
-   * Middleman artifact arising from //tools/osx/crosstool:link, containing tools that should be
-   * inputs to link actions.
-   */
-  private static final String CROSSTOOL_LINK_MIDDLEMAN = "tools_Sosx_Scrosstool_Clink";
-
   /** Creates an {@code objc_library} target writer. */
   @Override
   protected ScratchAttributeWriter createLibraryTargetWriter(String labelString) {
@@ -880,7 +871,7 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
                 "-o",
                 Iterables.getOnlyElement(archiveAction.getOutputs()).getExecPathString()));
     assertThat(baseArtifactNames(archiveAction.getInputs()))
-        .containsAtLeast("a.o", "b.o", "lib-archive.objlist", CROSSTOOL_LINK_MIDDLEMAN);
+        .containsAtLeast("a.o", "b.o", "lib-archive.objlist", "ar", "libempty.a", "libtool");
     assertThat(baseArtifactNames(archiveAction.getOutputs())).containsExactly("liblib.a");
     assertRequiresDarwin(archiveAction);
   }
@@ -926,7 +917,7 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
         .setList("deps", "//objc:lib_dep")
         .write();
     ObjcProvider objcProvider = providerForTarget("//objc2:lib");
-    assertThat(objcProvider.get(CC_LIBRARY).toList()).isEmpty();
+    assertThat(objcProvider.getTransitiveCcLibraries().toList()).isEmpty();
   }
 
   @Test
@@ -1414,7 +1405,7 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
 
     Iterable<String> linkerInputArtifacts =
         Iterables.transform(
-            objcProvider.get(CC_LIBRARY).toList(),
+            objcProvider.getTransitiveCcLibraries().toList(),
             (library) -> removeConfigFragment(library.getStaticLibrary().getExecPathString()));
 
     assertThat(linkerInputArtifacts)
@@ -1445,8 +1436,8 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
     Set<SdkFramework> baseFrameworks = ImmutableSet.of(new SdkFramework("foo"));
     Set<SdkFramework> dependerFrameworks =
         ImmutableSet.of(new SdkFramework("foo"), new SdkFramework("bar"));
-    assertThat(baseProvider.get(SDK_FRAMEWORK).toList()).containsExactlyElementsIn(baseFrameworks);
-    assertThat(dependerProvider.get(SDK_FRAMEWORK).toList())
+    assertThat(baseProvider.getFrameworks().toList()).containsExactlyElementsIn(baseFrameworks);
+    assertThat(dependerProvider.getFrameworks().toList())
         .containsExactlyElementsIn(dependerFrameworks);
 
     // Make sure that the archive action does not actually include the frameworks. This is needed
@@ -2036,9 +2027,8 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
     useConfiguration("--features=parse_headers", "--process_headers_in_dependencies");
     ConfiguredTarget x =
         scratchConfiguredTarget("foo", "x", "objc_library(name = 'x', hdrs = ['x.h'])");
-    assertThat(
-            Artifact.toRootRelativePaths(
-                getOutputGroup(x, CcCompilationHelper.HIDDEN_HEADER_TOKENS)))
+    CcCompilationContext ccCompilationContext = x.get(CcInfo.PROVIDER).getCcCompilationContext();
+    assertThat(Artifact.toRootRelativePaths(ccCompilationContext.getHeaderTokens()))
         .containsExactly("foo/_objs/x/arc/x.h.processed");
   }
 
@@ -2053,9 +2043,8 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
             "x",
             "objc_library(name = 'x', deps = [':y'])",
             "objc_library(name = 'y', hdrs = ['y.h'])");
-    assertThat(
-            ActionsTestUtil.baseNamesOf(
-                getOutputGroup(x, CcCompilationHelper.HIDDEN_HEADER_TOKENS)))
+    CcCompilationContext ccCompilationContext = x.get(CcInfo.PROVIDER).getCcCompilationContext();
+    assertThat(ActionsTestUtil.baseNamesOf(ccCompilationContext.getHeaderTokens()))
         .isEqualTo("y.h.processed");
     assertThat(ActionsTestUtil.baseNamesOf(getOutputGroup(x, OutputGroupInfo.HIDDEN_TOP_LEVEL)))
         .isEqualTo("y.h.processed");
@@ -2236,5 +2225,32 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
     scratch.file("a/BUILD", "cc_toolchain_alias(name='alias')");
     getConfiguredTarget("//foo:starlark_lib");
     assertNoEvents();
+  }
+
+  @Test
+  public void testCcTestUsesStaticLibraries() throws Exception {
+    scratch.file(
+        "x/BUILD",
+        "cc_test(",
+        "    name = 'test',",
+        "    deps = [':foo'],",
+        ")",
+        "objc_library(",
+        "    name = 'foo',",
+        "    deps = [':bar'],",
+        ")",
+        "cc_library(",
+        "    name = 'bar',",
+        "    srcs = ['bar.a', 'bar.so'],",
+        ")");
+
+    assertThat(
+            artifactsToStrings(
+                getGeneratingAction(
+                        getConfiguredTarget("//x:test")
+                            .getProvider(FilesToRunProvider.class)
+                            .getExecutable())
+                    .getInputs()))
+        .contains("src x/bar.a");
   }
 }

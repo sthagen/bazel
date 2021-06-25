@@ -14,13 +14,13 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.auto.value.AutoValue;
 import com.google.auto.value.extension.memoized.Memoized;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
+import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -75,7 +75,21 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
 
   private LibraryToLink() {}
 
-  public abstract String getLibraryIdentifier();
+  @Nullable
+  public String getLibraryIdentifier() {
+    Artifact notNullArtifactForIdentifier = getStaticLibrary();
+    if (notNullArtifactForIdentifier == null) {
+      notNullArtifactForIdentifier = getPicStaticLibrary();
+    }
+    if (notNullArtifactForIdentifier == null) {
+      notNullArtifactForIdentifier = getDynamicLibrary();
+    }
+    if (notNullArtifactForIdentifier == null) {
+      notNullArtifactForIdentifier = getInterfaceLibrary();
+    }
+    Verify.verifyNotNull(notNullArtifactForIdentifier);
+    return CcLinkingOutputs.libraryIdentifierOf(notNullArtifactForIdentifier);
+  }
 
   @Nullable
   public abstract ImmutableList<Artifact> getObjectFiles();
@@ -263,13 +277,11 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
    * fields.
    */
   public static LibraryToLink staticOnly(Artifact staticLibrary) {
-    return StaticOnlyLibraryToLink.cache.getUnchecked(staticLibrary);
+    return StaticOnlyLibraryToLink.cache.get(staticLibrary);
   }
 
   /** Builder for {@link LibraryToLink}. */
   public interface Builder {
-
-    AutoLibraryToLink.Builder setLibraryIdentifier(String libraryIdentifier);
 
     AutoLibraryToLink.Builder setStaticLibrary(Artifact staticLibrary);
 
@@ -374,7 +386,6 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
       @Override
       public final LibraryToLink build() {
         LibraryToLink result = autoBuild();
-        Preconditions.checkNotNull(result.getLibraryIdentifier(), result);
         Preconditions.checkState(
             (result.getObjectFiles() == null
                     && result.getLtoCompilationContext() == null
@@ -413,17 +424,15 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
             && result.getPicObjectFiles() == null
             && result.getPicLtoCompilationContext() == null) {
           Artifact staticLibrary = result.getStaticLibrary();
-          String libraryIdentifier = result.getLibraryIdentifier();
 
           // Try to reuse an existing instance if possible.
           StaticOnlyLibraryToLink existing =
               StaticOnlyLibraryToLink.cache.getIfPresent(staticLibrary);
-          if (existing != null && existing.getLibraryIdentifier().equals(libraryIdentifier)) {
+          if (existing != null) {
             return existing;
           }
 
-          return new AutoValue_LibraryToLink_StaticOnlyLibraryToLink(
-              result.getLibraryIdentifier(), result.getStaticLibrary());
+          return new AutoValue_LibraryToLink_StaticOnlyLibraryToLink(result.getStaticLibrary());
         }
 
         return result;
@@ -440,19 +449,15 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
 
     // Essentially an interner, but keyed on Artifact to defer creating the string identifier.
     private static final LoadingCache<Artifact, StaticOnlyLibraryToLink> cache =
-        CacheBuilder.newBuilder()
-            .concurrencyLevel(BlazeInterners.concurrencyLevel())
+        Caffeine.newBuilder()
+            .initialCapacity(BlazeInterners.concurrencyLevel())
             // Needs to use weak keys for identity equality of the artifact. The artifact may not
             // yet have its generating action key set, but Artifact#equals treats unset and set as
             // equal. Reusing an artifact from a previous build is not safe - the generating
             // action key's index may be stale (b/184948206).
             .weakKeys()
             .weakValues()
-            .build(
-                CacheLoader.from(
-                    artifact ->
-                        new AutoValue_LibraryToLink_StaticOnlyLibraryToLink(
-                            CcLinkingOutputs.libraryIdentifierOf(artifact), artifact)));
+            .build(AutoValue_LibraryToLink_StaticOnlyLibraryToLink::new);
 
     @Override // Remove @Nullable.
     public abstract Artifact getStaticLibrary();
@@ -530,9 +535,7 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
 
     @Override
     public AutoLibraryToLink.Builder toBuilder() {
-      return builder()
-          .setStaticLibrary(getStaticLibrary())
-          .setLibraryIdentifier(getLibraryIdentifier());
+      return builder().setStaticLibrary(getStaticLibrary());
     }
 
     @Override
