@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.packages;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.BiMap;
@@ -866,7 +868,7 @@ public class Package {
     return error.withProperty(DetailedExitCode.class, createDetailedCode(error.toString(), code));
   }
 
-  public static DetailedExitCode createDetailedCode(String errorMessage, Code code) {
+  private static DetailedExitCode createDetailedCode(String errorMessage, Code code) {
     return DetailedExitCode.of(
         FailureDetail.newBuilder()
             .setMessage(errorMessage)
@@ -1034,17 +1036,13 @@ public class Package {
     }
 
     @ThreadCompatible
-    private static class ThreadCompatibleInterner<T> implements Interner<T> {
+    private static final class ThreadCompatibleInterner<T> implements Interner<T> {
       private final Map<T, T> interns = new HashMap<>();
 
       @Override
       public T intern(T sample) {
-        T t = interns.get(sample);
-        if (t != null) {
-          return t;
-        }
-        interns.put(sample, sample);
-        return sample;
+        T existing = interns.putIfAbsent(sample, sample);
+        return firstNonNull(existing, sample);
       }
     }
 
@@ -1326,7 +1324,7 @@ public class Package {
     }
 
     @Nullable
-    public FailureDetail getFailureDetail() {
+    FailureDetail getFailureDetail() {
       if (failureDetailOverride != null) {
         return failureDetailOverride;
       }
@@ -1586,7 +1584,7 @@ public class Package {
      * integrate with RuleClass.checkForDuplicateLabels.
      */
     private static boolean hasDuplicateLabels(
-        Collection<Label> labels,
+        List<Label> labels,
         String owner,
         String attrName,
         Location location,

@@ -217,6 +217,7 @@ public class StarlarkDefinedAspect implements StarlarkExportable, StarlarkAspect
     return aspectClass != null;
   }
 
+  @Override
   public Function<Rule, AspectParameters> getDefaultParametersExtractor() {
     return rule -> {
       AttributeMap ruleAttrs = RawAttributeMapper.of(rule);
@@ -341,7 +342,7 @@ public class StarlarkDefinedAspect implements StarlarkExportable, StarlarkAspect
         && Objects.equals(hostTransition, that.hostTransition)
         && Objects.equals(hostFragments, that.hostFragments)
         && Objects.equals(requiredToolchains, that.requiredToolchains)
-        && Objects.equals(useToolchainTransition, that.useToolchainTransition)
+        && useToolchainTransition == that.useToolchainTransition
         && Objects.equals(aspectClass, that.aspectClass);
   }
 

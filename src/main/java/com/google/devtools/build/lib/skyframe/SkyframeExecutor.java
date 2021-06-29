@@ -159,6 +159,7 @@ import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns;
 import com.google.devtools.build.lib.skyframe.ArtifactConflictFinder.ConflictException;
 import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
+import com.google.devtools.build.lib.skyframe.AspectValueKey.TopLevelAspectsKey;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.FileDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
 import com.google.devtools.build.lib.skyframe.MetadataConsumerForMetrics.FilesMetricConsumer;
@@ -565,7 +566,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
             new BuildViewProvider(),
             ruleClassProvider,
             shouldStoreTransitivePackagesInLoadingAndAnalysis()));
-    map.put(SkyFunctions.LOAD_STARLARK_ASPECT, new ToplevelStarlarkAspectFunction());
+    map.put(SkyFunctions.LOAD_STARLARK_ASPECT, new LoadStarlarkAspectFunction());
+    map.put(SkyFunctions.TOP_LEVEL_ASPECTS, new ToplevelStarlarkAspectFunction());
     map.put(SkyFunctions.ACTION_LOOKUP_CONFLICT_FINDING, new ActionLookupConflictFindingFunction());
     map.put(
         SkyFunctions.TOP_LEVEL_ACTION_LOOKUP_CONFLICT_FINDING,
@@ -2035,7 +2037,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
         Map<PackageValue.Key, PackageValue> buildSettingPackages =
             getBuildSettingPackages(transition, eventHandler);
         toOptions =
-            ConfigurationResolver.applyTransition(
+            ConfigurationResolver.applyTransitionWithoutSkyframe(
                     fromOptions, transition, buildSettingPackages, eventHandler)
                 .values();
       } catch (TransitionException e) {
@@ -2061,7 +2063,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
         Map<PackageValue.Key, PackageValue> buildSettingPackages =
             getBuildSettingPackages(key.getTransition(), eventHandler);
         toOptions =
-            ConfigurationResolver.applyTransition(
+            ConfigurationResolver.applyTransitionWithoutSkyframe(
                     fromOptions, key.getTransition(), buildSettingPackages, eventHandler)
                 .values();
       } catch (TransitionException e) {
@@ -2319,7 +2321,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
   EvaluationResult<ActionLookupValue> configureTargets(
       ExtendedEventHandler eventHandler,
       List<ConfiguredTargetKey> values,
-      List<AspectValueKey> aspectKeys,
+      ImmutableList<TopLevelAspectsKey> aspectKeys,
       boolean keepGoing,
       int numThreads,
       int cpuHeavySkyKeysThreadPoolSize)
@@ -3054,7 +3056,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
   }
 
   final AnalysisTraversalResult getActionLookupValuesInBuild(
-      List<ConfiguredTargetKey> topLevelCtKeys, List<AspectValueKey> aspectKeys)
+      List<ConfiguredTargetKey> topLevelCtKeys, ImmutableList<AspectKey> aspectKeys)
       throws InterruptedException {
     AnalysisTraversalResult result = new AnalysisTraversalResult();
     if (!isAnalysisIncremental()) {
@@ -3074,7 +3076,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
     for (ConfiguredTargetKey key : topLevelCtKeys) {
       findActionsRecursively(walkableGraph, key, seen, result);
     }
-    for (AspectValueKey key : aspectKeys) {
+    for (AspectKey key : aspectKeys) {
       findActionsRecursively(walkableGraph, key, seen, result);
     }
     return result;

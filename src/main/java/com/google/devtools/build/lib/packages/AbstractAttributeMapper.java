@@ -32,7 +32,7 @@ import javax.annotation.Nullable;
 public abstract class AbstractAttributeMapper implements AttributeMap {
   private final RuleClass ruleClass;
   private final Label ruleLabel;
-  protected final Rule rule;
+  final Rule rule;
 
   protected AbstractAttributeMapper(Rule rule) {
     this.ruleClass = rule.getRuleClassObject();
@@ -57,13 +57,16 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
 
   @Nullable
   @Override
-  @SuppressWarnings("unchecked")
   public <T> T get(String attributeName, Type<T> type) {
-    Object value = rule.getAttr(attributeName, type);
+    return getFromRawAttributeValue(rule.getAttr(attributeName, type), attributeName, type);
+  }
+
+  @SuppressWarnings("unchecked")
+  final <T> T getFromRawAttributeValue(Object value, String attributeName, Type<T> type) {
     if (value instanceof Attribute.ComputedDefault) {
       value = ((Attribute.ComputedDefault) value).getDefault(this);
     } else if (value instanceof Attribute.LateBoundDefault) {
-      value = ((Attribute.LateBoundDefault) value).getDefault();
+      value = ((Attribute.LateBoundDefault<?, ?>) value).getDefault();
     } else if (value instanceof SelectorList) {
       throw new IllegalArgumentException(
           String.format(
@@ -191,7 +194,7 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
   }
 
   /** Visits all labels reachable from the given attribute. */
-  protected void visitLabels(Attribute attribute, Type.LabelVisitor<Attribute> visitor) {
+  void visitLabels(Attribute attribute, Type.LabelVisitor<Attribute> visitor) {
     Type<?> type = attribute.getType();
     Object value = get(attribute.getName(), type);
     if (value != null) { // null values are particularly possible for computed defaults.
@@ -228,7 +231,7 @@ public abstract class AbstractAttributeMapper implements AttributeMap {
    * Helper routine that just checks the given attribute has the given type for this rule and throws
    * an IllegalException if not.
    */
-  protected void checkType(String attrName, Type<?> type) {
+  void checkType(String attrName, Type<?> type) {
     Integer index = ruleClass.getAttributeIndex(attrName);
     if (index == null) {
       throw new IllegalArgumentException(
