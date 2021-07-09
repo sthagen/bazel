@@ -21,6 +21,7 @@ import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.packages.Attribute.ComputationLimiter;
+import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
 import com.google.devtools.build.lib.packages.BuildType.Selector;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
@@ -69,38 +70,74 @@ public class AggregatingAttributeMapper extends AbstractAttributeMapper {
    * {@link #visitAttribute}'s documentation. So we want to avoid that code path when possible.
    */
   @Override
-  protected void visitLabels(Attribute attribute, Type.LabelVisitor<Attribute> visitor) {
-    visitLabels(attribute, true, visitor);
+  <T> void visitLabels(Attribute attribute, Type<T> type, Type.LabelVisitor visitor) {
+    visitLabels(attribute, type, /*includeSelectKeys=*/ true, visitor);
   }
 
-  private void visitLabels(
-      Attribute attribute, boolean includeSelectKeys, Type.LabelVisitor<Attribute> visitor) {
-    Type<?> type = attribute.getType();
-    SelectorList<?> selectorList = getSelectorList(attribute.getName(), type);
-    if (selectorList == null) {
-      if (type.getLabelClass().equals(LabelClass.NONE)) {
-        return; // Skip non-label attributes for performance.
-      }
-      if (getComputedDefault(attribute.getName(), attribute.getType()) != null) {
-        // Computed defaults are a special pain: we have no choice but to iterate through their
-        // (computed) values and look for labels.
-        for (Object value : visitAttribute(attribute.getName(), attribute.getType())) {
-          if (value != null) {
-            type.visitLabels(visitor, value, attribute);
-          }
+  @SuppressWarnings("unchecked")
+  private <T> void visitLabels(
+      Attribute attribute, Type<T> type, boolean includeSelectKeys, Type.LabelVisitor visitor) {
+    String name = attribute.getName();
+
+    // The only way for LabelClass.NONE to contain labels is in select keys.
+    if (type.getLabelClass() == LabelClass.NONE) {
+      if (includeSelectKeys && attribute.isConfigurable()) {
+        SelectorList<T> selectorList = getSelectorList(name, type);
+        if (selectorList != null) {
+          visitLabelsInSelect(
+              selectorList,
+              attribute,
+              type,
+              visitor,
+              /*includeKeys=*/ true,
+              /*includeValues=*/ false);
         }
-      } else {
-        super.visitLabels(attribute, visitor);
+      }
+      return;
+    }
+
+    Object rawVal = rule.getAttr(name, type);
+    if (rawVal instanceof SelectorList) {
+      visitLabelsInSelect(
+          (SelectorList<T>) rawVal,
+          attribute,
+          type,
+          visitor,
+          includeSelectKeys,
+          /*includeValues=*/ true);
+    } else if (rawVal instanceof ComputedDefault) {
+      // Computed defaults are a special pain: we have no choice but to iterate through their
+      // (computed) values and look for labels.
+      for (T value : ((ComputedDefault) rawVal).getPossibleValues(type, rule)) {
+        if (value != null) {
+          type.visitLabels(visitor, value, attribute);
+        }
       }
     } else {
-      for (Selector<?> selector : selectorList.getSelectors()) {
-        for (Map.Entry<Label, ?> selectorEntry : selector.getEntries().entrySet()) {
-          if (includeSelectKeys && !BuildType.Selector.isReservedLabel(selectorEntry.getKey())) {
-            visitor.visit(selectorEntry.getKey(), attribute);
-          }
-          Object value = selector.isValueSet(selectorEntry.getKey())
-              ? selectorEntry.getValue()
-              : attribute.getDefaultValue(null);
+      T value = getFromRawAttributeValue(rawVal, name, type);
+      if (value != null) {
+        type.visitLabels(visitor, value, attribute);
+      }
+    }
+  }
+
+  private static <T> void visitLabelsInSelect(
+      SelectorList<T> selectorList,
+      Attribute attribute,
+      Type<T> type,
+      Type.LabelVisitor visitor,
+      boolean includeKeys,
+      boolean includeValues) {
+    for (Selector<T> selector : selectorList.getSelectors()) {
+      for (Map.Entry<Label, T> selectorEntry : selector.getEntries().entrySet()) {
+        if (includeKeys && !Selector.isReservedLabel(selectorEntry.getKey())) {
+          visitor.visit(selectorEntry.getKey(), attribute);
+        }
+        if (includeValues) {
+          T value =
+              selector.isValueSet(selectorEntry.getKey())
+                  ? selectorEntry.getValue()
+                  : type.cast(attribute.getDefaultValue(null));
           type.visitLabels(visitor, value, attribute);
         }
       }
@@ -116,11 +153,10 @@ public class AggregatingAttributeMapper extends AbstractAttributeMapper {
    * @param includeSelectKeys whether to include config_setting keys for configurable attributes
    */
   public ImmutableSet<Label> getReachableLabels(String attributeName, boolean includeSelectKeys) {
+    Attribute attribute = getAttributeDefinition(attributeName);
     ImmutableSet.Builder<Label> builder = ImmutableSet.builder();
     visitLabels(
-        getAttributeDefinition(attributeName),
-        includeSelectKeys,
-        (label, attribute) -> builder.add(label));
+        attribute, attribute.getType(), includeSelectKeys, (label, attr) -> builder.add(label));
     return builder.build();
   }
 
@@ -393,108 +429,37 @@ public class AggregatingAttributeMapper extends AbstractAttributeMapper {
    * configurable attribute that's not in {@code directMap} causes an {@link
    * IllegalArgumentException} to be thrown.
    */
-  AttributeMap createMapBackedAttributeMap(final Map<String, Object> directMap) {
-    final AggregatingAttributeMapper owner = AggregatingAttributeMapper.this;
-    return new AttributeMap() {
+  AttributeMap createMapBackedAttributeMap(Map<String, Object> directMap) {
+    AggregatingAttributeMapper owner = this;
+    return new DelegatingAttributeMapper(owner) {
 
       @Override
+      @Nullable
       public <T> T get(String attributeName, Type<T> type) {
         owner.checkType(attributeName, type);
         if (getNonConfigurableAttributes().contains(attributeName)) {
           return owner.get(attributeName, type);
         }
-        if (!directMap.containsKey(attributeName)) {
-          throw new IllegalArgumentException(
-              "attribute \""
-                  + attributeName
-                  + "\" isn't available in this computed default context");
+
+        Object val = directMap.get(attributeName);
+        if (val == null) {
+          checkArgument(
+              directMap.containsKey(attributeName),
+              "attribute \"%s\" isn't available in this computed default context",
+              attributeName);
+          return null;
         }
-        return type.cast(directMap.get(attributeName));
+        return type.cast(val);
       }
 
       @Override
-      public boolean isConfigurable(String attributeName) {
-        return owner.isConfigurable(attributeName);
-      }
-
-      @Override
-      public String getName() {
-        return owner.getName();
-      }
-
-      @Override
-      public Label getLabel() {
-        return owner.getLabel();
-      }
-
-      @Override
-      public String getRuleClassName() {
-        return owner.getRuleClassName();
-      }
-
-      @Override
-      public Iterable<String> getAttributeNames() {
-        return ImmutableList.<String>builder()
+      public ImmutableList<String> getAttributeNames() {
+        List<String> nonConfigurableAttributes = getNonConfigurableAttributes();
+        return ImmutableList.<String>builderWithExpectedSize(
+                directMap.size() + nonConfigurableAttributes.size())
             .addAll(directMap.keySet())
-            .addAll(getNonConfigurableAttributes())
+            .addAll(nonConfigurableAttributes)
             .build();
-      }
-
-      @Override
-      public Collection<DepEdge> visitLabels() {
-        return owner.visitLabels();
-      }
-
-      @Override
-      public Collection<DepEdge> visitLabels(Attribute attribute) {
-        return owner.visitLabels(attribute);
-      }
-
-      @Override
-      public String getPackageDefaultHdrsCheck() {
-        return owner.getPackageDefaultHdrsCheck();
-      }
-
-      @Override
-      public Boolean getPackageDefaultTestOnly() {
-        return owner.getPackageDefaultTestOnly();
-      }
-
-      @Override
-      public String getPackageDefaultDeprecation() {
-        return owner.getPackageDefaultDeprecation();
-      }
-
-      @Override
-      public ImmutableList<String> getPackageDefaultCopts() {
-        return owner.getPackageDefaultCopts();
-      }
-
-      @Nullable
-      @Override
-      public Type<?> getAttributeType(String attrName) {
-        return owner.getAttributeType(attrName);
-      }
-
-      @Nullable
-      @Override
-      public Attribute getAttributeDefinition(String attrName) {
-        return owner.getAttributeDefinition(attrName);
-      }
-
-      @Override
-      public boolean isAttributeValueExplicitlySpecified(String attributeName) {
-        return owner.isAttributeValueExplicitlySpecified(attributeName);
-      }
-
-      @Override
-      public boolean has(String attrName) {
-        return owner.has(attrName);
-      }
-
-      @Override
-      public <T> boolean has(String attrName, Type<T> type) {
-        return owner.has(attrName, type);
       }
     };
   }

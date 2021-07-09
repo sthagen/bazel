@@ -15,10 +15,12 @@ filegroup(
 java_library(
     name = "common",
     srcs = [
+        "ArchiveRepoSpecBuilder.java",
         "ModuleKey.java",
         "RepoSpec.java",
     ],
     deps = [
+        "//src/main/java/net/starlark/java/eval",
         "//third_party:auto_value",
         "//third_party:guava",
     ],
@@ -27,12 +29,17 @@ java_library(
 java_library(
     name = "registry",
     srcs = [
+        "IndexRegistry.java",
         "Registry.java",
         "RegistryFactory.java",
+        "RegistryFactoryImpl.java",
     ],
     deps = [
         ":common",
+        "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//third_party:gson",
+        "//third_party:guava",
     ],
 )
 
@@ -76,5 +83,41 @@ java_library(
         "//third_party:auto_value",
         "//third_party:guava",
         "//third_party:jsr305",
+    ],
+)
+
+java_library(
+    name = "repo_rule_value",
+    srcs = [
+        "BzlmodRepoRuleValue.java",
+    ],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/concurrent",
+        "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party:guava",
+    ],
+)
+
+java_library(
+    name = "repo_rule_helper",
+    srcs = [
+        "BzlmodRepoRuleHelper.java",
+        "BzlmodRepoRuleHelperImpl.java",
+    ],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:common",
+        "//src/main/java/com/google/devtools/build/skyframe",
+    ],
+)
+
+java_library(
+    name = "repo_rule_creator",
+    srcs = ["BzlmodRepoRuleCreator.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/net/starlark/java/eval",
     ],
 )

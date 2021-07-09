@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.analysis.starlark;
 
 import static com.google.devtools.build.lib.analysis.BaseRuleClasses.RUN_UNDER;
+import static com.google.devtools.build.lib.analysis.BaseRuleClasses.TIMEOUT_DEFAULT;
 import static com.google.devtools.build.lib.analysis.BaseRuleClasses.getTestRuntimeLabelList;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
@@ -50,9 +51,9 @@ import com.google.devtools.build.lib.cmdline.LabelValidator;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.packages.AllowlistChecker;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate;
-import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.AttributeValueSource;
 import com.google.devtools.build.lib.packages.BazelModuleContext;
 import com.google.devtools.build.lib.packages.BazelStarlarkContext;
@@ -83,10 +84,9 @@ import com.google.devtools.build.lib.packages.StarlarkExportable;
 import com.google.devtools.build.lib.packages.StarlarkProvider;
 import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.TargetUtils;
-import com.google.devtools.build.lib.packages.TestSize;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkRuleFunctionsApi;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.Pair;
@@ -111,7 +111,6 @@ import net.starlark.java.syntax.Location;
 
 /** A helper class to provide an easier API for Starlark rule definitions. */
 public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Artifact> {
-
   // TODO(bazel-team): Copied from ConfiguredRuleClassProvider for the transition from built-in
   // rules to Starlark extensions. Using the same instance would require a large refactoring.
   // If we don't want to support old built-in rules and Starlark simultaneously
@@ -187,8 +186,8 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
         .add(
             attr("timeout", STRING)
                 .taggable()
-                .nonconfigurable("used in loading phase rule validation logic")
-                .value(timeoutAttribute))
+                .nonconfigurable("policy decision: should be consistent across configurations")
+                .value(TIMEOUT_DEFAULT))
         .add(
             attr("flaky", BOOLEAN)
                 .value(false)
@@ -254,22 +253,6 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
         .add(attr(":run_under", LABEL).value(RUN_UNDER))
         .build();
   }
-
-  @AutoCodec @AutoCodec.VisibleForSerialization
-  static final Attribute.ComputedDefault timeoutAttribute =
-      new Attribute.ComputedDefault() {
-        @Override
-        public Object getDefault(AttributeMap rule) {
-          TestSize size = TestSize.getTestSize(rule.get("size", Type.STRING));
-          if (size != null) {
-            String timeout = size.getDefaultTimeout().toString();
-            if (timeout != null) {
-              return timeout;
-            }
-          }
-          return "illegal";
-        }
-      };
 
   @Override
   public Provider provider(String doc, Object fields, StarlarkThread thread) throws EvalException {
@@ -621,6 +604,12 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
             Starlark.type(o));
       }
     }
+
+    if (applyToGeneratingRules && !requiredProvidersArg.isEmpty()) {
+      throw Starlark.errorf(
+          "An aspect cannot simultaneously have required providers and apply to generating rules.");
+    }
+
     return new StarlarkDefinedAspect(
         implementation,
         attrAspects.build(),
@@ -800,7 +789,6 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
             continue;
           }
           hasFunctionTransitionAllowlist = true;
-          builder.setHasFunctionTransitionAllowlist();
         }
 
         try {
@@ -812,16 +800,18 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
       }
       // TODO(b/121385274): remove when we stop allowlisting starlark transitions
       if (hasStarlarkDefinedTransition) {
-        if (!starlarkLabel.getRepository().getName().equals("@_builtins")
-            && !hasFunctionTransitionAllowlist) {
-          errorf(
-              handler,
-              "Use of Starlark transition without allowlist attribute"
-                  + " '_allowlist_function_transition'. See Starlark transitions documentation"
-                  + " for details and usage: %s %s",
-              builder.getRuleDefinitionEnvironmentLabel(),
-              builder.getType());
-          return;
+        if (!starlarkLabel.getRepository().getName().equals("@_builtins")) {
+          if (!hasFunctionTransitionAllowlist) {
+            errorf(
+                handler,
+                "Use of Starlark transition without allowlist attribute"
+                    + " '_allowlist_function_transition'. See Starlark transitions documentation"
+                    + " for details and usage: %s %s",
+                builder.getRuleDefinitionEnvironmentLabel(),
+                builder.getType());
+            return;
+          }
+          builder.addAllowlistChecker(FUNCTION_TRANSITION_ALLOWLIST_CHECKER);
         }
       } else {
         if (hasFunctionTransitionAllowlist) {
@@ -876,6 +866,14 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
       return true;
     }
   }
+
+  @SerializationConstant
+  static final AllowlistChecker FUNCTION_TRANSITION_ALLOWLIST_CHECKER =
+      AllowlistChecker.builder()
+          .setAllowlistAttr(FunctionSplitTransitionAllowlist.NAME)
+          .setErrorMessage("Non-allowlisted use of Starlark transition")
+          .setLocationCheck(AllowlistChecker.LocationCheck.INSTANCE_OR_DEFINITION)
+          .build();
 
   @Override
   public Label label(String labelString, Boolean relativeToCallerRepository, StarlarkThread thread)

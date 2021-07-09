@@ -341,7 +341,7 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
         }
         if (options.profilePath != null) {
           profilePath = workspace.getWorkspace().getRelative(options.profilePath);
-          out = profilePath.getOutputStream();
+          out = profilePath.getOutputStream(/* append= */ false, /* internal= */ true);
         } else {
           profileName = "command.profile";
           if (format == Format.JSON_TRACE_FILE_COMPRESSED_FORMAT) {
@@ -558,8 +558,8 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     if (declareExitCode(exitCode)) {
       CommandEnvironment localEnv = env;
       if (localEnv != null) {
-        // Give shutdown hooks priority in JVM and stop generating more data for modules to consume.
-        localEnv.getCommandThread().interrupt();
+        localEnv.notifyOnCrash(
+            productName + " is crashing: " + exitCode.getFailureDetail().getMessage());
       }
       // Only try to publish events if we won the exit code race. Otherwise someone else is already
       // exiting for us.

@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -33,6 +32,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
+import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.TestAction;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -156,7 +156,8 @@ public final class FilesystemValueCheckerTest extends FilesystemValueCheckerTest
             null,
             /*packageProgress=*/ null,
             PackageFunction.ActionOnIOExceptionReadingBuildFile.UseOriginalIOException.INSTANCE,
-            PackageFunction.IncrementalityIntent.INCREMENTAL));
+            PackageFunction.IncrementalityIntent.INCREMENTAL,
+            k -> ThreadStateReceiver.NULL_INSTANCE));
     skyFunctions.put(
         SkyFunctions.PACKAGE_LOOKUP,
         new PackageLookupFunction(
@@ -991,16 +992,20 @@ public final class FilesystemValueCheckerTest extends FilesystemValueCheckerTest
             FileValue.key(
                 RootedPath.toRootedPath(Root.fromPath(pkgRoot), PathFragment.create("foo"))));
     driver.evaluate(values, EVALUATION_OPTIONS);
+    AtomicReference<Throwable> uncaughtRef = new AtomicReference<>();
+    Thread.UncaughtExceptionHandler uncaughtExceptionHandler =
+        (t, e) -> uncaughtRef.compareAndSet(null, e);
+    Thread.setDefaultUncaughtExceptionHandler(uncaughtExceptionHandler);
     FilesystemValueChecker checker =
         new FilesystemValueChecker(
-            /* tsgm= */ null, /* lastExecutionTimeRange= */ null, FSVC_THREADS_FOR_TEST);
+            /*tsgm=*/ null, /*lastExecutionTimeRange=*/ null, FSVC_THREADS_FOR_TEST);
 
     assertEmptyDiff(getDirtyFilesystemKeys(evaluator, checker));
 
     fs.statThrowsRuntimeException = true;
-    RuntimeException e =
-        assertThrows(RuntimeException.class, () -> getDirtyFilesystemKeys(evaluator, checker));
-    assertThat(e).hasMessageThat().isEqualTo("bork");
+    getDirtyFilesystemKeys(evaluator, checker);
+    assertThat(uncaughtRef.get()).hasMessageThat().isEqualTo("bork");
+    assertThat(uncaughtRef.get()).isInstanceOf(RuntimeException.class);
   }
 
   private static void assertEmptyDiff(Diff diff) {

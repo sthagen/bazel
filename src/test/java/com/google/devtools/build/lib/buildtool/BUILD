@@ -396,7 +396,6 @@ java_test(
         "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",
-        "@com_google_testparameterinjector//:testparameterinjector",
     ],
 )
 
@@ -436,6 +435,7 @@ java_test(
 java_test(
     name = "OutputArtifactConflictTest",
     srcs = ["OutputArtifactConflictTest.java"],
+    shard_count = 3,
     tags = [
         "manual",
         "no_windows",

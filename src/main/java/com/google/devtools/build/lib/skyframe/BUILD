@@ -27,6 +27,7 @@ java_library(
         "BuildConfigurationFunction.java",
         "BuildInfoCollectionFunction.java",
         "BzlLoadFunction.java",
+        "BzlmodRepoRuleFunction.java",
         "CompletionFunction.java",
         "ConfiguredTargetFunction.java",
         "ConstraintValueLookupUtil.java",
@@ -228,6 +229,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/actions:fileset_output_symlink",
         "//src/main/java/com/google/devtools/build/lib/actions:package_roots",
+        "//src/main/java/com/google/devtools/build/lib/actions:thread_state_receiver",
         "//src/main/java/com/google/devtools/build/lib/actionsketch:action_sketch",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/parameter_file_write_action",
         "//src/main/java/com/google/devtools/build/lib/analysis:analysis_cluster",
@@ -271,6 +273,10 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:workspace_status_action",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform:utils",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:common",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:repo_rule_creator",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:repo_rule_helper",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:repo_rule_value",
         "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
@@ -421,7 +427,6 @@ java_library(
     srcs = ["ActionInputMapHelper.java"],
     deps = [
         ":action_execution_value",
-        ":aggregating_artifact_value",
         ":metadata_consumer_for_metrics",
         ":runfiles_artifact_value",
         ":tree_artifact_value",
@@ -756,8 +761,8 @@ java_library(
 )
 
 java_library(
-    name = "aggregating_artifact_value",
-    srcs = ["AggregatingArtifactValue.java"],
+    name = "runfiles_artifact_value",
+    srcs = ["RunfilesArtifactValue.java"],
     deps = [
         ":tree_artifact_value",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
@@ -789,7 +794,6 @@ java_library(
     deps = [
         ":action_execution_value",
         ":action_template_expansion_value",
-        ":aggregating_artifact_value",
         ":coverage_report_value",
         ":detailed_exceptions",
         ":metadata_consumer_for_metrics",
@@ -1230,6 +1234,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/util:detailed_exit_code",
+        "//src/main/java/net/starlark/java/syntax",
         "//src/main/protobuf:failure_details_java_proto",
         "//third_party:jsr305",
     ],
@@ -2259,19 +2264,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
-        "//third_party:guava",
-    ],
-)
-
-java_library(
-    name = "runfiles_artifact_value",
-    srcs = ["RunfilesArtifactValue.java"],
-    deps = [
-        ":aggregating_artifact_value",
-        ":tree_artifact_value",
-        "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
-        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
-        "//src/main/java/com/google/devtools/build/lib/util",
         "//third_party:guava",
     ],
 )

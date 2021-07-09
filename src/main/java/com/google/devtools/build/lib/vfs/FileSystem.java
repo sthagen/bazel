@@ -178,6 +178,15 @@ public abstract class FileSystem {
   public abstract boolean createDirectory(PathFragment path) throws IOException;
 
   /**
+   * Creates a writable directory at a given path or makes existing directory writable if it is
+   * already present. Returns whether a new directory was created.
+   *
+   * <p>This method is not atomic -- concurrent modifications for the same path will result in
+   * undefined behavior.
+   */
+  protected abstract boolean createWritableDirectory(PathFragment path) throws IOException;
+
+  /**
    * Creates all directories up to the path. See {@link Path#createDirectoryAndParents} for
    * specification.
    */
@@ -727,6 +736,16 @@ public abstract class FileSystem {
    */
   protected abstract OutputStream getOutputStream(PathFragment path, boolean append)
       throws IOException;
+
+  /**
+   * Creates an OutputStream accessing the file denoted by path.
+   *
+   * @param append whether to open the output stream in append mode
+   * @param internal whether the file is a Bazel internal file
+   * @throws IOException if there was an error opening the file for writing
+   */
+  protected abstract OutputStream getOutputStream(
+      PathFragment path, boolean append, boolean internal) throws IOException;
 
   /**
    * Renames the file denoted by "sourceNode" to the location "targetNode". See {@link

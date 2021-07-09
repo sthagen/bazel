@@ -243,7 +243,7 @@ public final class AspectDefinition {
       Aspect aspect,
       DependencyFilter dependencyFilter,
       BiConsumer<Attribute, Label> consumer) {
-    LabelVisitor<Attribute> labelVisitor =
+    LabelVisitor labelVisitor =
         (label, aspectAttribute) -> {
           Label repositoryRelativeLabel = maybeGetRepositoryRelativeLabel(from, label);
           if (repositoryRelativeLabel == null) {
@@ -252,15 +252,20 @@ public final class AspectDefinition {
           consumer.accept(aspectAttribute, repositoryRelativeLabel);
         };
     for (Attribute aspectAttribute : aspect.getDefinition().attributes.values()) {
-      if (!dependencyFilter.apply(aspect, aspectAttribute)) {
+      if (!dependencyFilter.test(aspect, aspectAttribute)) {
         continue;
       }
       Type<?> type = aspectAttribute.getType();
       if (type.getLabelClass() != LabelClass.DEPENDENCY) {
         continue;
       }
-      type.visitLabels(labelVisitor, aspectAttribute.getDefaultValue(from), aspectAttribute);
+      visitSingleAttribute(from, aspectAttribute, aspectAttribute.getType(), labelVisitor);
     }
+  }
+
+  private static <T> void visitSingleAttribute(
+      Rule from, Attribute attribute, Type<T> type, LabelVisitor labelVisitor) {
+    type.visitLabels(labelVisitor, type.cast(attribute.getDefaultValue(from)), attribute);
   }
 
   public static Builder builder(AspectClass aspectClass) {

@@ -57,6 +57,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.MiddlemanType;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
+import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics.MissDetail;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics.MissReason;
@@ -79,7 +80,6 @@ import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue;
 import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.ActionTemplateExpansionKey;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
-import com.google.devtools.build.lib.testing.actions.ArtifactExpanderHelper;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.ResourceUsage;
@@ -139,8 +139,7 @@ public final class ActionsTestUtil {
       ActionKeyContext actionKeyContext,
       FileOutErr fileOutErr,
       Path execRoot,
-      MetadataHandler metadataHandler,
-      @Nullable ActionGraph actionGraph) {
+      MetadataHandler metadataHandler) {
     return createContext(
         executor,
         eventHandler,
@@ -148,8 +147,7 @@ public final class ActionsTestUtil {
         fileOutErr,
         execRoot,
         metadataHandler,
-        ImmutableMap.of(),
-        actionGraph);
+        /*clientEnv=*/ ImmutableMap.of());
   }
 
   public static ActionExecutionContext createContext(
@@ -159,8 +157,7 @@ public final class ActionsTestUtil {
       FileOutErr fileOutErr,
       Path execRoot,
       MetadataHandler metadataHandler,
-      Map<String, String> clientEnv,
-      @Nullable ActionGraph actionGraph) {
+      Map<String, String> clientEnv) {
     return new ActionExecutionContext(
         executor,
         new SingleBuildFileCache(execRoot.getPathString(), execRoot.getFileSystem()),
@@ -173,13 +170,12 @@ public final class ActionsTestUtil {
         eventHandler,
         ImmutableMap.copyOf(clientEnv),
         /*topLevelFilesets=*/ ImmutableMap.of(),
-        actionGraph == null
-            ? (artifact, output) -> {}
-            : ArtifactExpanderHelper.actionGraphArtifactExpander(actionGraph),
+        (artifact, output) -> {},
         /*actionFileSystem=*/ null,
         /*skyframeDepsResult=*/ null,
         NestedSetExpander.DEFAULT,
-        UnixGlob.DEFAULT_SYSCALLS);
+        UnixGlob.DEFAULT_SYSCALLS,
+        ThreadStateReceiver.NULL_INSTANCE);
   }
 
   public static ActionExecutionContext createContext(ExtendedEventHandler eventHandler) {
@@ -200,7 +196,8 @@ public final class ActionsTestUtil {
         /*actionFileSystem=*/ null,
         /*skyframeDepsResult=*/ null,
         NestedSetExpander.DEFAULT,
-        UnixGlob.DEFAULT_SYSCALLS);
+        UnixGlob.DEFAULT_SYSCALLS,
+        ThreadStateReceiver.NULL_INSTANCE);
   }
 
   public static ActionExecutionContext createContextForInputDiscovery(
@@ -226,7 +223,8 @@ public final class ActionsTestUtil {
         new BlockingSkyFunctionEnvironment(buildDriver, eventHandler),
         /*actionFileSystem=*/ null,
         nestedSetExpander,
-        UnixGlob.DEFAULT_SYSCALLS);
+        UnixGlob.DEFAULT_SYSCALLS,
+        ThreadStateReceiver.NULL_INSTANCE);
   }
 
   public static Artifact createArtifact(ArtifactRoot root, Path path) {
@@ -513,7 +511,8 @@ public final class ActionsTestUtil {
 
     @Override
     public MiddlemanType getActionType() {
-      return middleman ? MiddlemanType.AGGREGATING_MIDDLEMAN : super.getActionType();
+      // RUNFILES_MIDDLEMAN is chosen arbitrarily among the middleman types.
+      return middleman ? MiddlemanType.RUNFILES_MIDDLEMAN : super.getActionType();
     }
 
     @Override

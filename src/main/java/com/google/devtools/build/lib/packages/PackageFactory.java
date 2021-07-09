@@ -21,6 +21,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
+import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -440,7 +441,7 @@ public final class PackageFactory {
     }
   }
 
-  @VisibleForTesting // exposed to WorkspaceFileFunction
+  @VisibleForTesting // exposed to WorkspaceFileFunction and BzlmodRepoRuleFunction
   public Package.Builder newExternalPackageBuilder(
       RootedPath workspacePath, String workspaceName, StarlarkSemantics starlarkSemantics) {
     return Package.newExternalPackageBuilder(
@@ -470,7 +471,8 @@ public final class PackageFactory {
       Path packageDirectory,
       PackageIdentifier packageId,
       ImmutableSet<PathFragment> ignoredGlobPrefixes,
-      CachingPackageLocator locator) {
+      CachingPackageLocator locator,
+      ThreadStateReceiver threadStateReceiverForMetrics) {
     return new NonSkyframeGlobber(
         new GlobCache(
             packageDirectory,
@@ -479,7 +481,8 @@ public final class PackageFactory {
             locator,
             syscalls,
             executor,
-            maxDirectoriesToEagerlyVisitInGlobbing));
+            maxDirectoriesToEagerlyVisitInGlobbing,
+            threadStateReceiverForMetrics));
   }
 
   /**

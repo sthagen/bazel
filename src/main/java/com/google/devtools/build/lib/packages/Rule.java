@@ -23,7 +23,6 @@ import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.LinkedHashMultimap;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -36,7 +35,7 @@ import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.StarlarkImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.packages.Package.ConfigSettingVisibilityPolicy;
-import com.google.devtools.build.lib.util.BinaryPredicate;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -396,7 +395,8 @@ public class Rule implements Target, DependencyFilter.AttributeInfoProvider {
     return attributes;
   }
 
-  /********************************************************************
+  /*
+   *******************************************************************
    * Attribute accessor functions.
    *
    * The below provide access to attribute definitions and other generic
@@ -406,11 +406,12 @@ public class Rule implements Target, DependencyFilter.AttributeInfoProvider {
    * X for Rule Y?"), go through {@link RuleContext#attributes}. If no
    * RuleContext is available, create a localized {@link AbstractAttributeMapper}
    * instance instead.
-   ********************************************************************/
+   *******************************************************************
+   */
 
   /**
-   * Returns the default value for the attribute {@code attrName}, which may be
-   * of any type, but must exist (an exception is thrown otherwise).
+   * Returns the default value for the attribute {@code attrName}, which may be of any type, but
+   * must exist (an exception is thrown otherwise).
    */
   public Object getAttrDefaultValue(String attrName) {
     Object defaultValue = ruleClass.getAttributeByName(attrName).getDefaultValue(this);
@@ -589,50 +590,44 @@ public class Rule implements Target, DependencyFilter.AttributeInfoProvider {
     return false;
   }
 
-  /** Returns a new List instance containing all direct dependencies (all types). */
-  public Collection<Label> getLabels() {
-    final List<Label> labels = Lists.newArrayList();
-    AggregatingAttributeMapper.of(this)
-        .visitLabels()
-        .stream()
-        .map(AttributeMap.DepEdge::getLabel)
-        .forEach(labels::add);
+  /** Returns a new list containing all direct dependencies (all types). */
+  public List<Label> getLabels() {
+    List<Label> labels = new ArrayList<>();
+    AggregatingAttributeMapper.of(this).visitAllLabels((attribute, label) -> labels.add(label));
     return labels;
   }
 
   /**
-   * Returns a new Collection containing all Labels that match a given Predicate, not including
-   * outputs.
+   * Returns a sorted set containing all labels that match a given {@link DependencyFilter}, not
+   * including outputs.
    *
-   * @param predicate A binary predicate that determines if a label should be included in the
-   *     result. The predicate is evaluated with this rule and the attribute that contains the
-   *     label. The label will be contained in the result iff (the predicate returned {@code true}
-   *     and the labels are not outputs)
+   * @param filter A dependency filter that determines whether a label should be included in the
+   *     result. {@link DependencyFilter#test} is called with this rule and the attribute that
+   *     contains the label. The label will be contained in the result iff the predicate returns
+   *     {@code true} <em>and</em> the label is not an output.
    */
-  public Collection<Label> getLabels(BinaryPredicate<? super Rule, Attribute> predicate) {
-    return ImmutableSortedSet.copyOf(getTransitions(predicate).values());
+  public ImmutableSortedSet<Label> getSortedLabels(DependencyFilter filter) {
+    ImmutableSortedSet.Builder<Label> labels = ImmutableSortedSet.naturalOrder();
+    AggregatingAttributeMapper.of(this)
+        .visitLabels(filter, (attribute, label) -> labels.add(label));
+    return labels.build();
   }
 
   /**
-   * Returns a new Multimap containing all attributes that match a given Predicate and corresponding
-   * labels, not including outputs.
+   * Returns a {@link Multimap} containing all non-output labels matching a given {@link
+   * DependencyFilter}, keyed by the corresponding attribute.
    *
-   * @param predicate A binary predicate that determines if a label should be included in the
-   *     result. The predicate is evaluated with this rule and the attribute that contains the
-   *     label. The label will be contained in the result iff (the predicate returned {@code true}
-   *     and the labels are not outputs)
+   * <p>Labels that appear in multiple attributes will be mapped from each of their corresponding
+   * attributes, provided they pass the {@link DependencyFilter}.
+   *
+   * @param filter A dependency filter that determines whether a label should be included in the
+   *     result. {@link DependencyFilter#test} is called with this rule and the attribute that
+   *     contains the label. The label will be contained in the result iff the predicate returns
+   *     {@code true} <em>and</em> the label is not an output.
    */
-  public Multimap<Attribute, Label> getTransitions(
-      final BinaryPredicate<? super Rule, Attribute> predicate) {
-    final Multimap<Attribute, Label> transitions = HashMultimap.create();
-    // TODO(bazel-team): move this to AttributeMap, too. Just like visitLabels, which labels should
-    // be visited may depend on the calling context. We shouldn't implicitly decide this for
-    // the caller.
-    AggregatingAttributeMapper.of(this)
-        .visitLabels()
-        .stream()
-        .filter(depEdge -> predicate.apply(Rule.this, depEdge.getAttribute()))
-        .forEach(depEdge -> transitions.put(depEdge.getAttribute(), depEdge.getLabel()));
+  public Multimap<Attribute, Label> getTransitions(DependencyFilter filter) {
+    Multimap<Attribute, Label> transitions = HashMultimap.create();
+    AggregatingAttributeMapper.of(this).visitLabels(filter, transitions::put);
     return transitions;
   }
 

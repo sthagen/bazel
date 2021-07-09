@@ -2524,6 +2524,19 @@ public final class StarlarkRuleClassFunctionsTest extends BuildViewTestCase {
   }
 
   @Test
+  public void aspectRequiredProvidersNotAllowedWithApplyToGeneratingRules() throws Exception {
+    ev.checkEvalErrorContains(
+        "An aspect cannot simultaneously have required providers and apply to generating rules.",
+        "prov = provider()",
+        "def _impl(target, ctx):",
+        "   pass",
+        "my_aspect = aspect(_impl,",
+        "   required_providers = [prov],",
+        "   apply_to_generating_rules = True",
+        ")");
+  }
+
+  @Test
   public void aspectRequiredProvidersSingle() throws Exception {
     evalAndExport(
         ev,
@@ -2838,8 +2851,6 @@ public final class StarlarkRuleClassFunctionsTest extends BuildViewTestCase {
 
   @Test
   public void testRuleAddExecGroup() throws Exception {
-    setBuildLanguageOptions("--experimental_exec_groups=true");
-
     registerDummyStarlarkFunction();
     scratch.file("test/BUILD", "toolchain_type(name = 'my_toolchain_type')");
     evalAndExport(
@@ -2900,8 +2911,6 @@ public final class StarlarkRuleClassFunctionsTest extends BuildViewTestCase {
 
   @Test
   public void testCreateExecGroup() throws Exception {
-    setBuildLanguageOptions("--experimental_exec_groups=true");
-
     scratch.file("test/BUILD", "toolchain_type(name = 'my_toolchain_type')");
     evalAndExport(
         ev,
