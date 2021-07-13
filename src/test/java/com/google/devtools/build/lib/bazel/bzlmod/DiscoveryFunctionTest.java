@@ -16,6 +16,7 @@
 package com.google.devtools.build.lib.bazel.bzlmod;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.createModuleKey;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
@@ -123,12 +124,12 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
+                createModuleKey("B", "1.0"),
                 "module(name='B', version='1.0');bazel_dep(name='D',version='3.0')")
             .addModule(
-                ModuleKey.create("C", "2.0"),
+                createModuleKey("C", "2.0"),
                 "module(name='C', version='2.0');bazel_dep(name='D',version='3.0')")
-            .addModule(ModuleKey.create("D", "3.0"), "module(name='D', version='3.0')");
+            .addModule(createModuleKey("D", "3.0"), "module(name='D', version='3.0')");
     ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
 
     EvaluationResult<DiscoveryValue> result =
@@ -140,30 +141,33 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
     assertThat(discoveryValue.getRootModuleName()).isEqualTo("A");
     assertThat(discoveryValue.getDepGraph())
         .containsExactly(
-            ModuleKey.create("A", ""),
+            createModuleKey("A", ""),
             Module.builder()
                 .setName("A")
-                .setVersion("0.1")
-                .addDep("B", ModuleKey.create("B", "1.0"))
-                .addDep("C", ModuleKey.create("C", "2.0"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("B", createModuleKey("B", "1.0"))
+                .addDep("C", createModuleKey("C", "2.0"))
                 .build(),
-            ModuleKey.create("B", "1.0"),
+            createModuleKey("B", "1.0"),
             Module.builder()
                 .setName("B")
-                .setVersion("1.0")
-                .addDep("D", ModuleKey.create("D", "3.0"))
+                .setVersion(Version.parse("1.0"))
+                .addDep("D", createModuleKey("D", "3.0"))
                 .setRegistry(registry)
                 .build(),
-            ModuleKey.create("C", "2.0"),
+            createModuleKey("C", "2.0"),
             Module.builder()
                 .setName("C")
-                .setVersion("2.0")
-                .addDep("D", ModuleKey.create("D", "3.0"))
+                .setVersion(Version.parse("2.0"))
+                .addDep("D", createModuleKey("D", "3.0"))
                 .setRegistry(registry)
                 .build(),
-            ModuleKey.create("D", "3.0"),
-            Module.builder().setName("D").setVersion("3.0").setRegistry(registry).build());
-    assertThat(discoveryValue.getOverrides()).isEmpty();
+            createModuleKey("D", "3.0"),
+            Module.builder()
+                .setName("D")
+                .setVersion(Version.parse("3.0"))
+                .setRegistry(registry)
+                .build());
   }
 
   @Test
@@ -176,10 +180,10 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
+                createModuleKey("B", "1.0"),
                 "module(name='B', version='1.0');bazel_dep(name='C',version='2.0')")
             .addModule(
-                ModuleKey.create("C", "2.0"),
+                createModuleKey("C", "2.0"),
                 "module(name='C', version='2.0');bazel_dep(name='B',version='1.0')");
     ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
 
@@ -192,27 +196,26 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
     assertThat(discoveryValue.getRootModuleName()).isEqualTo("A");
     assertThat(discoveryValue.getDepGraph())
         .containsExactly(
-            ModuleKey.create("A", ""),
+            createModuleKey("A", ""),
             Module.builder()
                 .setName("A")
-                .setVersion("0.1")
-                .addDep("B", ModuleKey.create("B", "1.0"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("B", createModuleKey("B", "1.0"))
                 .build(),
-            ModuleKey.create("B", "1.0"),
+            createModuleKey("B", "1.0"),
             Module.builder()
                 .setName("B")
-                .setVersion("1.0")
-                .addDep("C", ModuleKey.create("C", "2.0"))
+                .setVersion(Version.parse("1.0"))
+                .addDep("C", createModuleKey("C", "2.0"))
                 .setRegistry(registry)
                 .build(),
-            ModuleKey.create("C", "2.0"),
+            createModuleKey("C", "2.0"),
             Module.builder()
                 .setName("C")
-                .setVersion("2.0")
-                .addDep("B", ModuleKey.create("B", "1.0"))
+                .setVersion(Version.parse("2.0"))
+                .addDep("B", createModuleKey("B", "1.0"))
                 .setRegistry(registry)
                 .build());
-    assertThat(discoveryValue.getOverrides()).isEmpty();
   }
 
   @Test
@@ -225,9 +228,9 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
+                createModuleKey("B", "1.0"),
                 "module(name='B', version='1.0');bazel_dep(name='A',version='2.0')")
-            .addModule(ModuleKey.create("A", "2.0"), "module(name='A', version='2.0')");
+            .addModule(createModuleKey("A", "2.0"), "module(name='A', version='2.0')");
     ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
 
     EvaluationResult<DiscoveryValue> result =
@@ -239,20 +242,19 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
     assertThat(discoveryValue.getRootModuleName()).isEqualTo("A");
     assertThat(discoveryValue.getDepGraph())
         .containsExactly(
-            ModuleKey.create("A", ""),
+            createModuleKey("A", ""),
             Module.builder()
                 .setName("A")
-                .setVersion("0.1")
-                .addDep("B", ModuleKey.create("B", "1.0"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("B", createModuleKey("B", "1.0"))
                 .build(),
-            ModuleKey.create("B", "1.0"),
+            createModuleKey("B", "1.0"),
             Module.builder()
                 .setName("B")
-                .setVersion("1.0")
-                .addDep("A", ModuleKey.create("A", ""))
+                .setVersion(Version.parse("1.0"))
+                .addDep("A", createModuleKey("A", ""))
                 .setRegistry(registry)
                 .build());
-    assertThat(discoveryValue.getOverrides()).isEmpty();
   }
 
   @Test
@@ -266,10 +268,10 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "0.1"),
+                createModuleKey("B", "0.1"),
                 "module(name='B', version='0.1');bazel_dep(name='C',version='1.0')")
-            .addModule(ModuleKey.create("C", "1.0"), "module(name='C', version='1.0');")
-            .addModule(ModuleKey.create("C", "2.0"), "module(name='C', version='2.0');");
+            .addModule(createModuleKey("C", "1.0"), "module(name='C', version='1.0');")
+            .addModule(createModuleKey("C", "2.0"), "module(name='C', version='2.0');");
     ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
 
     EvaluationResult<DiscoveryValue> result =
@@ -281,23 +283,25 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
     assertThat(discoveryValue.getRootModuleName()).isEqualTo("A");
     assertThat(discoveryValue.getDepGraph())
         .containsExactly(
-            ModuleKey.create("A", ""),
+            createModuleKey("A", ""),
             Module.builder()
                 .setName("A")
-                .setVersion("0.1")
-                .addDep("B", ModuleKey.create("B", "0.1"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("B", createModuleKey("B", "0.1"))
                 .build(),
-            ModuleKey.create("B", "0.1"),
+            createModuleKey("B", "0.1"),
             Module.builder()
                 .setName("B")
-                .setVersion("0.1")
-                .addDep("C", ModuleKey.create("C", "2.0"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("C", createModuleKey("C", "2.0"))
                 .setRegistry(registry)
                 .build(),
-            ModuleKey.create("C", "2.0"),
-            Module.builder().setName("C").setVersion("2.0").setRegistry(registry).build());
-    assertThat(discoveryValue.getOverrides())
-        .containsExactly("C", SingleVersionOverride.create("2.0", "", ImmutableList.of(), 0));
+            createModuleKey("C", "2.0"),
+            Module.builder()
+                .setName("C")
+                .setVersion(Version.parse("2.0"))
+                .setRegistry(registry)
+                .build());
   }
 
   @Test
@@ -306,14 +310,14 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "0.1"),
+                createModuleKey("B", "0.1"),
                 "module(name='B', version='0.1');bazel_dep(name='C',version='1.0')")
-            .addModule(ModuleKey.create("C", "1.0"), "module(name='C', version='1.0');");
+            .addModule(createModuleKey("C", "1.0"), "module(name='C', version='1.0');");
     FakeRegistry registry2 =
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("C", "1.0"),
+                createModuleKey("C", "1.0"),
                 "module(name='C', version='1.0');bazel_dep(name='B',version='0.1')");
     scratch.file(
         workspaceRoot.getRelative("MODULE.bazel").getPathString(),
@@ -331,29 +335,26 @@ public class DiscoveryFunctionTest extends FoundationTestCase {
     assertThat(discoveryValue.getRootModuleName()).isEqualTo("A");
     assertThat(discoveryValue.getDepGraph())
         .containsExactly(
-            ModuleKey.create("A", ""),
+            createModuleKey("A", ""),
             Module.builder()
                 .setName("A")
-                .setVersion("0.1")
-                .addDep("B", ModuleKey.create("B", "0.1"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("B", createModuleKey("B", "0.1"))
                 .build(),
-            ModuleKey.create("B", "0.1"),
+            createModuleKey("B", "0.1"),
             Module.builder()
                 .setName("B")
-                .setVersion("0.1")
-                .addDep("C", ModuleKey.create("C", "1.0"))
+                .setVersion(Version.parse("0.1"))
+                .addDep("C", createModuleKey("C", "1.0"))
                 .setRegistry(registry1)
                 .build(),
-            ModuleKey.create("C", "1.0"),
+            createModuleKey("C", "1.0"),
             Module.builder()
                 .setName("C")
-                .setVersion("1.0")
-                .addDep("B", ModuleKey.create("B", "0.1"))
+                .setVersion(Version.parse("1.0"))
+                .addDep("B", createModuleKey("B", "0.1"))
                 .setRegistry(registry2)
                 .build());
-    assertThat(discoveryValue.getOverrides())
-        .containsExactly(
-            "C", SingleVersionOverride.create("", registry2.getUrl(), ImmutableList.of(), 0));
   }
 
   // TODO(wyv): test local path override

@@ -16,6 +16,7 @@
 package com.google.devtools.build.lib.bazel.bzlmod;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.createModuleKey;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
@@ -113,7 +114,7 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
   public void testRootModule() throws Exception {
     scratch.file(
         rootDirectory.getRelative("MODULE.bazel").getPathString(),
-        "module(name='A',version='0.1')",
+        "module(name='A',version='0.1',compatibility_level=4)",
         "bazel_dep(name='B',version='1.0')",
         "bazel_dep(name='C',version='2.0',repo_name='see')",
         "single_version_override(module_name='D',version='18')",
@@ -131,13 +132,14 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         .isEqualTo(
             Module.builder()
                 .setName("A")
-                .setVersion("0.1")
-                .addDep("B", ModuleKey.create("B", "1.0"))
-                .addDep("see", ModuleKey.create("C", "2.0"))
+                .setVersion(Version.parse("0.1"))
+                .setCompatibilityLevel(4)
+                .addDep("B", createModuleKey("B", "1.0"))
+                .addDep("see", createModuleKey("C", "2.0"))
                 .build());
     assertThat(moduleFileValue.getOverrides())
         .containsExactly(
-            "D", SingleVersionOverride.create("18", "", ImmutableList.of(), 0),
+            "D", SingleVersionOverride.create(Version.parse("18"), "", ImmutableList.of(), 0),
             "E", LocalPathOverride.create("somewhere/else"));
   }
 
@@ -165,18 +167,18 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
+                createModuleKey("B", "1.0"),
                 "module(name='B',version='1.0');bazel_dep(name='C',version='2.0')");
     FakeRegistry registry3 =
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
+                createModuleKey("B", "1.0"),
                 "module(name='B',version='1.0');bazel_dep(name='D',version='3.0')");
     ModuleFileFunction.REGISTRIES.set(
         differencer, ImmutableList.of(registry1.getUrl(), registry2.getUrl(), registry3.getUrl()));
 
-    SkyKey skyKey = ModuleFileValue.key(ModuleKey.create("B", "1.0"), null);
+    SkyKey skyKey = ModuleFileValue.key(createModuleKey("B", "1.0"), null);
     EvaluationResult<ModuleFileValue> result =
         driver.evaluate(ImmutableList.of(skyKey), evaluationContext);
     if (result.hasError()) {
@@ -187,8 +189,8 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         .isEqualTo(
             Module.builder()
                 .setName("B")
-                .setVersion("1.0")
-                .addDep("C", ModuleKey.create("C", "2.0"))
+                .setVersion(Version.parse("1.0"))
+                .addDep("C", createModuleKey("C", "2.0"))
                 .setRegistry(registry2)
                 .build());
   }
@@ -201,21 +203,23 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
-                "module(name='B',version='1.0');bazel_dep(name='C',version='2.0')");
+                createModuleKey("B", "1.0"),
+                "module(name='B',version='1.0',compatibility_level=4)\n"
+                    + "bazel_dep(name='C',version='2.0')");
     FakeRegistry registry2 =
         registryFactory
             .newFakeRegistry()
             .addModule(
-                ModuleKey.create("B", "1.0"),
-                "module(name='B',version='1.0');bazel_dep(name='C',version='3.0')");
+                createModuleKey("B", "1.0"),
+                "module(name='B',version='1.0',compatibility_level=6)\n"
+                    + "bazel_dep(name='C',version='3.0')");
     ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry1.getUrl()));
 
     // Override the registry for B to be registry2 (instead of the default registry1).
     SkyKey skyKey =
         ModuleFileValue.key(
-            ModuleKey.create("B", "1.0"),
-            SingleVersionOverride.create("", registry2.getUrl(), ImmutableList.of(), 0));
+            createModuleKey("B", "1.0"),
+            SingleVersionOverride.create(Version.EMPTY, registry2.getUrl(), ImmutableList.of(), 0));
     EvaluationResult<ModuleFileValue> result =
         driver.evaluate(ImmutableList.of(skyKey), evaluationContext);
     if (result.hasError()) {
@@ -226,8 +230,9 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         .isEqualTo(
             Module.builder()
                 .setName("B")
-                .setVersion("1.0")
-                .addDep("C", ModuleKey.create("C", "3.0"))
+                .setVersion(Version.parse("1.0"))
+                .setCompatibilityLevel(6)
+                .addDep("C", createModuleKey("C", "3.0"))
                 .setRegistry(registry2)
                 .build());
   }

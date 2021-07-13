@@ -11,15 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
 
 package com.google.devtools.build.lib.bazel.bzlmod;
 
-import com.google.devtools.build.skyframe.SkyFunction.Environment;
-import java.io.IOException;
-import java.util.Optional;
+/** Utilities for bzlmod tests. */
+public final class BzlmodTestUtil {
+  private BzlmodTestUtil() {}
 
-/** A helper to get {@link RepoSpec} for Bzlmod generated repositories. */
-public interface BzlmodRepoRuleHelper {
-  Optional<RepoSpec> getRepoSpec(Environment env, String repositoryName)
-      throws InterruptedException, IOException;
+  /** Simple wrapper around {@link ModuleKey#create} that takes a string version. */
+  public static ModuleKey createModuleKey(String name, String version)
+      throws Version.ParseException {
+    return ModuleKey.create(name, Version.parse(version));
+  }
 }

@@ -43,7 +43,7 @@ public class DiscoveryFunction implements SkyFunction {
     if (root == null) {
       return null;
     }
-    ModuleKey rootModuleKey = ModuleKey.create(root.getModule().getName(), "");
+    ModuleKey rootModuleKey = ModuleKey.create(root.getModule().getName(), Version.EMPTY);
     ImmutableMap<String, ModuleOverride> overrides = root.getOverrides();
     Map<ModuleKey, Module> depGraph = new HashMap<>();
     depGraph.put(
@@ -79,21 +79,20 @@ public class DiscoveryFunction implements SkyFunction {
     if (env.valuesMissing()) {
       return null;
     }
-    return DiscoveryValue.create(
-        root.getModule().getName(), ImmutableMap.copyOf(depGraph), overrides);
+    return DiscoveryValue.create(root.getModule().getName(), ImmutableMap.copyOf(depGraph));
   }
 
   private static Module rewriteDepKeys(
       Module module, ImmutableMap<String, ModuleOverride> overrides, String rootModuleName) {
     return module.withDepKeysTransformed(
         depKey -> {
-          String newVersion = depKey.getVersion();
+          Version newVersion = depKey.getVersion();
 
           @Nullable ModuleOverride override = overrides.get(depKey.getName());
           if (override instanceof NonRegistryOverride || rootModuleName.equals(depKey.getName())) {
-            newVersion = "";
+            newVersion = Version.EMPTY;
           } else if (override instanceof SingleVersionOverride) {
-            String overrideVersion = ((SingleVersionOverride) override).getVersion();
+            Version overrideVersion = ((SingleVersionOverride) override).getVersion();
             if (!overrideVersion.isEmpty()) {
               newVersion = overrideVersion;
             }

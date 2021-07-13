@@ -18,11 +18,13 @@ java_library(
         "ArchiveRepoSpecBuilder.java",
         "ModuleKey.java",
         "RepoSpec.java",
+        "Version.java",
     ],
     deps = [
         "//src/main/java/net/starlark/java/eval",
         "//third_party:auto_value",
         "//third_party:guava",
+        "//third_party:jsr305",
     ],
 )
 
@@ -57,7 +59,6 @@ java_library(
         "ModuleFileValue.java",
         "ModuleOverride.java",
         "NonRegistryOverride.java",
-        "ParsedVersion.java",
         "RegistryOverride.java",
         "SelectionFunction.java",
         "SelectionValue.java",
@@ -107,8 +108,12 @@ java_library(
         "BzlmodRepoRuleHelperImpl.java",
     ],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:common",
+        ":common",
+        ":registry",
+        ":resolution",
+        "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/skyframe",
+        "//third_party:guava",
     ],
 )
 

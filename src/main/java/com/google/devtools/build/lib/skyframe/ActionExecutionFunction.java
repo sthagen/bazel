@@ -30,6 +30,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.MultimapBuilder;
+import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionCacheChecker.Token;
 import com.google.devtools.build.lib.actions.ActionCompletionEvent;
@@ -113,6 +114,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -977,11 +979,7 @@ public class ActionExecutionFunction implements SkyFunction {
       if (retrievedMetadata instanceof TreeArtifactValue) {
         TreeArtifactValue treeValue = (TreeArtifactValue) retrievedMetadata;
         expandedArtifacts.put(input, treeValue.getChildren());
-        for (Map.Entry<Artifact.TreeFileArtifact, FileArtifactValue> child :
-            treeValue.getChildValues().entrySet()) {
-          inputData.putWithNoDepOwner(child.getKey(), child.getValue());
-        }
-        inputData.putWithNoDepOwner(input, treeValue.getMetadata());
+        inputData.putTreeArtifact((SpecialArtifact) input, treeValue, /*depOwner=*/ null);
         treeValue
             .getArchivedRepresentation()
             .ifPresent(
@@ -1099,7 +1097,7 @@ public class ActionExecutionFunction implements SkyFunction {
         inputDeps,
         allInputs,
         requestedSkyKeys,
-        ActionInputMap::new,
+        sizeHint -> new ActionInputMap(bugReporter, sizeHint),
         CheckInputResults::new,
         /*allowValuesMissingEarlyReturn=*/ true,
         actionLookupDataForError);
@@ -1233,11 +1231,44 @@ public class ActionExecutionFunction implements SkyFunction {
       SkyValue value = ArtifactNestedSetFunction.getInstance().getValueForKey(Artifact.key(input));
       if (value == null) {
         if (isMandatoryInput.test(input)) {
-          BugReport.sendBugReport(
-              new IllegalStateException(
-                  String.format(
-                      "Null value for mandatory %s with no errors or values missing: %s %s",
-                      input.toDebugString(), actionLookupDataForError, action.prettyPrint())));
+          StringBuilder errorMessage = new StringBuilder();
+          NestedSet<Artifact> nestedInputs = action.getInputs();
+          ImmutableSet<Artifact> inputs = nestedInputs.toSet();
+          if (action.discoversInputs()) {
+            errorMessage.append("\nAction discovers inputs");
+          } else {
+            errorMessage.append("\nAction does not discover inputs");
+          }
+          if (action.getOutputs().contains(input)) {
+            errorMessage.append("\nInput is an *output* of action");
+          }
+          if (inputs.contains(input)) {
+            errorMessage.append("\nInput is an input of action, bottom-up path:\n");
+            if (!findPathToKey(
+                nestedInputs,
+                input,
+                n -> {
+                  ImmutableList<Artifact> artifacts = n.toList();
+                  errorMessage
+                      .append("  ")
+                      .append(artifacts.size())
+                      .append(", ")
+                      .append(Iterables.limit(artifacts, 10))
+                      .append('\n');
+                },
+                Sets.newHashSet(nestedInputs.toNode()))) {
+              errorMessage.append("Could not find input in action's NestedSet inputs");
+            }
+          } else {
+            errorMessage.append("\nInput not present in action's inputs");
+          }
+          throw new IllegalStateException(
+              String.format(
+                  "Null value for mandatory %s with no errors or values missing: %s %s %s",
+                  input.toDebugString(),
+                  actionLookupDataForError,
+                  action.prettyPrint(),
+                  errorMessage));
         }
         continue;
       }
@@ -1270,6 +1301,21 @@ public class ActionExecutionFunction implements SkyFunction {
         archivedTreeArtifacts,
         filesetsInsideRunfiles,
         topLevelFilesets);
+  }
+
+  private static <T> boolean findPathToKey(
+      NestedSet<T> start, T target, Consumer<NestedSet<T>> receiver, Set<NestedSet.Node> seen) {
+    if (start.getLeaves().contains(target)) {
+      receiver.accept(start);
+      return true;
+    }
+    for (NestedSet<T> next : start.getNonLeaves()) {
+      if (seen.add(next.toNode()) && findPathToKey(next, target, receiver, seen)) {
+        receiver.accept(start);
+        return true;
+      }
+    }
+    return false;
   }
 
   static LabelCause createLabelCause(
