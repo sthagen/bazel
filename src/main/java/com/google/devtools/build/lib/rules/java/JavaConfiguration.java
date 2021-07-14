@@ -224,6 +224,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return inmemoryJdepsFiles;
   }
 
+  @Override
   public ImmutableList<String> getDefaultJvmFlags() {
     return defaultJvmFlags;
   }
@@ -341,6 +342,11 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
    */
   public OneVersionEnforcementLevel oneVersionEnforcementLevel() {
     return enforceOneVersion;
+  }
+
+  @Override
+  public String starlarkOneVersionEnforcementLevel() {
+    return oneVersionEnforcementLevel().name();
   }
 
   public boolean enforceOneVersionOnJavaTests() {
